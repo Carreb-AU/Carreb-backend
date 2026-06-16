@@ -35,7 +35,7 @@ COPY . .
 RUN mkdir -p /app/staticfiles /app/media \
     && chown -R app:app /app
     
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY docker/web/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 
