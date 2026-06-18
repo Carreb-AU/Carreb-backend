@@ -62,6 +62,7 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS = [
     "apps.users",
+    "apps.prelaunch",
 ]
 
 SITE_ID = 1
@@ -274,6 +275,10 @@ if DEBUG:
 CELERY_BEAT_SCHEDULE = {
     'purge-deleted-accounts': {
         'task': 'apps.users.tasks.purge_deleted_accounts_task',
+        'schedule': crontab(hour=0, minute=0),
+    },
+    'send-launch-emails': {
+        'task': 'apps.prelaunch.tasks.send_launch_notification_emails_task',
         'schedule': crontab(hour=0, minute=0),
     },
 }
