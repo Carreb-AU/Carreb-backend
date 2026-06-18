@@ -1,5 +1,5 @@
 from .models import WaitlistEntry
-from .tasks import send_launch_notification_emails_task
+from .tasks import send_launch_notification_emails_task, send_waitlist_admin_notification_task
 
 def submit_waitlist_email(email: str, source: str = None) -> WaitlistEntry:
     # Use get_or_create to silently handle duplicates
@@ -7,6 +7,10 @@ def submit_waitlist_email(email: str, source: str = None) -> WaitlistEntry:
         email=email,
         defaults={'source': source}
     )
+    
+    if created:
+        send_waitlist_admin_notification_task.delay(email)
+        
     return entry
 
 def trigger_launch_emails() -> dict:

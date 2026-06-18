@@ -1,7 +1,11 @@
 from celery import shared_task
 from django.utils import timezone
+from django.core.mail import send_mail
+import logging
 from .selectors import get_pending_waitlist_entries, get_prelaunch_status
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 @shared_task
 def send_launch_notification_emails_task():
@@ -41,3 +45,38 @@ def send_launch_notification_emails_task():
         "total_notified_successfully": total_notified_successfully,
         "total_failed": total_failed
     }
+
+@shared_task
+def send_waitlist_admin_notification_task(subscriber_email: str):
+    try:
+        subject = 'New Prelaunch Subscription'
+        message = f'Hello,\n\nA new user has subscribed to the prelaunch waitlist.\n\nSubscriber Email: {subscriber_email}\n\nBest,\nCarreb System'
+        
+        html_message = f"""
+        <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <h2 style="color: #2c3e50;">New Prelaunch Subscription 🎉</h2>
+                <p>Hello,</p>
+                <p>A new user has just subscribed to the Carreb prelaunch waitlist!</p>
+                <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; margin: 20px 0;">
+                    <p style="margin: 0;"><strong>Subscriber Email:</strong> {subscriber_email}</p>
+                </div>
+                <p>Best regards,<br><strong>Carreb System</strong></p>
+            </body>
+        </html>
+        """
+        
+        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@carreb.com.au')
+        admin_email = 'contact@carreb.com.au'
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=from_email,
+            recipient_list=[admin_email],
+            fail_silently=False,
+            html_message=html_message
+        )
+        logger.info(f"Admin notification email sent for new subscriber: {subscriber_email}")
+    except Exception as e:
+        logger.exception(f"Failed to send admin notification email for {subscriber_email}: {e}")
