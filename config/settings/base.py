@@ -299,7 +299,9 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",       # Your local Django backend
     "http://207.180.233.44:8001",
     "http://localhost:5173",
-    "http://localhost:5175"
+    "http://localhost:5175",
+    "https://www.carreb.com.au",
+    "https://carreb.com.au"
 ]
 
 # If you need to send cookies/auth tokens (e.g., sessionid) cross-origin:
