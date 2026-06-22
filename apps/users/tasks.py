@@ -43,8 +43,11 @@ def send_deletion_confirmation_email_task(email: str):
 def send_password_reset_email_task(email: str, token_str: str, environment: str = 'dev'):
     try:
         subject = 'Reset Your Password for Carreb'
-        base_url = get_base_frontend_url(environment)
-        reset_link = f'{base_url}/reset-password?token={token_str}'
+        if environment == 'production':
+            base_url = 'https://carreb-developement.vercel.app/login/reset/new'
+        else:
+            base_url = 'http://localhost:3000/login/reset/new'
+        reset_link = f'{base_url}?token={token_str}'
         context = {'reset_link': reset_link}
         html_message = render_to_string('emails/password_reset_link.html', context)
         plain_message = f'Please reset your password by clicking the following link: {reset_link}'
