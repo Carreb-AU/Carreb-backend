@@ -58,7 +58,7 @@ def signup_step_1(email: str) -> User:
     return user
 
 @transaction.atomic
-def signup_step_2(email: str, first_name: str, last_name: str, password: str, mobile_number: str = None) -> None:
+def signup_step_2(email: str, first_name: str, last_name: str, password: str, mobile_number: str = None, environment: str = 'dev') -> None:
     user = get_user_by_email(email)
     if not user:
         raise ValidationError({"email": "User does not exist. Please complete step 1."})
@@ -75,7 +75,7 @@ def signup_step_2(email: str, first_name: str, last_name: str, password: str, mo
     expires_at = timezone.now() + timedelta(hours=VERIFICATION_EXPIRY_HOURS)
     token_obj = EmailVerificationToken.objects.create(user=user, expires_at=expires_at)
     
-    send_verification_email_task.delay(user.email, str(token_obj.token))
+    send_verification_email_task.delay(user.email, str(token_obj.token), environment)
 
 @transaction.atomic
 def verify_email(token: str) -> AuthSession:
@@ -235,7 +235,7 @@ def delete_account(user: User, password: str, reason: str):
     send_deletion_confirmation_email_task.delay(user.email)
 
 @transaction.atomic
-def password_reset_request(email: str):
+def password_reset_request(email: str, environment: str = 'dev'):
     user = get_user_by_email(email)
     if not user:
         logger.warning(f"Password reset requested for non-existent email: {email}")
@@ -244,7 +244,7 @@ def password_reset_request(email: str):
     expires_at = timezone.now() + timedelta(hours=1)
     token_obj = PasswordResetToken.objects.create(user=user, expires_at=expires_at)
     
-    send_password_reset_email_task.delay(user.email, str(token_obj.token))
+    send_password_reset_email_task.delay(user.email, str(token_obj.token), environment)
 
 @transaction.atomic
 def password_reset_verify(token: str, new_password: str):

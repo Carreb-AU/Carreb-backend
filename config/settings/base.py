@@ -235,6 +235,8 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 
 # Frontend URL Configuration
 FRONTEND_URL = env('FRONTEND_URL', default='https://carreb.com')
+FRONTEND_DEV_URL = env('FRONTEND_DEV_URL', default='http://localhost:3000')
+FRONTEND_PROD_URL = env('FRONTEND_PROD_URL', default='https://carreb.com')
 
 
 

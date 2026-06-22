@@ -20,6 +20,7 @@ class SignupStep2Serializer(serializers.Serializer):
     last_name = serializers.CharField(max_length=150)
     mobile_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     password = serializers.CharField(write_only=True, validators=[validate_password_complexity])
+    environment = serializers.ChoiceField(choices=[('dev', 'dev'), ('production', 'production')], default='dev', required=False)
 
 class EmailVerificationSerializer(serializers.Serializer):
     token = serializers.UUIDField()
@@ -44,6 +45,7 @@ class Confirm2FASerializer(serializers.Serializer):
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
+    environment = serializers.ChoiceField(choices=[('dev', 'dev'), ('production', 'production')], default='dev', required=False)
 
 class PasswordResetVerifySerializer(serializers.Serializer):
     token = serializers.UUIDField()
