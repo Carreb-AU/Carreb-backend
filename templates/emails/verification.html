@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        .container { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px 20px; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #eaeaea; border-radius: 8px; }
+        .header { text-align: center; padding-bottom: 20px; border-bottom: 1px solid #eaeaea; }
+        .header h2 { color: #333333; margin: 0; font-size: 24px; font-weight: 600; }
+        .content { padding: 30px 0; text-align: center; color: #555555; font-size: 16px; line-height: 1.6; }
+        .button { display: inline-block; padding: 14px 28px; background-color: #007bff; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 25px 0; }
+        .button:hover { background-color: #0056b3; }
+        .footer { text-align: center; font-size: 13px; color: #999999; margin-top: 30px; border-top: 1px solid #eaeaea; padding-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Welcome to Carreb!</h2>
+        </div>
+        <div class="content">
+            <p>Thank you for signing up. Please verify your email address to complete your registration.</p>
+            <a href="{{ verification_link }}" class="button">Verify Email</a>
+            <p style="font-size: 14px; margin-top: 20px;">Or copy and paste this link into your browser:</p>
+            <p style="font-size: 13px; word-break: break-all;"><a href="{{ verification_link }}" style="color: #007bff;">{{ verification_link }}</a></p>
+        </div>
+        <div class="footer">
+            <p>If you did not create an account, no further action is required.</p>
+        </div>
+    </div>
+</body>
+</html>

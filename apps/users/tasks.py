@@ -1,6 +1,7 @@
 import logging
 from celery import shared_task
 from django.core.mail import send_mail
+from django.template.loader import render_to_string
 from django.utils import timezone
 from django.conf import settings
 from .models import AccountDeletionRequest, User
@@ -11,9 +12,12 @@ logger = logging.getLogger(__name__)
 def send_verification_email_task(email: str, token_str: str):
     try:
         subject = 'Verify Your Email for Carreb'
-        message = f'Please verify your email by clicking the following link: {settings.FRONTEND_URL}/verify?token={token_str}'
+        verification_link = f'{settings.FRONTEND_URL}/signup/details?token={token_str}'
+        context = {'verification_link': verification_link}
+        html_message = render_to_string('emails/verification.html', context)
+        plain_message = f'Please verify your email by clicking the following link: {verification_link}'
         from_email = settings.DEFAULT_FROM_EMAIL
-        send_mail(subject, message, from_email, [email], fail_silently=False)
+        send_mail(subject, plain_message, from_email, [email], html_message=html_message, fail_silently=False)
         logger.info(f"Verification email sent to {email}")
     except Exception as e:
         logger.exception(f"Failed to send verification email to {email}: {e}")
@@ -33,9 +37,12 @@ def send_deletion_confirmation_email_task(email: str):
 def send_password_reset_email_task(email: str, token_str: str):
     try:
         subject = 'Reset Your Password for Carreb'
-        message = f'Please reset your password by clicking the following link: {settings.FRONTEND_URL}/reset-password?token={token_str}'
+        reset_link = f'{settings.FRONTEND_URL}/reset-password?token={token_str}'
+        context = {'reset_link': reset_link}
+        html_message = render_to_string('emails/password_reset_link.html', context)
+        plain_message = f'Please reset your password by clicking the following link: {reset_link}'
         from_email = settings.DEFAULT_FROM_EMAIL
-        send_mail(subject, message, from_email, [email], fail_silently=False)
+        send_mail(subject, plain_message, from_email, [email], html_message=html_message, fail_silently=False)
         logger.info(f"Password reset email sent to {email}")
     except Exception as e:
         logger.exception(f"Failed to send password reset email to {email}: {e}")
