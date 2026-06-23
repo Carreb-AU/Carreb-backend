@@ -43,7 +43,12 @@ class VerifyEmailView(APIView):
         serializer = EmailVerificationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         session = verify_email(**serializer.validated_data)
-        return Response({"detail": "Email verified.", "session_token": session.token}, status=status.HTTP_200_OK)
+        return Response({
+            "detail": "Email verified.",
+            "session_token": session["session_token"],
+            "access": session["access"],
+            "refresh": session["refresh"]
+        }, status=status.HTTP_200_OK)
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
