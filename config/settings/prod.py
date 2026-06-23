@@ -28,6 +28,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://carreb-web.netlify.app",
     "https://www.carreb.com.au",
     "https://carreb.com.au",
+    "https://carreb-developement.vercel.app",
+    "https://www.carreb-developement.vercel.app"
 ]
 CORS_ALLOW_CREDENTIALS = True
 
