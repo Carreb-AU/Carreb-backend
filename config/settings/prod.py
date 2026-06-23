@@ -15,6 +15,8 @@ CSRF_TRUSTED_ORIGINS = [
     "https://www.carreb.com",
     "https://carreb-web.netlify.app",
     "http://carreb-web.netlify.app",
+    "https://www.carreb.com.au",
+    "https://carreb.com.au",
 ]
 
 # CORS settings
@@ -24,6 +26,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://carreb.com",
     "https://www.carreb.com",
     "https://carreb-web.netlify.app",
+    "https://www.carreb.com.au",
+    "https://carreb.com.au",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
