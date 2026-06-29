@@ -1,38 +1,24 @@
 from django.contrib import admin
-from .models import Vehicle, VehicleCoreRating
+from .models import Vehicle
 
 @admin.register(Vehicle)
 class VehicleAdmin(admin.ModelAdmin):
-    list_display = ('model_name', 'year', 'body_type', 'engine_type', 'transmission', 'is_active')
-    list_filter = ('body_type', 'engine_type', 'transmission', 'is_active')
-    search_fields = ('model_name', 'description')
+    list_display = ('brand', 'model', 'year', 'variant', 'powertrain_type', 'fcai_category')
+    list_filter = ('brand', 'year', 'powertrain_type', 'body_style')
+    search_fields = ('brand', 'model', 'variant')
     ordering = ('-created_at',)
     
     fieldsets = (
-        ('Basic Information', {
-            'fields': ('model_name', 'year', 'body_type', 'engine_type', 'transmission', 'trim_level', 'body_style', 'drive_type', 'fuel_type')
+        ('Identity Information', {
+            'fields': ('brand', 'model', 'year', 'variant', 'body_style', 'num_seats', 'powertrain_type', 'fcai_category', 'ancap_safety_rating')
         }),
-        ('Performance', {
-            'fields': ('displacement', 'horsepower', 'torque', 'acceleration', 'top_speed', 'fuel_economy_city', 'fuel_economy_highway')
+        ('Emissions & Efficiency', {
+            'fields': ('fuel_consumption_per_100km', 'electricity_consumption_per_100km', 'tailpipe_co2_g_per_km', 'wltp_range_km', 'test_cycle')
         }),
-        ('Dimensions', {
-            'fields': ('length', 'width', 'height', 'wheelbase', 'ground_clearance', 'cargo_volume', 'passenger_capacity')
+        ('Pricing & Costs', {
+            'fields': ('driveaway_price_by_state', 'insurance_estimate_by_state', 'ctp_by_state', 'registration_by_state', 'servicing_5yr_estimate', 'tyre_replacement_estimate', 'resale_value_5yr_estimate')
         }),
-        ('Features', {
-            'fields': ('safety_rating', 'infotainment_features', 'comfort_features', 'connectivity_features')
-        }),
-        ('Pricing', {
-            'fields': ('msrp', 'invoice_price', 'estimated_dealer_cost', 'resale_value', 'depreciation_rate')
-        }),
-        ('Status', {
-            'fields': ('is_active',)
+        ('Metadata', {
+            'fields': ('annual_km_default', 'provenance')
         }),
     )
-
-@admin.register(VehicleCoreRating)
-class VehicleCoreRatingAdmin(admin.ModelAdmin):
-    list_display = ('vehicle', 'safety_score', 'reliability_score', 'performance_score', 'efficiency_score', 'comfort_score', 'value_score', 'overall_score', 'calculated_at')
-    list_filter = ('calculated_at',)
-    search_fields = ('vehicle__model_name',)
-    readonly_fields = ('calculated_at',)
-    ordering = ('-calculated_at',)
