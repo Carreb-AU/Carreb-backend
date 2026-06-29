@@ -1,0 +1,187 @@
+from rest_framework import generics, views, status, pagination
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.utils import timezone
+from apps.vehicles.models import Vehicle
+from apps.vehicles.serializers import (
+    VehicleListSerializer, VehicleDetailSerializer,
+    CoreRatingRequestSerializer, CoreRatingBatchRequestSerializer
+)
+from apps.vehicles.services.rating_engine import calculate_core_rating
+from apps.vehicles.tasks import emit_analytics_event
+from apps.users.models import SubscriptionTier
+
+class StandardResultsSetPagination(pagination.PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+class VehicleListView(generics.ListAPIView):
+    queryset = Vehicle.objects.all()
+    serializer_class = VehicleListSerializer
+    pagination_class = StandardResultsSetPagination
+    permission_classes = [AllowAny]
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        
+        if 'brand' in params:
+            queryset = queryset.filter(brand__iexact=params['brand'])
+        if 'model' in params:
+            queryset = queryset.filter(model__iexact=params['model'])
+        if 'year' in params:
+            queryset = queryset.filter(year=params['year'])
+        if 'powertrain_type' in params:
+            queryset = queryset.filter(powertrain_type__iexact=params['powertrain_type'])
+        if 'body_style' in params:
+            queryset = queryset.filter(body_style__iexact=params['body_style'])
+        if 'num_seats_min' in params:
+            queryset = queryset.filter(num_seats__gte=params['num_seats_min'])
+        if 'fcai_category' in params:
+            queryset = queryset.filter(fcai_category__iexact=params['fcai_category'])
+        if 'ancap_rating_min' in params:
+            queryset = queryset.filter(ancap_safety_rating__gte=params['ancap_rating_min'])
+            
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        if request.user.is_authenticated and getattr(request.user, 'analytics_consent', False):
+            emit_analytics_event.delay(str(request.user.id), 'vehicle_search_performed', dict(request.query_params))
+        return response
+
+class VehicleDetailView(generics.RetrieveAPIView):
+    queryset = Vehicle.objects.all()
+    serializer_class = VehicleDetailSerializer
+    permission_classes = [AllowAny]
+    lookup_field = 'id'
+    lookup_url_kwarg = 'vehicle_id'
+
+class VehicleBrandsView(views.APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        brands = Vehicle.objects.values_list('brand', flat=True).distinct().order_by('brand')
+        return Response(brands)
+
+class VehicleModelsView(views.APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        brand = request.query_params.get('brand')
+        if not brand:
+            return Response({"detail": "brand is required"}, status=status.HTTP_400_BAD_REQUEST)
+        models = Vehicle.objects.filter(brand__iexact=brand).values_list('model', flat=True).distinct().order_by('model')
+        return Response(models)
+
+class VehicleYearsView(views.APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        brand = request.query_params.get('brand')
+        model = request.query_params.get('model')
+        if not brand or not model:
+            return Response({"detail": "brand and model are required"}, status=status.HTTP_400_BAD_REQUEST)
+        years = Vehicle.objects.filter(brand__iexact=brand, model__iexact=model).values_list('year', flat=True).distinct().order_by('-year')
+        return Response(years)
+
+class VehicleVariantsView(views.APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        brand = request.query_params.get('brand')
+        model = request.query_params.get('model')
+        year = request.query_params.get('year')
+        if not brand or not model or not year:
+            return Response({"detail": "brand, model and year are required"}, status=status.HTTP_400_BAD_REQUEST)
+        variants = Vehicle.objects.filter(brand__iexact=brand, model__iexact=model, year=year).values_list('variant', flat=True).distinct().order_by('variant')
+        return Response(variants)
+
+
+class CoreRatingCalculateView(views.APIView):
+    permission_classes = [AllowAny] 
+
+    def post(self, request):
+        serializer = CoreRatingRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        
+        vehicle_id = data['vehicle_id']
+        state = data.get('state')
+        priority_slider = data['priority_slider']
+        core_mode = data['core_mode']
+        user_inputs = data.get('user_inputs', {})
+        current_cost = data.get('current_vehicle_annual_cost')
+        
+        if not state:
+            return Response({"detail": "state is required", "requires_state": True}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            vehicle = Vehicle.objects.get(id=vehicle_id)
+        except Vehicle.DoesNotExist:
+            return Response({"detail": "Vehicle not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+        # Check subscription lock
+        is_premium_mode = core_mode in ['cool_choice', 'true_value', 'full_picture']
+        if is_premium_mode:
+            if not request.user.is_authenticated or request.user.subscription_tier == SubscriptionTier.FREE:
+                return Response({"locked": True, "detail": "Premium subscription required for this mode"}, status=status.HTTP_403_FORBIDDEN)
+        
+        result = calculate_core_rating(vehicle, state, priority_slider, core_mode, user_inputs, current_cost)
+        
+        if request.user.is_authenticated and getattr(request.user, 'analytics_consent', False):
+            emit_analytics_event.delay(str(request.user.id), 'vehicle_match_result_viewed', {'vehicle_id': str(vehicle.id), 'core_mode': core_mode})
+            
+        return Response({
+            "meta": {
+                "calculated_at": timezone.now().isoformat(),
+                "is_estimate": True,
+                "disclaimer": "All figures are estimates only. Actual costs will vary based on individual driving habits, insurer quotes, dealer pricing, and personal circumstances."
+            },
+            "data": result
+        })
+
+class CoreRatingBatchView(views.APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        serializer = CoreRatingBatchRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        
+        vehicle_ids = data['vehicle_ids']
+        state = data.get('state')
+        priority_slider = data['priority_slider']
+        core_mode = data['core_mode']
+        user_inputs = data.get('user_inputs', {})
+        current_cost = data.get('current_vehicle_annual_cost')
+        
+        if not state:
+            return Response({"detail": "state is required", "requires_state": True}, status=status.HTTP_400_BAD_REQUEST)
+            
+        is_premium_mode = core_mode in ['cool_choice', 'true_value', 'full_picture']
+        if is_premium_mode:
+            if not request.user.is_authenticated or request.user.subscription_tier == SubscriptionTier.FREE:
+                return Response({"locked": True, "detail": "Premium subscription required for this mode"}, status=status.HTTP_403_FORBIDDEN)
+                
+        vehicles = Vehicle.objects.filter(id__in=vehicle_ids)
+        vehicle_map = {v.id: v for v in vehicles}
+        
+        results = []
+        for vid in vehicle_ids:
+            vehicle = vehicle_map.get(vid)
+            if not vehicle:
+                continue
+            res = calculate_core_rating(vehicle, state, priority_slider, core_mode, user_inputs, current_cost)
+            res['vehicle_id'] = str(vid)
+            results.append(res)
+            
+        return Response({
+            "meta": {
+                "calculated_at": timezone.now().isoformat(),
+                "is_estimate": True,
+                "disclaimer": "All figures are estimates only. Actual costs will vary based on individual driving habits, insurer quotes, dealer pricing, and personal circumstances."
+            },
+            "data": results
+        })

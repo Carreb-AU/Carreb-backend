@@ -42,6 +42,11 @@ class TwoFactorMethod(models.TextChoices):
     AUTHENTICATOR_APP = 'authenticator_app', 'Authenticator App'
     EMAIL = 'email', 'Email'
 
+class SubscriptionTier(models.TextChoices):
+    FREE = 'free', 'Free'
+    CAR_BUYING_SPRINT = 'car_buying_sprint', 'Car Buying Sprint'
+    FULL_INSIGHT_PRO = 'full_insight_pro', 'Full Insight Pro'
+
 class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     first_name = models.CharField(_('first name'), max_length=150, blank=True)
@@ -58,6 +63,9 @@ class User(AbstractBaseUser, PermissionsMixin):
     
     auth_provider = models.CharField(max_length=20, choices=AuthProvider.choices, default=AuthProvider.EMAIL)
     auth_provider_id = models.CharField(max_length=255, blank=True, null=True)
+    
+    subscription_tier = models.CharField(max_length=50, choices=SubscriptionTier.choices, default=SubscriptionTier.FREE)
+    analytics_consent = models.BooleanField(default=False)
     
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)

@@ -63,6 +63,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     "apps.users",
     "apps.prelaunch",
+    "apps.vehicles",
 ]
 
 SITE_ID = 1
