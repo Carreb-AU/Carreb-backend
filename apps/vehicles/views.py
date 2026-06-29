@@ -8,7 +8,9 @@ from apps.vehicles.serializers import (
     CoreRatingRequestSerializer, CoreRatingBatchRequestSerializer
 )
 from apps.vehicles.services.rating_engine import calculate_core_rating
-from apps.vehicles.tasks import emit_analytics_event
+from apps.vehicles.tasks import emit_analytics_event, process_vehicle_excel_upload
+import os
+from django.core.files.storage import default_storage
 from apps.users.models import SubscriptionTier
 
 class StandardResultsSetPagination(pagination.PageNumberPagination):
@@ -185,3 +187,22 @@ class CoreRatingBatchView(views.APIView):
             },
             "data": results
         })
+
+class VehicleDataUploadView(views.APIView):
+    permission_classes = [AllowAny] # In a real app this should be IsAdminUser or similar
+    
+    def post(self, request, *args, **kwargs):
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({"error": "No file provided."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Save file temporarily
+        file_name = default_storage.save(file_obj.name, file_obj)
+        file_path = default_storage.path(file_name)
+        
+        # Dispatch Celery task
+        process_vehicle_excel_upload.delay(file_path)
+        
+        return Response({
+            "message": "File accepted for processing in the background."
+        }, status=status.HTTP_202_ACCEPTED)

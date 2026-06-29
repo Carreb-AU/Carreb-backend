@@ -61,6 +61,7 @@ def calculate_vehicle_cost_breakdown(
         
     fuel_annual = int(fuel_annual)
     
+    # 2. Insurance
     insurance = user_inputs.get('insurance_override')
     if not insurance:
         insurance = _get_state_value(vehicle.insurance_estimate_by_state, state)
@@ -70,6 +71,13 @@ def calculate_vehicle_cost_breakdown(
     
     servicing_annual = int((vehicle.servicing_5yr_estimate or 0) / 5)
     tyres_annual = int((vehicle.tyre_replacement_estimate or 0) / 5)
+    
+    if not insurance and not ctp and not rego and not servicing_annual and not tyres_annual:
+        total_5yr = _get_state_value(vehicle.total_5yr_cost_of_ownership_by_state, state)
+        if total_5yr:
+            annual_aggregate = int(total_5yr / 5)
+            non_fuel_annual = max(0, annual_aggregate - fuel_annual)
+            servicing_annual = non_fuel_annual
     
     finance_annual = 0
     if core_mode in ['cool_choice', 'full_picture']:

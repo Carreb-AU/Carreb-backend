@@ -24,7 +24,7 @@ class Vehicle(models.Model):
     year = models.IntegerField()
     variant = models.CharField(max_length=255)
     body_style = models.CharField(max_length=100)
-    num_seats = models.IntegerField()
+    num_seats = models.IntegerField(default=5)
     powertrain_type = models.CharField(max_length=50, choices=PowertrainType.choices)
     fcai_category = models.CharField(max_length=100)
     ancap_safety_rating = models.IntegerField(null=True, blank=True)
@@ -36,13 +36,14 @@ class Vehicle(models.Model):
     wltp_range_km = models.FloatField(null=True, blank=True)
     test_cycle = models.CharField(max_length=20, choices=TestCycle.choices)
     
-    annual_km_default = models.IntegerField()
+    annual_km_default = models.IntegerField(default=13300)
     insurance_estimate_by_state = models.JSONField(default=dict)
     ctp_by_state = models.JSONField(default=dict)
     registration_by_state = models.JSONField(default=dict)
-    servicing_5yr_estimate = models.IntegerField()
-    tyre_replacement_estimate = models.IntegerField()
-    resale_value_5yr_estimate = models.IntegerField()
+    servicing_5yr_estimate = models.IntegerField(null=True, blank=True)
+    tyre_replacement_estimate = models.IntegerField(null=True, blank=True)
+    resale_value_5yr_estimate = models.IntegerField(null=True, blank=True)
+    total_5yr_cost_of_ownership_by_state = models.JSONField(default=dict)
     
     provenance = models.JSONField(default=dict) 
     # Example:
