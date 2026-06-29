@@ -100,6 +100,9 @@ services:
       redis:
         condition: service_healthy
 
+    volumes:
+      - media_volume:/app/media
+
 
   celery-beat:
     build:
