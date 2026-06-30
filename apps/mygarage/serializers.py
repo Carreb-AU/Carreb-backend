@@ -31,9 +31,19 @@ class CurrentVehicleCreateSerializer(serializers.Serializer):
     odometer_reading = serializers.IntegerField(required=False, allow_null=True)
     state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
+    def validate_vehicle_catalogue_id(self, value):
+        if value and not Vehicle.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Vehicle with this ID does not exist in the catalogue.")
+        return value
+
 class GarageVehicleCreateSerializer(serializers.Serializer):
     vehicle_catalogue_id = serializers.UUIDField()
     source = serializers.ChoiceField(choices=GarageVehicleSource.choices)
+    
+    def validate_vehicle_catalogue_id(self, value):
+        if value and not Vehicle.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Vehicle with this ID does not exist in the catalogue.")
+        return value
     
 class VehicleDetailOverrideSerializer(serializers.Serializer):
     field_name = serializers.CharField()
