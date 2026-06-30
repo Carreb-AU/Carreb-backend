@@ -23,4 +23,5 @@ urlpatterns = [
     path("api/users/", include("apps.users.urls")),
     path('api/', include('apps.prelaunch.urls')),
     path('', include('apps.vehicles.urls')),
+    path('', include('apps.mygarage.urls')),
 ]

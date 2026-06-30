@@ -64,6 +64,7 @@ LOCAL_APPS = [
     "apps.users",
     "apps.prelaunch",
     "apps.vehicles",
+    "apps.mygarage",
 ]
 
 SITE_ID = 1

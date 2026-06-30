@@ -45,6 +45,7 @@ class TwoFactorMethod(models.TextChoices):
 class SubscriptionTier(models.TextChoices):
     FREE = 'free', 'Free'
     CAR_BUYING_SPRINT = 'car_buying_sprint', 'Car Buying Sprint'
+    CORE_ADVANTAGE = 'core_advantage', 'CORE Advantage'
     FULL_INSIGHT_PRO = 'full_insight_pro', 'Full Insight Pro'
 
 class User(AbstractBaseUser, PermissionsMixin):
