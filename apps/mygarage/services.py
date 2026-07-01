@@ -53,18 +53,16 @@ def calculate_spotlights(garage_vehicle, user_priority_state, state, current_cos
         if vehicle.wltp_range_km in ranges[:3]:
             is_range_king = True
             
-    # Calculate costs for peers (using pure_cost as baseline or current mode)
-    # The requirement doesn't specify which mode to use for green_and_lean cost comparison,
-    # so we use the user's current mode.
     mode = user_priority_state.active_core_mode
     priority = user_priority_state.priority_slider_position
     
-    # We need to evaluate total_annual_cost for all peers
     peer_costs = []
     peer_co2 = []
     for p in peers:
-        res = calculate_core_rating(p, state, priority, mode, {})
-        peer_costs.append(res['total_annual_cost'])
+        cost_5yr = p.total_5yr_cost_of_ownership_by_state.get(state)
+        if cost_5yr:
+            peer_costs.append(cost_5yr / 5.0)
+            
         if p.tailpipe_co2_g_per_km is not None:
             peer_co2.append(p.tailpipe_co2_g_per_km)
             
@@ -82,7 +80,9 @@ def calculate_spotlights(garage_vehicle, user_priority_state, state, current_cos
         return (idx / len(sorted_list)) <= 0.20
 
     my_cost_res = calculate_core_rating(vehicle, state, priority, mode, {})
-    my_cost = my_cost_res['total_annual_cost']
+    # Use the same base cost as peer_costs to ensure an apples-to-apples percentile comparison
+    my_cost_5yr = vehicle.total_5yr_cost_of_ownership_by_state.get(state)
+    my_cost = (my_cost_5yr / 5.0) if my_cost_5yr else my_cost_res['total_annual_cost']
     my_co2 = vehicle.tailpipe_co2_g_per_km
     my_range = vehicle.wltp_range_km
     
