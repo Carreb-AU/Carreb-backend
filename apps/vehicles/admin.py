@@ -1,24 +1,83 @@
 from django.contrib import admin
-from .models import Vehicle
+
+from apps.vehicles.models import Vehicle
+
 
 @admin.register(Vehicle)
 class VehicleAdmin(admin.ModelAdmin):
-    list_display = ('brand', 'model', 'year', 'variant', 'powertrain_type', 'fcai_category')
-    list_filter = ('brand', 'year', 'powertrain_type', 'body_style')
-    search_fields = ('brand', 'model', 'variant')
-    ordering = ('-created_at',)
-    
+    list_display = [
+        "brand",
+        "model",
+        "year",
+        "variant",
+        "powertrain_type",
+        "body_style",
+        "fcai_category",
+        "num_seats",
+        "ancap_safety_rating",
+        "tailpipe_co2_g_per_km",
+        "updated_at",
+    ]
+    list_filter = [
+        "powertrain_type",
+        "body_style",
+        "year",
+        "brand",
+        "fcai_category",
+        "ancap_safety_rating",
+        "test_cycle",
+    ]
+    search_fields = ["brand", "model", "variant", "fcai_category"]
+    ordering = ["brand", "model", "year", "variant"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+    date_hierarchy = "created_at"
+
     fieldsets = (
-        ('Identity Information', {
-            'fields': ('brand', 'model', 'year', 'variant', 'body_style', 'num_seats', 'powertrain_type', 'fcai_category', 'ancap_safety_rating')
+        ("Identity", {
+            "fields": (
+                "id",
+                "brand", "model", "year", "variant",
+                "body_style", "num_seats",
+                "powertrain_type", "fcai_category",
+                "ancap_safety_rating",
+            ),
         }),
-        ('Emissions & Efficiency', {
-            'fields': ('fuel_consumption_per_100km', 'electricity_consumption_per_100km', 'tailpipe_co2_g_per_km', 'wltp_range_km', 'test_cycle')
+        ("Emissions & Efficiency", {
+            "fields": (
+                "fuel_consumption_per_100km",
+                "electricity_consumption_per_100km",
+                "tailpipe_co2_g_per_km",
+                "wltp_range_km",
+                "test_cycle",
+                "annual_km_default",
+            ),
         }),
-        ('Pricing & Costs', {
-            'fields': ('driveaway_price_by_state', 'insurance_estimate_by_state', 'ctp_by_state', 'registration_by_state', 'servicing_5yr_estimate', 'tyre_replacement_estimate', 'resale_value_5yr_estimate')
+        ("Pricing by State (cents)", {
+            "fields": (
+                "driveaway_price_by_state",
+                "total_5yr_cost_of_ownership_by_state",
+            ),
         }),
-        ('Metadata', {
-            'fields': ('annual_km_default', 'provenance')
+        ("Running Costs by State (cents)", {
+            "classes": ("collapse",),
+            "fields": (
+                "insurance_estimate_by_state",
+                "ctp_by_state",
+                "registration_by_state",
+            ),
+        }),
+        ("5-Year Cost Estimates (cents)", {
+            "fields": (
+                "servicing_5yr_estimate",
+                "tyre_replacement_estimate",
+                "resale_value_5yr_estimate",
+            ),
+        }),
+        ("Provenance", {
+            "classes": ("collapse",),
+            "fields": ("provenance",),
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
         }),
     )

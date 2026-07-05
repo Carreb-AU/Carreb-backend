@@ -65,6 +65,7 @@ LOCAL_APPS = [
     "apps.prelaunch",
     "apps.vehicles",
     "apps.mygarage",
+    "apps.freematch",
 ]
 
 SITE_ID = 1
@@ -284,6 +285,11 @@ CELERY_BEAT_SCHEDULE = {
     'send-launch-emails': {
         'task': 'apps.prelaunch.tasks.send_launch_notification_emails_task',
         'schedule': crontab(hour=0, minute=0),
+    },
+   
+    'cleanup-expired-free-match-sessions': {
+        'task': 'apps.freematch.tasks.cleanup_expired_free_match_sessions',
+        'schedule': crontab(hour=1, minute=0),  # 01:00 UTC daily
     },
 }
 
