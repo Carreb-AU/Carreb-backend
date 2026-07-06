@@ -3,9 +3,8 @@ import logging
 from rest_framework import status, views
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from django.utils import timezone
 
-from apps.freematch.models import FreeMatchSession
+from apps.freematch.selectors import get_freematch_session
 from apps.freematch.serializers import (
     FreeMatchStepSerializer,
     Step1DataSerializer,
@@ -16,13 +15,18 @@ from apps.freematch.services import (
     build_match_response,
     build_unlocked_response,
     match_vehicle_for_wizard,
+    create_freematch_session,
+    update_freematch_step_1,
+    update_freematch_step_2,
+    update_freematch_step_3,
+    set_matched_vehicle,
+    convert_session_to_garage,
+    discard_freematch_session,
 )
-from apps.mygarage.models import GarageVehicle, GarageVehicleSource
 from apps.mygarage.services import check_cap_limit, get_cap_counter
 from apps.vehicles.tasks import emit_analytics_event
 
 logger = logging.getLogger(__name__)
-
 
 
 def _get_session_or_error(session_token: str):
@@ -30,9 +34,8 @@ def _get_session_or_error(session_token: str):
     Returns (session, None) if valid, or (None, Response) if not found / expired.
     Caller must return the Response immediately when session is None.
     """
-    try:
-        session = FreeMatchSession.objects.get(session_token=session_token)
-    except FreeMatchSession.DoesNotExist:
+    session = get_freematch_session(session_token)
+    if not session:
         return None, Response(
             {"detail": "Wizard session not found.", "field": "session_token"},
             status=status.HTTP_404_NOT_FOUND,
@@ -64,9 +67,8 @@ class FreeMatchStartView(views.APIView):
     throttle_scope = "anon"
 
     def post(self, request):
-        session = FreeMatchSession.objects.create()
+        session = create_freematch_session()
 
-       
         emit_analytics_event.delay(
             str(session.id),
             "free_match_wizard_started",
@@ -81,7 +83,6 @@ class FreeMatchStartView(views.APIView):
             },
             status=status.HTTP_201_CREATED,
         )
-
 
 
 class FreeMatchStepView(views.APIView):
@@ -99,7 +100,6 @@ class FreeMatchStepView(views.APIView):
         if err:
             return err
 
-      
         wrapper = FreeMatchStepSerializer(data=request.data)
         if not wrapper.is_valid():
             return Response(
@@ -130,8 +130,7 @@ class FreeMatchStepView(views.APIView):
                     {"detail": "Invalid step 1 data.", "errors": ser.errors},
                     status=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 )
-            session.has_current_vehicle = ser.validated_data["has_current_vehicle"]
-            session.save(update_fields=["has_current_vehicle"])
+            update_freematch_step_1(session, ser.validated_data)
 
         elif step_number == 2:
             if not session.step_2_required:
@@ -151,16 +150,7 @@ class FreeMatchStepView(views.APIView):
                     {"detail": "Invalid step 2 data.", "errors": ser.errors},
                     status=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 )
-            session.current_vehicle_make = ser.validated_data["current_vehicle_make"]
-            session.current_vehicle_model = ser.validated_data["current_vehicle_model"]
-            session.current_vehicle_year = ser.validated_data["current_vehicle_year"]
-            session.save(
-                update_fields=[
-                    "current_vehicle_make",
-                    "current_vehicle_model",
-                    "current_vehicle_year",
-                ]
-            )
+            update_freematch_step_2(session, ser.validated_data)
 
         elif step_number == 3:
             ser = Step3DataSerializer(data=step_data)
@@ -169,14 +159,8 @@ class FreeMatchStepView(views.APIView):
                     {"detail": "Invalid step 3 data.", "errors": ser.errors},
                     status=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 )
-            session.fuel_type_preference = ser.validated_data["fuel_type_preference"]
-            session.annual_km = ser.validated_data["annual_km"]
-            session.primary_use = ser.validated_data["primary_use"]
-            session.save(
-                update_fields=["fuel_type_preference", "annual_km", "primary_use"]
-            )
+            update_freematch_step_3(session, ser.validated_data)
 
-            
             emit_analytics_event.delay(
                 str(session.id),
                 "free_match_wizard_completed",
@@ -190,7 +174,6 @@ class FreeMatchStepView(views.APIView):
             return Response({"match_ready": True})
 
         return Response({"next_step": next_step})
-
 
 
 class FreeMatchCalculateView(views.APIView):
@@ -207,7 +190,6 @@ class FreeMatchCalculateView(views.APIView):
         if err:
             return err
 
-    
         if not session.step_1_complete:
             return Response(
                 {"detail": "Step 1 (has_current_vehicle) must be answered before requesting a match."},
@@ -239,8 +221,7 @@ class FreeMatchCalculateView(views.APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        session.matched_vehicle = vehicle
-        session.save(update_fields=["matched_vehicle"])
+        set_matched_vehicle(session, vehicle)
 
         response_data = build_match_response(vehicle, session)
 
@@ -298,14 +279,7 @@ class FreeMatchSaveView(views.APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        garage_vehicle = GarageVehicle.objects.create(
-            user=user,
-            vehicle_catalogue=session.matched_vehicle,
-            source=GarageVehicleSource.FREE_MATCH_WIZARD,
-        )
-
-        session.converted_user = user
-        session.save(update_fields=["converted_user"])
+        garage_vehicle = convert_session_to_garage(session, user)
 
         if getattr(user, "analytics_consent", False):
             emit_analytics_event.delay(
@@ -328,7 +302,6 @@ class FreeMatchSaveView(views.APIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
-
 class FreeMatchDiscardView(views.APIView):
     """
     DELETE /api/free-match/{session_token}/
@@ -340,9 +313,8 @@ class FreeMatchDiscardView(views.APIView):
     throttle_scope = "anon"
 
     def delete(self, request, session_token):
-        try:
-            session = FreeMatchSession.objects.get(session_token=session_token)
-        except FreeMatchSession.DoesNotExist:
+        session = get_freematch_session(session_token)
+        if not session:
             return Response({"discarded": True}, status=status.HTTP_200_OK)
 
         emit_analytics_event.delay(
@@ -351,6 +323,6 @@ class FreeMatchDiscardView(views.APIView):
             {},
         )
 
-        session.delete()
+        discard_freematch_session(session)
 
         return Response({"discarded": True}, status=status.HTTP_200_OK)

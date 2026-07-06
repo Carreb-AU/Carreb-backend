@@ -171,11 +171,14 @@ class CoreRatingBatchView(views.APIView):
         vehicle_map = {v.id: v for v in vehicles}
         
         results = []
+        category_metrics_cache = {}
         for vid in vehicle_ids:
             vehicle = vehicle_map.get(vid)
             if not vehicle:
                 continue
-            res = calculate_core_rating(vehicle, state, priority_slider, core_mode, user_inputs, current_cost)
+            res = calculate_core_rating(
+                vehicle, state, priority_slider, core_mode, user_inputs, current_cost, category_metrics_cache=category_metrics_cache
+            )
             res['vehicle_id'] = str(vid)
             results.append(res)
             

@@ -3,6 +3,7 @@ from decimal import Decimal
 import math
 from django.utils import timezone
 from apps.vehicles.models import Vehicle, PowertrainType
+from apps.vehicles.selectors import get_vehicles_by_fcai_category
 
 # Trademarked Band Names
 BAND_NAMES = {
@@ -136,7 +137,8 @@ def calculate_core_rating(
     priority_slider: int,
     core_mode: str,
     user_inputs: Dict[str, Any],
-    current_vehicle_annual_cost: Optional[int] = None
+    current_vehicle_annual_cost: Optional[int] = None,
+    category_metrics_cache: Optional[Dict[str, Dict[str, list]]] = None
 ) -> dict:
     
     if vehicle.powertrain_type == PowertrainType.FCEV:
@@ -159,15 +161,27 @@ def calculate_core_rating(
     breakdown = calculate_vehicle_cost_breakdown(vehicle, state, core_mode, user_inputs)
     total_cost = breakdown['total_annual']
     
-    peers = list(Vehicle.objects.filter(fcai_category=vehicle.fcai_category))
+    fcai_category = vehicle.fcai_category
     
-    peer_costs = []
-    peer_co2 = []
-    
-    for peer in peers:
-        peer_br = calculate_vehicle_cost_breakdown(peer, state, core_mode, user_inputs)
-        peer_costs.append(peer_br['total_annual'])
-        peer_co2.append(peer.tailpipe_co2_g_per_km or 0)
+    if category_metrics_cache is not None and fcai_category in category_metrics_cache:
+        peer_costs = category_metrics_cache[fcai_category]["peer_costs"]
+        peer_co2 = category_metrics_cache[fcai_category]["peer_co2"]
+    else:
+        peers = get_vehicles_by_fcai_category(fcai_category)
+        
+        peer_costs = []
+        peer_co2 = []
+        
+        for peer in peers:
+            peer_br = calculate_vehicle_cost_breakdown(peer, state, core_mode, user_inputs)
+            peer_costs.append(peer_br['total_annual'])
+            peer_co2.append(peer.tailpipe_co2_g_per_km or 0)
+            
+        if category_metrics_cache is not None:
+            category_metrics_cache[fcai_category] = {
+                "peer_costs": peer_costs,
+                "peer_co2": peer_co2
+            }
         
     coo_score = get_percentile_score(total_cost, peer_costs)
     co2_score = get_percentile_score(vehicle.tailpipe_co2_g_per_km or 0, peer_co2)
