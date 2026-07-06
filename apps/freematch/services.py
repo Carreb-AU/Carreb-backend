@@ -13,7 +13,7 @@ from typing import Optional
 
 from django.db import transaction
 
-from apps.freematch.models import FreeMatchSession
+from apps.freematch.models import FreeMatchSession, PriorityPreference
 from apps.freematch.selectors import (
     get_freematch_candidates,
     get_freematch_candidates_base,
@@ -27,14 +27,20 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-WIZARD_PRIORITY_SLIDER = 3
 WIZARD_CORE_MODE = "pure_cost"
 WIZARD_DEFAULT_STATE = "NSW"
 
+PRIORITY_TO_SLIDER = {
+    PriorityPreference.COST_ONLY: 1,
+    PriorityPreference.MOSTLY_COST: 2,
+    PriorityPreference.BALANCED: 3,
+    PriorityPreference.MOSTLY_GREEN: 4,
+    PriorityPreference.GREEN_ONLY: 5,
+}
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _score_and_pick_best(candidates) -> Optional[Vehicle]:
+def _score_and_pick_best(candidates, state: str, priority_slider: int) -> Optional[Vehicle]:
     """
     Score each candidate with the CORE Rating Engine and return
     the single highest-scoring vehicle.
@@ -50,8 +56,8 @@ def _score_and_pick_best(candidates) -> Optional[Vehicle]:
         try:
             result = calculate_core_rating(
                 vehicle=vehicle,
-                state=WIZARD_DEFAULT_STATE,
-                priority_slider=WIZARD_PRIORITY_SLIDER,
+                state=state,
+                priority_slider=priority_slider,
                 core_mode=WIZARD_CORE_MODE,
                 user_inputs={},
                 current_vehicle_annual_cost=None,
@@ -75,26 +81,26 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> Optional[Vehicle]:
     """
     Run the Free Match Wizard matching algorithm.
     """
-    fuel_pref = session.fuel_type_preference
-    primary_use = session.primary_use
+    state = session.state or WIZARD_DEFAULT_STATE
+    priority_slider = PRIORITY_TO_SLIDER.get(session.priority, 3)
 
-    # ── Attempt 1: fuel + body style ─────────────────────────────────────
-    candidates = list(get_freematch_candidates(fuel_pref, primary_use))
+    # ── Attempt 1: all specific filters ─────────────────────────────────────
+    candidates = list(get_freematch_candidates(session))
 
     if candidates:
-        vehicle = _score_and_pick_best(candidates)
+        vehicle = _score_and_pick_best(candidates, state, priority_slider)
         if vehicle:
             return vehicle
 
-    # ── Attempt 2: fuel only (relax body style) ──────────────────────────
+    # ── Attempt 2: fuel only (relax body style, budget, etc) ──────────────────────────
     logger.info(
-        "Free match wizard: no results with body style filter — relaxing (session %s)",
+        "Free match wizard: no results with specific filters — relaxing (session %s)",
         session.session_token[:8],
     )
-    candidates = list(get_freematch_candidates_fuel_only(fuel_pref))
+    candidates = list(get_freematch_candidates_fuel_only(session.fuel_type_preference))
 
     if candidates:
-        vehicle = _score_and_pick_best(candidates)
+        vehicle = _score_and_pick_best(candidates, state, priority_slider)
         if vehicle:
             return vehicle
 
@@ -108,7 +114,7 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> Optional[Vehicle]:
     if not candidates:
         raise RuntimeError("Vehicle catalogue is empty — cannot produce a match.")
 
-    vehicle = _score_and_pick_best(candidates)
+    vehicle = _score_and_pick_best(candidates, state, priority_slider)
     if not vehicle:
         raise RuntimeError("CORE Rating Engine returned no scorable vehicle.")
 
@@ -119,11 +125,14 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> Optional[Vehicle]:
 
 def build_match_response(vehicle: Vehicle, session: FreeMatchSession) -> dict:
     from django.utils import timezone
+    
+    state = session.state or WIZARD_DEFAULT_STATE
+    priority_slider = PRIORITY_TO_SLIDER.get(session.priority, 3)
 
     engine_data = calculate_core_rating(
         vehicle=vehicle,
-        state=WIZARD_DEFAULT_STATE,
-        priority_slider=WIZARD_PRIORITY_SLIDER,
+        state=state,
+        priority_slider=priority_slider,
         core_mode=WIZARD_CORE_MODE,
         user_inputs={},
         current_vehicle_annual_cost=None,
@@ -173,7 +182,7 @@ def build_unlocked_response(vehicle: Vehicle, user, garage_vehicle) -> dict:
         priority_slider = priority_state.priority_slider_position
         core_mode = priority_state.active_core_mode
     except Exception:
-        priority_slider = WIZARD_PRIORITY_SLIDER
+        priority_slider = PRIORITY_TO_SLIDER[PriorityPreference.BALANCED]
         core_mode = WIZARD_CORE_MODE
 
     engine_data = calculate_core_rating(
@@ -233,36 +242,48 @@ def _format_cents(cents: int) -> str:
 
 # ── State Mutations ──────────────────────────────────────────────────────────
 
-def create_freematch_session() -> FreeMatchSession:
-    return FreeMatchSession.objects.create()
-
-def update_freematch_step_1(session: FreeMatchSession, data: dict):
-    session.has_current_vehicle = data["has_current_vehicle"]
-    session.save(update_fields=["has_current_vehicle"])
-
-def update_freematch_step_2(session: FreeMatchSession, data: dict):
-    session.current_vehicle_make = data["current_vehicle_make"]
-    session.current_vehicle_model = data["current_vehicle_model"]
-    session.current_vehicle_year = data["current_vehicle_year"]
-    session.save(
-        update_fields=[
-            "current_vehicle_make",
-            "current_vehicle_model",
-            "current_vehicle_year",
-        ]
+def process_free_match(payload: dict) -> dict:
+    """
+    Creates a new FreeMatchSession with the payload, calculates the matched vehicle,
+    associates it with the session, and returns the response payload including
+    the session_token and the vehicle match data.
+    """
+    session = FreeMatchSession.objects.create(
+        priority=payload.get("priority", PriorityPreference.BALANCED),
+        primary_use=payload.get("primary_use"),
+        annual_km=payload.get("annual_km"),
+        budget_min=payload.get("budget_min"),
+        budget_max=payload.get("budget_max"),
+        state=payload.get("state"),
+        has_current_vehicle=payload.get("has_current_vehicle", False),
     )
-
-def update_freematch_step_3(session: FreeMatchSession, data: dict):
-    session.fuel_type_preference = data["fuel_type_preference"]
-    session.annual_km = data["annual_km"]
-    session.primary_use = data["primary_use"]
-    session.save(
-        update_fields=["fuel_type_preference", "annual_km", "primary_use"]
-    )
-
-def set_matched_vehicle(session: FreeMatchSession, vehicle: Vehicle):
+    
+    cv_data = payload.get("current_vehicle")
+    if cv_data:
+        session.current_vehicle_make = cv_data.get("make")
+        session.current_vehicle_model = cv_data.get("model")
+        session.current_vehicle_year = cv_data.get("year")
+        session.current_vehicle_odometer = cv_data.get("odometer")
+        
+    sn_data = payload.get("specific_needs")
+    if sn_data:
+        session.fuel_type_preference = sn_data.get("fuel_type")
+        session.style_preference = sn_data.get("style")
+        session.seating_preference = sn_data.get("seating")
+        session.ancap_5_star_only = sn_data.get("ancap_5_star_only", False)
+        session.towing_capacity_required = sn_data.get("towing_capacity_required", False)
+        
+    session.save()
+    
+    vehicle = match_vehicle_for_wizard(session)
+    if not vehicle:
+        raise RuntimeError("No match could be found.")
+        
     session.matched_vehicle = vehicle
     session.save(update_fields=["matched_vehicle"])
+    
+    return build_match_response(vehicle, session)
+
 
 @transaction.atomic
 def convert_session_to_garage(session: FreeMatchSession, user) -> GarageVehicle:

@@ -35,17 +35,17 @@ class PrimaryUse(models.TextChoices):
     WORK_VEHICLE = "work_vehicle", "Work Vehicle"
 
 
+class PriorityPreference(models.TextChoices):
+    COST_ONLY = "cost_only", "Cost Only"
+    MOSTLY_COST = "mostly_cost", "Mostly Cost"
+    BALANCED = "balanced", "Balanced"
+    MOSTLY_GREEN = "mostly_green", "Mostly Green"
+    GREEN_ONLY = "green_only", "Green Only"
+
+
 class FreeMatchSession(models.Model):
     """
-    Represents one anonymous wizard run.
-
-    session_token is a short-lived opaque token used only within the
-    multi-step wizard flow.  It is NOT a login session and must never
-    be used for result retrieval once the wizard ends.
-
-    expires_at is stored purely for the nightly cleanup job — it does
-    not gate result retrieval (results are discarded on DELETE, or
-    unlocked immediately on POST /save/).
+    Represents one anonymous wizard run using the single API flow.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -57,30 +57,39 @@ class FreeMatchSession(models.Model):
         db_index=True,
     )
 
-    
-    has_current_vehicle = models.BooleanField(null=True, blank=True)
-
-    
-    current_vehicle_make = models.CharField(max_length=100, null=True, blank=True)
-    current_vehicle_model = models.CharField(max_length=100, null=True, blank=True)
-    current_vehicle_year = models.IntegerField(null=True, blank=True)
-
-    
-    fuel_type_preference = models.CharField(
+    priority = models.CharField(
         max_length=20,
-        choices=FuelTypePreference.choices,
-        null=True,
-        blank=True,
+        choices=PriorityPreference.choices,
+        default=PriorityPreference.BALANCED,
     )
-    annual_km = models.IntegerField(null=True, blank=True)
     primary_use = models.CharField(
         max_length=20,
         choices=PrimaryUse.choices,
         null=True,
         blank=True,
     )
+    annual_km = models.IntegerField(null=True, blank=True)
+    budget_min = models.IntegerField(null=True, blank=True)
+    budget_max = models.IntegerField(null=True, blank=True)
+    state = models.CharField(max_length=10, null=True, blank=True)
 
-    
+    has_current_vehicle = models.BooleanField(default=False)
+    current_vehicle_make = models.CharField(max_length=100, null=True, blank=True)
+    current_vehicle_model = models.CharField(max_length=100, null=True, blank=True)
+    current_vehicle_year = models.IntegerField(null=True, blank=True)
+    current_vehicle_odometer = models.IntegerField(null=True, blank=True)
+
+    fuel_type_preference = models.CharField(
+        max_length=20,
+        choices=FuelTypePreference.choices,
+        null=True,
+        blank=True,
+    )
+    style_preference = models.CharField(max_length=100, null=True, blank=True)
+    seating_preference = models.IntegerField(null=True, blank=True)
+    ancap_5_star_only = models.BooleanField(default=False)
+    towing_capacity_required = models.BooleanField(default=False)
+
     matched_vehicle = models.ForeignKey(
         "vehicles.Vehicle",
         on_delete=models.SET_NULL,
@@ -89,7 +98,6 @@ class FreeMatchSession(models.Model):
         related_name="free_match_sessions",
     )
 
-   
     converted_user = models.ForeignKey(
         "users.User",
         on_delete=models.SET_NULL,
@@ -114,47 +122,3 @@ class FreeMatchSession(models.Model):
     @property
     def is_expired(self):
         return timezone.now() > self.expires_at
-
-    @property
-    def step_1_complete(self):
-        return self.has_current_vehicle is not None
-
-    @property
-    def step_2_required(self):
-        return self.has_current_vehicle is True
-
-    @property
-    def step_2_complete(self):
-        if not self.step_2_required:
-            return True  
-        return all([
-            self.current_vehicle_make,
-            self.current_vehicle_model,
-            self.current_vehicle_year,
-        ])
-
-    @property
-    def step_3_complete(self):
-        return all([
-            self.fuel_type_preference is not None,
-            self.annual_km is not None,
-            self.primary_use is not None,
-        ])
-
-    @property
-    def all_steps_complete(self):
-        return self.step_1_complete and self.step_2_complete and self.step_3_complete
-
-    @property
-    def next_step(self):
-        """
-        Returns the integer number of the next step to be answered,
-        or None if all steps are complete.
-        """
-        if not self.step_1_complete:
-            return 1
-        if self.step_2_required and not self.step_2_complete:
-            return 2
-        if not self.step_3_complete:
-            return 3
-        return None

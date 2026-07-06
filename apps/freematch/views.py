@@ -5,21 +5,10 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.freematch.selectors import get_freematch_session
-from apps.freematch.serializers import (
-    FreeMatchStepSerializer,
-    Step1DataSerializer,
-    Step2DataSerializer,
-    Step3DataSerializer,
-)
+from apps.freematch.serializers import FreeMatchCalculateSerializer
 from apps.freematch.services import (
-    build_match_response,
     build_unlocked_response,
-    match_vehicle_for_wizard,
-    create_freematch_session,
-    update_freematch_step_1,
-    update_freematch_step_2,
-    update_freematch_step_3,
-    set_matched_vehicle,
+    process_free_match,
     convert_session_to_garage,
     discard_freematch_session,
 )
@@ -56,158 +45,46 @@ def _get_session_or_error(session_token: str):
     return session, None
 
 
-class FreeMatchStartView(views.APIView):
+class FreeMatchCalculateView(views.APIView):
     """
-    POST /api/free-match/start/
+    POST /api/free-match/calculate/
 
-    Creates a new FreeMatchSession and returns the session_token.
-    No request body required.  No authentication required.
+    Receives the entire Free Match payload, creates the session, 
+    calculates the match, and returns the partial result with gated fields.
     """
     permission_classes = [AllowAny]
     throttle_scope = "anon"
 
     def post(self, request):
-        session = create_freematch_session()
-
-        emit_analytics_event.delay(
-            str(session.id),
-            "free_match_wizard_started",
-            {},
-        )
-
-        return Response(
-            {
-                "session_token": session.session_token,
-                "wizard_step": 1,
-                "expires_at": session.expires_at.isoformat(),
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class FreeMatchStepView(views.APIView):
-    """
-    PATCH /api/free-match/{session_token}/step/
-
-    Accepts answers for a single wizard step and updates the session.
-    Steps must be answered sequentially — no skipping allowed.
-    """
-    permission_classes = [AllowAny]
-    throttle_scope = "anon"
-
-    def patch(self, request, session_token):
-        session, err = _get_session_or_error(session_token)
-        if err:
-            return err
-
-        wrapper = FreeMatchStepSerializer(data=request.data)
-        if not wrapper.is_valid():
+        serializer = FreeMatchCalculateSerializer(data=request.data)
+        if not serializer.is_valid():
             return Response(
-                {"detail": "Invalid request.", "errors": wrapper.errors},
+                {"detail": "Invalid payload.", "errors": serializer.errors},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
-        step_number = wrapper.validated_data["step_number"]
-        step_data = wrapper.validated_data["step_data"]
-
-        expected_next = session.next_step
-        if expected_next is not None and step_number != expected_next:
-            return Response(
-                {
-                    "detail": (
-                        f"Steps must be completed in order. "
-                        f"Expected step {expected_next}, got {step_number}."
-                    ),
-                    "expected_step": expected_next,
-                },
-                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            )
-
-        if step_number == 1:
-            ser = Step1DataSerializer(data=step_data)
-            if not ser.is_valid():
-                return Response(
-                    {"detail": "Invalid step 1 data.", "errors": ser.errors},
-                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                )
-            update_freematch_step_1(session, ser.validated_data)
-
-        elif step_number == 2:
-            if not session.step_2_required:
-                return Response(
-                    {
-                        "detail": (
-                            "Step 2 is not required because you indicated "
-                            "you do not have a current vehicle. "
-                            "Proceed to step 3."
-                        )
-                    },
-                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                )
-            ser = Step2DataSerializer(data=step_data)
-            if not ser.is_valid():
-                return Response(
-                    {"detail": "Invalid step 2 data.", "errors": ser.errors},
-                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                )
-            update_freematch_step_2(session, ser.validated_data)
-
-        elif step_number == 3:
-            ser = Step3DataSerializer(data=step_data)
-            if not ser.is_valid():
-                return Response(
-                    {"detail": "Invalid step 3 data.", "errors": ser.errors},
-                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                )
-            update_freematch_step_3(session, ser.validated_data)
-
-            emit_analytics_event.delay(
-                str(session.id),
-                "free_match_wizard_completed",
-                {"has_current_vehicle": session.has_current_vehicle},
-            )
-
-        session.refresh_from_db()
-        next_step = session.next_step
-
-        if next_step is None:
-            return Response({"match_ready": True})
-
-        return Response({"next_step": next_step})
-
-
-class FreeMatchCalculateView(views.APIView):
-    """
-    POST /api/free-match/{session_token}/match/
-
-    Triggers the match calculation.  Returns a partial result with gated fields.
-    """
-    permission_classes = [AllowAny]
-    throttle_scope = "anon"
-
-    def post(self, request, session_token):
-        session, err = _get_session_or_error(session_token)
-        if err:
-            return err
-
-        if not session.step_1_complete:
-            return Response(
-                {"detail": "Step 1 (has_current_vehicle) must be answered before requesting a match."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if session.step_2_required and not session.step_2_complete:
-            return Response(
-                {"detail": "Step 2 (current vehicle details) must be answered before requesting a match."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not session.step_3_complete:
-            return Response(
-                {"detail": "Step 3 (fuel preference, annual km, primary use) must be answered before requesting a match."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        payload = serializer.validated_data
 
         try:
-            vehicle = match_vehicle_for_wizard(session)
+            response_data = process_free_match(payload)
+            session_token = response_data.get("session_token")
+            
+            # Re-fetch session to get ID for analytics
+            session = get_freematch_session(session_token)
+            if session:
+                emit_analytics_event.delay(
+                    str(session.id),
+                    "free_match_wizard_calculated",
+                    {},
+                )
+                emit_analytics_event.delay(
+                    str(session.id),
+                    "free_match_result_viewed",
+                    {},
+                )
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
         except RuntimeError as exc:
             logger.error("Free match wizard match failure: %s", exc)
             return Response(
@@ -221,18 +98,6 @@ class FreeMatchCalculateView(views.APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        set_matched_vehicle(session, vehicle)
-
-        response_data = build_match_response(vehicle, session)
-
-        emit_analytics_event.delay(
-            str(session.id),
-            "free_match_result_viewed",
-            {},
-        )
-
-        return Response(response_data, status=status.HTTP_200_OK)
-
 
 class FreeMatchSaveView(views.APIView):
     """
@@ -241,9 +106,6 @@ class FreeMatchSaveView(views.APIView):
     Requires authentication (visitor has just registered).
     Saves the matched vehicle to the new user's MyGarage and unlocks
     all gated fields.
-
-    This is the only persistent outcome of the wizard.  If the user
-    instead calls DELETE (discard), nothing is stored.
     """
     permission_classes = [IsAuthenticated]
 
@@ -307,7 +169,6 @@ class FreeMatchDiscardView(views.APIView):
     DELETE /api/free-match/{session_token}/
 
     Immediately and permanently deletes the FreeMatchSession.
-    No result is stored anywhere after this call.
     """
     permission_classes = [AllowAny]
     throttle_scope = "anon"

@@ -1,58 +1,47 @@
 from rest_framework import serializers
 
 from apps.freematch.models import (
-    FreeMatchSession,
     FuelTypePreference,
     PrimaryUse,
+    PriorityPreference,
 )
 
-
-class FreeMatchStartSerializer(serializers.Serializer):
-    """
-    POST /api/free-match/start/
-    No fields required — the wizard session is created empty.
-    """
-    pass
+class CurrentVehicleDataSerializer(serializers.Serializer):
+    make = serializers.CharField(max_length=100)
+    model = serializers.CharField(max_length=100)
+    year = serializers.IntegerField(min_value=1900, max_value=2100)
+    odometer = serializers.IntegerField(min_value=0, allow_null=True, required=False)
 
 
-# ── Step data serializers ─────────────────────────────────────────────────────
-
-class Step1DataSerializer(serializers.Serializer):
-    has_current_vehicle = serializers.BooleanField()
-
-
-class Step2DataSerializer(serializers.Serializer):
-    current_vehicle_make = serializers.CharField(max_length=100)
-    current_vehicle_model = serializers.CharField(max_length=100)
-    current_vehicle_year = serializers.IntegerField(min_value=1900, max_value=2100)
-
-
-class Step3DataSerializer(serializers.Serializer):
-    fuel_type_preference = serializers.ChoiceField(
-        choices=FuelTypePreference.choices
+class SpecificNeedsDataSerializer(serializers.Serializer):
+    fuel_type = serializers.ChoiceField(
+        choices=FuelTypePreference.choices,
+        allow_null=True,
+        required=False
     )
-    annual_km = serializers.IntegerField(min_value=1)
+    style = serializers.CharField(max_length=100, allow_null=True, required=False)
+    seating = serializers.IntegerField(min_value=1, allow_null=True, required=False)
+    ancap_5_star_only = serializers.BooleanField(default=False)
+    towing_capacity_required = serializers.BooleanField(default=False)
+
+
+class FreeMatchCalculateSerializer(serializers.Serializer):
+    priority = serializers.ChoiceField(choices=PriorityPreference.choices, default=PriorityPreference.BALANCED)
     primary_use = serializers.ChoiceField(choices=PrimaryUse.choices)
+    annual_km = serializers.IntegerField(min_value=1)
+    budget_min = serializers.IntegerField(min_value=0, allow_null=True, required=False)
+    budget_max = serializers.IntegerField(min_value=0, allow_null=True, required=False)
+    state = serializers.CharField(max_length=10, allow_null=True, required=False)
+    
+    has_current_vehicle = serializers.BooleanField(default=False)
+    current_vehicle = CurrentVehicleDataSerializer(required=False, allow_null=True)
+    
+    specific_needs = SpecificNeedsDataSerializer(required=False, allow_null=True)
 
-
-# ── Step wrapper ─────────────────────────────────────────────────────────────
-
-class FreeMatchStepSerializer(serializers.Serializer):
-    """
-    PATCH /api/free-match/{session_token}/step/
-
-    Validates step_number is an integer and step_data is a dict.
-    Per-step field validation is delegated to Step*DataSerializer instances
-    inside the view, so that we can return field-level errors with the
-    correct context (e.g. "step_data.fuel_type_preference is invalid").
-    """
-    step_number = serializers.IntegerField(min_value=1, max_value=3)
-    step_data = serializers.DictField(child=serializers.JSONField())
-
-    def validate_step_number(self, value):
-        if value not in (1, 2, 3):
-            raise serializers.ValidationError("step_number must be 1, 2, or 3.")
-        return value
+    def validate(self, data):
+        if data.get("has_current_vehicle") and not data.get("current_vehicle"):
+            raise serializers.ValidationError({"current_vehicle": "This field is required when has_current_vehicle is true."})
+        return data
 
 
 # ── Gated field shape ─────────────────────────────────────────────────────────
