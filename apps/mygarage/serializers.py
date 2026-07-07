@@ -53,5 +53,6 @@ class AISmartMatchInputSerializer(serializers.Serializer):
     query = serializers.CharField(max_length=500, required=True)
     state = serializers.ChoiceField(
         choices=['NSW', 'VIC', 'QLD', 'SA', 'WA', 'NT', 'TAS', 'ACT'], 
-        required=True
+        required=False,
+        allow_null=True
     )

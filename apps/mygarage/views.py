@@ -502,7 +502,10 @@ class AISmartMatchView(views.APIView):
         serializer = AISmartMatchInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         query = serializer.validated_data['query']
-        state = serializer.validated_data['state']
+        state = serializer.validated_data.get('state')
+        if not state:
+            cv = getattr(request.user, 'current_vehicle', None)
+            state = cv.state if cv and getattr(cv, 'state', None) else 'NSW'
 
         user = request.user
         limit = user.get_match_limit()
