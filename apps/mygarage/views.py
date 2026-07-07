@@ -6,16 +6,18 @@ from django.db import models
 from django.shortcuts import get_object_or_404
 from apps.mygarage.models import (
     CurrentVehicle, GarageVehicle, GarageVehicleStatus, GarageVehicleSource,
-    VehicleOverride, UserPriorityState, CoreMode
+    VehicleOverride, UserPriorityState, CoreMode, AISmartMatchRequest
 )
 from apps.vehicles.models import Vehicle
 from apps.users.models import SubscriptionTier
 from apps.mygarage.serializers import (
     CurrentVehicleSerializer, GarageVehicleSerializer,
     UserPriorityStateSerializer, CurrentVehicleCreateSerializer,
-    GarageVehicleCreateSerializer, VehicleDetailOverrideSerializer
+    GarageVehicleCreateSerializer, VehicleDetailOverrideSerializer,
+    AISmartMatchInputSerializer
 )
 from apps.mygarage.services import check_cap_limit, get_cap_counter, calculate_spotlights
+from apps.mygarage.ai_service import extract_search_parameters, build_recommendation_reason
 from apps.vehicles.services.rating_engine import calculate_core_rating
 from apps.vehicles.tasks import emit_analytics_event
 
@@ -492,3 +494,163 @@ class SpotlightsView(views.APIView):
             results[str(gv.id)] = badges
             
         return Response(results)
+
+class AISmartMatchView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AISmartMatchInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        query = serializer.validated_data['query']
+        state = serializer.validated_data['state']
+
+        user = request.user
+        limit = user.get_match_limit()
+        used = user.match_count_used
+        
+        # Step 1: Limit check
+        if limit is not None and used >= limit:
+            plan_name = dict(SubscriptionTier.choices).get(user.subscription_tier, "Free Starter")
+            return Response({
+                "error": "match_limit_reached",
+                "match_count_used": used,
+                "match_count_limit": limit,
+                "plan": plan_name,
+                "upgrade_message": "Upgrade to CORE Advantage for unlimited matches."
+            }, status=status.HTTP_403_FORBIDDEN)
+            
+        # Step 2 & 3: AI extraction & Fallback
+        ai_available, filters = extract_search_parameters(query)
+        
+        if not ai_available:
+            AISmartMatchRequest.objects.create(
+                user=user,
+                raw_query=query,
+                interpreted_filters=None,
+                result_vehicle_ids=[],
+                result_count=0,
+                ai_service_available=False,
+                match_count_at_time=used
+            )
+            if getattr(user, 'analytics_consent', False):
+                emit_analytics_event.delay(str(user.id), 'ai_smart_match_fallback_shown', {})
+                
+            return Response({
+                "results": [],
+                "ai_service_available": False,
+                "fallback_message": "AI matching is temporarily unavailable. Please use Smart Car Finder to find your vehicle."
+            }, status=status.HTTP_200_OK)
+            
+        # Step 4: Query vehicles
+        queryset = Vehicle.objects.all()
+        
+        if filters.get('powertrain_types'):
+            queryset = queryset.filter(powertrain_type__in=[p.lower() for p in filters['powertrain_types']])
+        if filters.get('body_styles'):
+            queryset = queryset.filter(body_style__in=[b.lower() for b in filters['body_styles']])
+        if filters.get('fcai_categories'):
+            queryset = queryset.filter(fcai_category__in=filters['fcai_categories'])
+        if filters.get('num_seats_min'):
+            queryset = queryset.filter(num_seats__gte=filters['num_seats_min'])
+        if filters.get('ancap_rating_min'):
+            queryset = queryset.filter(ancap_safety_rating__gte=filters['ancap_rating_min'])
+            
+        # Step 5: Score and sort
+        user_state = getattr(user, 'priority_state', None)
+        priority = user_state.priority_slider_position if user_state else 3
+        mode = user_state.active_core_mode if user_state else CoreMode.PURE_COST
+        
+        cv = getattr(user, 'current_vehicle', None)
+        cv_cost = None
+        if cv and cv.vehicle_catalogue:
+            cv_resp = calculate_core_rating(cv.vehicle_catalogue, state, priority, mode, {})
+            cv_cost = cv_resp.get('total_annual_cost')
+
+        scored_vehicles = []
+        for v in queryset:
+            driveaway = v.driveaway_price_by_state.get(state)
+            
+            if filters.get('budget_max') and driveaway and driveaway > filters['budget_max'] * 100:
+                continue
+            if filters.get('budget_min') and driveaway and driveaway < filters['budget_min'] * 100:
+                continue
+                
+            res = calculate_core_rating(v, state, priority, mode, {}, current_cost=cv_cost)
+            rating = res.get('core_rating', 0)
+            
+            if filters.get('core_rating_min') and (not rating or rating < filters['core_rating_min']):
+                continue
+                
+            reason = build_recommendation_reason(filters, v)
+            
+            diff = res.get('est_cost_difference')
+            if diff is not None:
+                diff_display = f"${abs(diff) // 100:,} {'less' if diff > 0 else 'more'}"
+            else:
+                diff_display = None
+                
+            scored_vehicles.append({
+                "vehicle_id": str(v.id),
+                "make": v.brand,
+                "model": v.model,
+                "year": v.year,
+                "variant": v.variant,
+                "powertrain_type": v.powertrain_type,
+                "core_rating": round(rating, 1) if rating else None,
+                "band_name": res.get('band_name'),
+                "total_annual_cost": res.get('total_annual_cost'),
+                "total_annual_cost_display": f"${res.get('total_annual_cost', 0) // 100:,}",
+                "est_cost_difference": diff,
+                "est_cost_difference_display": diff_display,
+                "co2_g_per_km": v.tailpipe_co2_g_per_km,
+                "driveaway_price": driveaway,
+                "driveaway_price_display": f"${driveaway // 100:,}" if driveaway else None,
+                "recommendation_reason": reason,
+                "is_estimate": True
+            })
+            
+        scored_vehicles.sort(key=lambda x: x['core_rating'] or 0, reverse=True)
+        
+        if not scored_vehicles:
+            return Response({
+                "results": [],
+                "ai_service_available": True,
+                "interpreted_filters": filters,
+                "empty_message": "No vehicles matched your search. Try broadening your criteria or use Smart Car Finder.",
+                "match_count_used": used,
+                "match_count_limit": limit
+            }, status=status.HTTP_200_OK)
+            
+        # Step 6: Increment counter
+        user.match_count_used += 1
+        user.save()
+        
+        # Step 7: Save request
+        AISmartMatchRequest.objects.create(
+            user=user,
+            raw_query=query,
+            interpreted_filters=filters,
+            result_vehicle_ids=[v['vehicle_id'] for v in scored_vehicles],
+            result_count=len(scored_vehicles),
+            ai_service_available=True,
+            match_count_at_time=used
+        )
+        
+        if getattr(user, 'analytics_consent', False):
+            emit_analytics_event.delay(str(user.id), 'ai_smart_match_performed', {
+                'ai_service_available': True,
+                'result_count': len(scored_vehicles)
+            })
+
+        # Step 8: Return
+        return Response({
+            "results": scored_vehicles,
+            "match_count_used": user.match_count_used,
+            "match_count_limit": limit,
+            "ai_service_available": True,
+            "meta": {
+                "calculated_at": timezone.now().isoformat(),
+                "is_estimate": True,
+                "disclaimer": "All figures are estimates only. Actual costs will vary based on individual driving habits, insurer quotes, dealer pricing, and personal circumstances."
+            }
+        }, status=status.HTTP_200_OK)

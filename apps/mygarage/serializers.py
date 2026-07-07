@@ -48,3 +48,10 @@ class GarageVehicleCreateSerializer(serializers.Serializer):
 class VehicleDetailOverrideSerializer(serializers.Serializer):
     field_name = serializers.CharField()
     override_value = serializers.JSONField()
+
+class AISmartMatchInputSerializer(serializers.Serializer):
+    query = serializers.CharField(max_length=500, required=True)
+    state = serializers.ChoiceField(
+        choices=['NSW', 'VIC', 'QLD', 'SA', 'WA', 'NT', 'TAS', 'ACT'], 
+        required=True
+    )

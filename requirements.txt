@@ -99,3 +99,4 @@ wcwidth==0.2.14
 zope.interface==8.2
 pandas
 openpyxl
+openai==1.55.0

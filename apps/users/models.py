@@ -67,6 +67,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     
     subscription_tier = models.CharField(max_length=50, choices=SubscriptionTier.choices, default=SubscriptionTier.FREE)
     analytics_consent = models.BooleanField(default=False)
+    match_count_used = models.IntegerField(default=0)
     
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
@@ -81,6 +82,14 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+    def get_match_limit(self):
+        if self.subscription_tier == SubscriptionTier.FREE:
+            return 5
+        elif self.subscription_tier == SubscriptionTier.CAR_BUYING_SPRINT:
+            return 15
+        else:
+            return None # Unlimited
 
 class EmailVerificationToken(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

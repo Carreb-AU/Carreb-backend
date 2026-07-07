@@ -15,7 +15,8 @@ from apps.mygarage.views import (
     PriorityStateView,
     CoreDialBandBreakdownView,
     SavingsSummaryView,
-    SpotlightsView
+    SpotlightsView,
+    AISmartMatchView
 )
 
 urlpatterns = [
@@ -45,4 +46,7 @@ urlpatterns = [
     # Savings & Spotlights
     path('api/my-garage/savings-summary/', SavingsSummaryView.as_view(), name='savings-summary'),
     path('api/my-garage/spotlights/', SpotlightsView.as_view(), name='spotlights'),
+    
+    # AI Smart Match
+    path('api/my-garage/ai-smart-match/', AISmartMatchView.as_view(), name='ai-smart-match'),
 ]
