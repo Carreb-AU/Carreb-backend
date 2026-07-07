@@ -575,7 +575,7 @@ class AISmartMatchView(views.APIView):
             if filters.get('budget_min') and driveaway and driveaway < filters['budget_min'] * 100:
                 continue
                 
-            res = calculate_core_rating(v, state, priority, mode, {}, current_cost=cv_cost)
+            res = calculate_core_rating(v, state, priority, mode, {}, current_vehicle_annual_cost=cv_cost)
             rating = res.get('core_rating', 0)
             
             if filters.get('core_rating_min') and (not rating or rating < filters['core_rating_min']):
