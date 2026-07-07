@@ -61,6 +61,7 @@ class VehicleDetailView(generics.RetrieveAPIView):
     lookup_url_kwarg = 'vehicle_id'
 
 class VehicleBrandsView(views.APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     
     def get(self, request):
@@ -68,6 +69,7 @@ class VehicleBrandsView(views.APIView):
         return Response(brands)
 
 class VehicleModelsView(views.APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     
     def get(self, request):
@@ -78,6 +80,7 @@ class VehicleModelsView(views.APIView):
         return Response(models)
 
 class VehicleYearsView(views.APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     
     def get(self, request):
@@ -89,6 +92,7 @@ class VehicleYearsView(views.APIView):
         return Response(years)
 
 class VehicleVariantsView(views.APIView):
+    authentication_classes = []
     permission_classes = [AllowAny]
     
     def get(self, request):
