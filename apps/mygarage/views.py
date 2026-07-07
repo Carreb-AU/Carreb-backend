@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db import models
 from django.shortcuts import get_object_or_404
 from apps.mygarage.models import (
-    CurrentVehicle, GarageVehicle, GarageVehicleStatus,
+    CurrentVehicle, GarageVehicle, GarageVehicleStatus, GarageVehicleSource,
     VehicleOverride, UserPriorityState, CoreMode
 )
 from apps.vehicles.models import Vehicle
@@ -92,6 +92,23 @@ class CurrentVehicleView(views.APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         
+        vehicle_catalogue_id = data.get('vehicle_catalogue_id')
+        exists_in_garage = False
+        
+        if vehicle_catalogue_id:
+            exists_in_garage = GarageVehicle.objects.filter(
+                user=request.user,
+                vehicle_catalogue_id=vehicle_catalogue_id,
+                status=GarageVehicleStatus.ACTIVE
+            ).exists()
+            
+            if not exists_in_garage and not check_cap_limit(request.user):
+                cap = get_cap_counter(request.user)
+                return Response({
+                    "detail": f"Plan limit reached. You are on {cap['plan']} which allows {cap['limit']} vehicles.",
+                    "cap_counter": cap
+                }, status=status.HTTP_403_FORBIDDEN)
+        
         cv, created = CurrentVehicle.objects.update_or_create(
             user=request.user,
             defaults={
@@ -103,6 +120,15 @@ class CurrentVehicleView(views.APIView):
                 'state': data.get('state'),
             }
         )
+        
+        if vehicle_catalogue_id and not exists_in_garage:
+            GarageVehicle.objects.create(
+                user=request.user,
+                vehicle_catalogue_id=vehicle_catalogue_id,
+                source=GarageVehicleSource.VEHICLE_LOOKUP
+            )
+            if getattr(request.user, 'analytics_consent', False):
+                emit_analytics_event.delay(str(request.user.id), 'vehicle_added_to_garage', {})
         
         state = getattr(request.user, 'priority_state', None)
         if not state:
