@@ -1,6 +1,6 @@
 from rest_framework import views, status, generics
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
 from django.db import models
 from django.shortcuts import get_object_or_404
@@ -140,7 +140,8 @@ class CurrentVehicleView(views.APIView):
         return Response(resp)
 
 class CurrentVehicleSearchView(views.APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = []
+    permission_classes = [AllowAny]
     
     def post(self, request):
         query = request.data.get('query', '').lower()
