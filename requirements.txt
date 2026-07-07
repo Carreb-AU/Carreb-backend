@@ -100,3 +100,4 @@ zope.interface==8.2
 pandas
 openpyxl
 openai==1.55.0
+httpx==0.27.2
