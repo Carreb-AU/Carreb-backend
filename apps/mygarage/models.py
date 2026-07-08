@@ -102,3 +102,68 @@ class AISmartMatchRequest(models.Model):
 
     def __str__(self):
         return f"AI Match for {self.user.email} at {self.created_at}"
+
+class RideRevealCreditType(models.TextChoices):
+    PLAN_INCLUDED = 'plan_included', 'Plan Included'
+    PURCHASED_SINGLE = 'purchased_single', 'Purchased Single'
+    PURCHASED_BUNDLE = 'purchased_bundle', 'Purchased Bundle'
+
+class RideRevealCredit(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='ridereveal_credit')
+    plan = models.CharField(max_length=50)
+    credits_included = models.IntegerField(default=0)
+    credits_purchased = models.IntegerField(default=0)
+    credits_used = models.IntegerField(default=0)
+    period_start = models.DateField(null=True, blank=True)
+    period_end = models.DateField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    @property
+    def credits_available(self):
+        return max(0, self.credits_included + self.credits_purchased - self.credits_used)
+        
+    def __str__(self):
+        return f"RideReveal Credits for {self.user.email}"
+
+class RideRevealResult(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ridereveal_results')
+    garage_vehicle = models.ForeignKey(GarageVehicle, on_delete=models.CASCADE, related_name='ridereveal_results')
+    vehicle_catalogue = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name='ridereveal_results')
+    custom_plate = models.CharField(max_length=7, null=True, blank=True)
+    
+    archetype_name = models.CharField(max_length=255)
+    archetype_tagline = models.CharField(max_length=255)
+    self_insight_text = models.TextField()
+    social_perception_text = models.TextField()
+    did_you_know_fact = models.TextField()
+    share_caption = models.CharField(max_length=280)
+    disclaimer = models.CharField(max_length=255, default="for entertainment and educational purposes only")
+    ai_model_version = models.CharField(max_length=50)
+    generation_duration_ms = models.IntegerField()
+    generated_at = models.DateTimeField(auto_now_add=True)
+    credit_type = models.CharField(max_length=50, choices=RideRevealCreditType.choices)
+
+    def __str__(self):
+        return f"RideReveal {self.archetype_name} for {self.garage_vehicle}"
+
+class RideRevealJobStatus(models.TextChoices):
+    PENDING = 'pending', 'Pending'
+    PROCESSING = 'processing', 'Processing'
+    COMPLETE = 'complete', 'Complete'
+    FAILED = 'failed', 'Failed'
+
+class RideRevealJob(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ridereveal_jobs')
+    garage_vehicle = models.ForeignKey(GarageVehicle, on_delete=models.CASCADE, related_name='ridereveal_jobs')
+    custom_plate = models.CharField(max_length=7, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=RideRevealJobStatus.choices, default=RideRevealJobStatus.PENDING)
+    result = models.ForeignKey(RideRevealResult, on_delete=models.SET_NULL, null=True, blank=True, related_name='jobs')
+    error_message = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"RideRevealJob {self.id} - {self.status}"

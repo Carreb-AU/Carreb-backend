@@ -658,3 +658,100 @@ class AISmartMatchView(views.APIView):
                 "disclaimer": "All figures are estimates only. Actual costs will vary based on individual driving habits, insurer quotes, dealer pricing, and personal circumstances."
             }
         }, status=status.HTTP_200_OK)
+from rest_framework import views, status, generics
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.shortcuts import get_object_or_404
+from apps.mygarage.models import RideRevealJob, RideRevealResult
+from apps.mygarage.serializers import (
+    RideRevealGenerateSerializer, 
+    RideRevealPurchaseSerializer,
+    RideRevealResultSerializer
+)
+from apps.mygarage.ridereveal_services import (
+    get_ridereveal_credits,
+    trigger_ridereveal_generation,
+    create_stripe_payment_intent,
+    process_stripe_webhook
+)
+
+class RideRevealCreditsView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        data = get_ridereveal_credits(request.user)
+        return Response(data, status=status.HTTP_200_OK)
+
+class RideRevealGenerateView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = RideRevealGenerateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        garage_vehicle_id = serializer.validated_data['garage_vehicle_id']
+        custom_plate = serializer.validated_data.get('custom_plate')
+        
+        result = trigger_ridereveal_generation(request.user, garage_vehicle_id, custom_plate)
+        
+        status_code = result.pop('status_code')
+        return Response(result, status=status_code)
+
+class RideRevealJobView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, job_id):
+        job = get_object_or_404(RideRevealJob, id=job_id, user=request.user)
+        
+        response_data = {
+            "job_id": str(job.id),
+            "status": job.status
+        }
+        
+        if job.status == 'complete' and job.result:
+            response_data['result'] = RideRevealResultSerializer(job.result).data
+        elif job.status == 'failed':
+            response_data['error_message'] = job.error_message
+            response_data['credit_refunded'] = True
+            
+        return Response(response_data, status=status.HTTP_200_OK)
+
+class RideRevealResultView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, garage_vehicle_id):
+        try:
+            result = RideRevealResult.objects.get(user=request.user, garage_vehicle_id=garage_vehicle_id)
+            return Response(RideRevealResultSerializer(result).data, status=status.HTTP_200_OK)
+        except RideRevealResult.DoesNotExist:
+            return Response({"error": "not_found", "message": "No result found"}, status=status.HTTP_404_NOT_FOUND)
+
+class RideRevealPurchaseView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = RideRevealPurchaseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        purchase_type = serializer.validated_data['purchase_type']
+        
+        try:
+            client_secret = create_stripe_payment_intent(request.user, purchase_type)
+            return Response({"client_secret": client_secret}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+class StripeWebhookView(views.APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        payload = request.body
+        sig_header = request.META.get('HTTP_STRIPE_SIGNATURE', '')
+        
+        success = process_stripe_webhook(payload, sig_header)
+        
+        if success:
+            return Response(status=status.HTTP_200_OK)
+        else:
+            return Response(status=status.HTTP_400_BAD_REQUEST)

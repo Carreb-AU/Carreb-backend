@@ -16,7 +16,13 @@ from apps.mygarage.views import (
     CoreDialBandBreakdownView,
     SavingsSummaryView,
     SpotlightsView,
-    AISmartMatchView
+    AISmartMatchView,
+    RideRevealCreditsView,
+    RideRevealGenerateView,
+    RideRevealJobView,
+    RideRevealResultView,
+    RideRevealPurchaseView,
+    StripeWebhookView
 )
 
 urlpatterns = [
@@ -49,4 +55,14 @@ urlpatterns = [
     
     # AI Smart Match
     path('api/my-garage/ai-smart-match/', AISmartMatchView.as_view(), name='ai-smart-match'),
+    
+    # RideReveal
+    path('api/my-garage/ridereveal/credits/', RideRevealCreditsView.as_view(), name='ridereveal-credits'),
+    path('api/my-garage/ridereveal/generate/', RideRevealGenerateView.as_view(), name='ridereveal-generate'),
+    path('api/my-garage/ridereveal/job/<uuid:job_id>/', RideRevealJobView.as_view(), name='ridereveal-job'),
+    path('api/my-garage/ridereveal/result/<uuid:garage_vehicle_id>/', RideRevealResultView.as_view(), name='ridereveal-result'),
+    path('api/my-garage/ridereveal/purchase/', RideRevealPurchaseView.as_view(), name='ridereveal-purchase'),
+    
+    # Stripe Webhook
+    path('api/stripe/webhook/ridereveal-purchase/', StripeWebhookView.as_view(), name='stripe-webhook-ridereveal-purchase'),
 ]
