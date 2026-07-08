@@ -19,7 +19,7 @@ def send_verification_email_task(email: str, token_str: str, environment: str = 
         subject = 'Verify Your Email Change for Carreb' if is_email_change else 'Verify Your Email for Carreb'
         base_url = get_base_frontend_url(environment)
         if is_email_change:
-            verification_link = f'{base_url}/settings?token={token_str}'
+            verification_link = f'{base_url}/settings?email_token={token_str}'
         else:
             verification_link = f'{base_url}/signup/details?token={token_str}'
             
@@ -48,7 +48,7 @@ def send_password_reset_email_task(email: str, token_str: str, environment: str 
     try:
         subject = 'Reset Your Password for Carreb'
         base_url = get_base_frontend_url(environment)
-        reset_link = f'{base_url}/settings?token={token_str}'
+        reset_link = f'{base_url}/settings?reset_token={token_str}'
         context = {'reset_link': reset_link}
         html_message = render_to_string('emails/password_reset_link.html', context)
         plain_message = f'Please reset your password by clicking the following link: {reset_link}'

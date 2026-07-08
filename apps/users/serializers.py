@@ -56,10 +56,15 @@ class AccountDeletionRequestSerializer(serializers.Serializer):
     reason = serializers.ChoiceField(choices=DeletionReason.choices)
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    is_2fa_enabled = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ['id', 'first_name', 'last_name', 'email', 'mobile_number', 'profile_picture', 'profile_photo_url', 'subscription_tier', 'email_verified']
-        read_only_fields = ['id', 'subscription_tier', 'email_verified']
+        fields = ['id', 'first_name', 'last_name', 'email', 'mobile_number', 'profile_picture', 'profile_photo_url', 'subscription_tier', 'email_verified', 'is_2fa_enabled']
+        read_only_fields = ['id', 'subscription_tier', 'email_verified', 'is_2fa_enabled']
+
+    def get_is_2fa_enabled(self, obj):
+        return hasattr(obj, 'two_factor_auth') and obj.two_factor_auth.is_enabled
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
