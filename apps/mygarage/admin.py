@@ -6,6 +6,9 @@ from apps.mygarage.models import (
     GarageVehicleStatus,
     VehicleOverride,
     UserPriorityState,
+    RideRevealCredit,
+    RideRevealResult,
+    RideRevealJob,
 )
 
 
@@ -156,3 +159,52 @@ class UserPriorityStateAdmin(admin.ModelAdmin):
             "fields": ("updated_at",),
         }),
     )
+
+@admin.register(RideRevealCredit)
+class RideRevealCreditAdmin(admin.ModelAdmin):
+    list_display = [
+        "user",
+        "plan",
+        "credits_included",
+        "credits_purchased",
+        "credits_used",
+        "credits_available",
+        "period_start",
+        "period_end",
+        "updated_at",
+    ]
+    search_fields = ["user__email"]
+    list_filter = ["plan"]
+    readonly_fields = ["id", "credits_available", "updated_at"]
+    raw_id_fields = ["user"]
+
+@admin.register(RideRevealResult)
+class RideRevealResultAdmin(admin.ModelAdmin):
+    list_display = [
+        "user",
+        "garage_vehicle",
+        "archetype_name",
+        "credit_type",
+        "generated_at",
+    ]
+    search_fields = ["user__email", "archetype_name", "garage_vehicle__vehicle_catalogue__brand"]
+    list_filter = ["credit_type", "ai_model_version"]
+    readonly_fields = ["id", "generated_at", "generation_duration_ms"]
+    raw_id_fields = ["user", "garage_vehicle", "vehicle_catalogue"]
+    date_hierarchy = "generated_at"
+
+@admin.register(RideRevealJob)
+class RideRevealJobAdmin(admin.ModelAdmin):
+    list_display = [
+        "id",
+        "user",
+        "garage_vehicle",
+        "status",
+        "created_at",
+        "completed_at",
+    ]
+    search_fields = ["user__email", "id"]
+    list_filter = ["status"]
+    readonly_fields = ["id", "created_at", "completed_at", "error_message"]
+    raw_id_fields = ["user", "garage_vehicle", "result"]
+    date_hierarchy = "created_at"
