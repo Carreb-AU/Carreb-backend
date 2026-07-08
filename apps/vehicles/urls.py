@@ -8,6 +8,7 @@ from apps.vehicles.views import (
     VehicleVariantsView,
     CoreRatingCalculateView,
     CoreRatingBatchView,
+    CoreSearchView,
     VehicleDataUploadView
 )
 
@@ -22,6 +23,7 @@ urlpatterns = [
     
     path('api/core-rating/calculate/', CoreRatingCalculateView.as_view(), name='core-rating-calculate'),
     path('api/core-rating/batch/', CoreRatingBatchView.as_view(), name='core-rating-batch'),
+    path('api/core-rating/search/', CoreSearchView.as_view(), name='core-rating-search'),
     
     path('api/vehicles/upload/', VehicleDataUploadView.as_view(), name='vehicle-upload'),
 ]

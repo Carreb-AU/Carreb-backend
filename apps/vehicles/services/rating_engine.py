@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional
 from decimal import Decimal
 import math
+import statistics
 from django.utils import timezone
 from apps.vehicles.models import Vehicle, PowertrainType
 from apps.vehicles.selectors import get_vehicles_by_fcai_category
@@ -107,7 +108,8 @@ def calculate_vehicle_cost_breakdown(
         "tyres_annual": tyres_annual,
         "finance_annual": finance_annual if core_mode in ['cool_choice', 'full_picture'] else 0,
         "resale_credit_annual": resale_annual if core_mode in ['true_value', 'full_picture'] else 0,
-        "total_annual": total
+        "total_annual": total,
+        "driveaway_price": driveaway
     }
 
 
@@ -137,6 +139,8 @@ def calculate_core_rating(
     priority_slider: int,
     core_mode: str,
     user_inputs: Dict[str, Any],
+    budget_min: Optional[int] = None,
+    budget_max: Optional[int] = None,
     current_vehicle_annual_cost: Optional[int] = None,
     category_metrics_cache: Optional[Dict[str, Dict[str, list]]] = None
 ) -> dict:
@@ -167,24 +171,28 @@ def calculate_core_rating(
         peer_costs = category_metrics_cache[fcai_category]["peer_costs"]
         peer_co2 = category_metrics_cache[fcai_category]["peer_co2"]
         peer_powertrains = category_metrics_cache[fcai_category]["peer_powertrains"]
+        peer_breakdowns = category_metrics_cache[fcai_category]["peer_breakdowns"]
     else:
         peers = get_vehicles_by_fcai_category(fcai_category)
         
         peer_costs = []
         peer_co2 = []
         peer_powertrains = []
+        peer_breakdowns = []
         
         for peer in peers:
             peer_br = calculate_vehicle_cost_breakdown(peer, state, core_mode, user_inputs)
             peer_costs.append(peer_br['total_annual'])
             peer_co2.append(peer.tailpipe_co2_g_per_km or 0)
             peer_powertrains.append(peer.powertrain_type)
+            peer_breakdowns.append(peer_br)
             
         if category_metrics_cache is not None:
             category_metrics_cache[fcai_category] = {
                 "peer_costs": peer_costs,
                 "peer_co2": peer_co2,
-                "peer_powertrains": peer_powertrains
+                "peer_powertrains": peer_powertrains,
+                "peer_breakdowns": peer_breakdowns
             }
         
     coo_score = get_percentile_score(total_cost, peer_costs)
@@ -221,17 +229,26 @@ def calculate_core_rating(
         avg_class_cost = sum(peer_costs) / len(peer_costs) if peer_costs else total_cost
         est_cost_difference = int(avg_class_cost - total_cost)
         
-    # Calculate peer distribution
-    peer_distribution = {
-        "net-zero-ninja": 0,
-        "smart-move": 0,
-        "steady-cruiser": 0,
-        "the-detour": 0,
-        "captain-carbon": 0
+    # Calculate peer distribution and medians
+    peer_band_stats = {
+        "net-zero-ninja": {"count": 0, "breakdowns": [], "co2": []},
+        "smart-move": {"count": 0, "breakdowns": [], "co2": []},
+        "steady-cruiser": {"count": 0, "breakdowns": [], "co2": []},
+        "the-detour": {"count": 0, "breakdowns": [], "co2": []},
+        "captain-carbon": {"count": 0, "breakdowns": [], "co2": []}
     }
     
-    for p_cost, p_co2, p_pt in zip(peer_costs, peer_co2, peer_powertrains):
+    annual_km = user_inputs.get('annual_km', vehicle.annual_km_default or 13300)
+    
+    for p_cost, p_co2, p_pt, p_br in zip(peer_costs, peer_co2, peer_powertrains, peer_breakdowns):
         if p_pt == PowertrainType.FCEV:
+            continue
+            
+        # Budget filtering check
+        driveaway = p_br.get('driveaway_price', 0)
+        if budget_min is not None and driveaway < budget_min:
+            continue
+        if budget_max is not None and driveaway > budget_max:
             continue
             
         p_coo_score = get_percentile_score(p_cost, peer_costs)
@@ -247,7 +264,49 @@ def calculate_core_rating(
                 p_blended = cap
                 
         p_blended = max(1.0, min(5.0, p_blended))
-        peer_distribution[get_band_slug(p_blended)] += 1
+        band_slug = get_band_slug(p_blended)
+        
+        peer_band_stats[band_slug]["count"] += 1
+        peer_band_stats[band_slug]["breakdowns"].append(p_br)
+        peer_band_stats[band_slug]["co2"].append(p_co2)
+        
+    # Calculate medians for the response
+    peer_distribution = {}
+    peer_band_medians = {}
+    
+    def get_median_or_zero(data: list) -> int:
+        if not data: return 0
+        return int(statistics.median(data))
+        
+    for slug, stats in peer_band_stats.items():
+        peer_distribution[slug] = stats["count"]
+        if stats["count"] > 0:
+            avg_class_cost = sum(peer_costs) / len(peer_costs) if peer_costs else total_cost
+            med_total = get_median_or_zero([b["total_annual"] for b in stats["breakdowns"]])
+            med_est_diff = int(avg_class_cost - med_total)
+            if current_vehicle_annual_cost is not None:
+                med_est_diff = current_vehicle_annual_cost - med_total
+                
+            med_tailpipe = get_median_or_zero(stats["co2"])
+            med_annual_co2_kg = int((med_tailpipe * annual_km) / 1000)
+            
+            peer_band_medians[slug] = {
+                "total_annual_cost": med_total,
+                "annual_co2_kg": med_annual_co2_kg,
+                "est_cost_difference": med_est_diff,
+                "annual_cost_breakdown": {
+                    "fuel_or_energy_annual": get_median_or_zero([b["fuel_or_energy_annual"] for b in stats["breakdowns"]]),
+                    "insurance_annual": get_median_or_zero([b["insurance_annual"] for b in stats["breakdowns"]]),
+                    "ctp_annual": get_median_or_zero([b["ctp_annual"] for b in stats["breakdowns"]]),
+                    "registration_annual": get_median_or_zero([b["registration_annual"] for b in stats["breakdowns"]]),
+                    "servicing_annual": get_median_or_zero([b["servicing_annual"] for b in stats["breakdowns"]]),
+                    "tyres_annual": get_median_or_zero([b["tyres_annual"] for b in stats["breakdowns"]]),
+                    "finance_annual": get_median_or_zero([b["finance_annual"] for b in stats["breakdowns"]]),
+                    "resale_credit_annual": get_median_or_zero([b["resale_credit_annual"] for b in stats["breakdowns"]]),
+                }
+            }
+        else:
+            peer_band_medians[slug] = None
         
     annual_km = user_inputs.get('annual_km', vehicle.annual_km_default or 13300)
     tailpipe_co2 = vehicle.tailpipe_co2_g_per_km or 0
@@ -265,5 +324,6 @@ def calculate_core_rating(
         "tailpipe_co2_g_per_km": float(tailpipe_co2),
         "annual_co2_kg": annual_co2_kg,
         "peer_band_distribution": peer_distribution,
+        "peer_band_medians": peer_band_medians,
         "is_estimate": True
     }

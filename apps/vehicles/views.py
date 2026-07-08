@@ -5,7 +5,8 @@ from django.utils import timezone
 from apps.vehicles.models import Vehicle
 from apps.vehicles.serializers import (
     VehicleListSerializer, VehicleDetailSerializer,
-    CoreRatingRequestSerializer, CoreRatingBatchRequestSerializer
+    CoreRatingRequestSerializer, CoreRatingBatchRequestSerializer,
+    CoreSearchRequestSerializer
 )
 from apps.vehicles.services.rating_engine import calculate_core_rating
 from apps.vehicles.tasks import emit_analytics_event, process_vehicle_excel_upload
@@ -119,6 +120,8 @@ class CoreRatingCalculateView(views.APIView):
         core_mode = data['core_mode']
         user_inputs = data.get('user_inputs', {})
         current_cost = data.get('current_vehicle_annual_cost')
+        budget_min = data.get('budget_min')
+        budget_max = data.get('budget_max')
         
         if not state:
             return Response({"detail": "state is required", "requires_state": True}, status=status.HTTP_400_BAD_REQUEST)
@@ -134,7 +137,11 @@ class CoreRatingCalculateView(views.APIView):
             if not request.user.is_authenticated or request.user.subscription_tier == SubscriptionTier.FREE:
                 return Response({"locked": True, "detail": "Premium subscription required for this mode"}, status=status.HTTP_403_FORBIDDEN)
         
-        result = calculate_core_rating(vehicle, state, priority_slider, core_mode, user_inputs, current_cost)
+        result = calculate_core_rating(
+            vehicle, state, priority_slider, core_mode, user_inputs,
+            budget_min=budget_min, budget_max=budget_max,
+            current_vehicle_annual_cost=current_cost
+        )
         
         if request.user.is_authenticated and getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_match_result_viewed', {'vehicle_id': str(vehicle.id), 'core_mode': core_mode})
@@ -162,6 +169,8 @@ class CoreRatingBatchView(views.APIView):
         core_mode = data['core_mode']
         user_inputs = data.get('user_inputs', {})
         current_cost = data.get('current_vehicle_annual_cost')
+        budget_min = data.get('budget_min')
+        budget_max = data.get('budget_max')
         
         if not state:
             return Response({"detail": "state is required", "requires_state": True}, status=status.HTTP_400_BAD_REQUEST)
@@ -181,7 +190,10 @@ class CoreRatingBatchView(views.APIView):
             if not vehicle:
                 continue
             res = calculate_core_rating(
-                vehicle, state, priority_slider, core_mode, user_inputs, current_cost, category_metrics_cache=category_metrics_cache
+                vehicle, state, priority_slider, core_mode, user_inputs,
+                budget_min=budget_min, budget_max=budget_max,
+                current_vehicle_annual_cost=current_cost,
+                category_metrics_cache=category_metrics_cache
             )
             res['vehicle_id'] = str(vid)
             results.append(res)
@@ -213,3 +225,83 @@ class VehicleDataUploadView(views.APIView):
         return Response({
             "message": "File accepted for processing in the background."
         }, status=status.HTTP_202_ACCEPTED)
+
+class CoreSearchView(views.APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        serializer = CoreSearchRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        
+        target_band_slug = data['target_band_slug']
+        fcai_category = data.get('fcai_category')
+        state = data.get('state')
+        priority_slider = data['priority_slider']
+        core_mode = data['core_mode']
+        user_inputs = data.get('user_inputs', {})
+        current_cost = data.get('current_vehicle_annual_cost')
+        budget_min = data.get('budget_min')
+        budget_max = data.get('budget_max')
+        
+        if not state:
+            return Response({"detail": "state is required", "requires_state": True}, status=status.HTTP_400_BAD_REQUEST)
+            
+        is_premium_mode = core_mode in ['cool_choice', 'true_value', 'full_picture']
+        if is_premium_mode:
+            if not request.user.is_authenticated or request.user.subscription_tier == SubscriptionTier.FREE:
+                return Response({"locked": True, "detail": "Premium subscription required for this mode"}, status=status.HTTP_403_FORBIDDEN)
+                
+        # Filter initial vehicles
+        queryset = Vehicle.objects.all()
+        if fcai_category:
+            queryset = queryset.filter(fcai_category__iexact=fcai_category)
+            
+        vehicles = list(queryset)
+        
+        results = []
+        category_metrics_cache = {}
+        for vehicle in vehicles:
+            res = calculate_core_rating(
+                vehicle, state, priority_slider, core_mode, user_inputs,
+                budget_min=budget_min, budget_max=budget_max,
+                current_vehicle_annual_cost=current_cost,
+                category_metrics_cache=category_metrics_cache
+            )
+            
+            # Filter by band
+            if res.get('band_slug') != target_band_slug:
+                continue
+                
+            # Filter by budget directly on the vehicle's driveaway price
+            br = res.get('annual_cost_breakdown', {})
+            driveaway = br.get('driveaway_price', 0)
+            if budget_min is not None and driveaway < budget_min:
+                continue
+            if budget_max is not None and driveaway > budget_max:
+                continue
+                
+            # Embed basic vehicle data
+            res['vehicle_id'] = str(vehicle.id)
+            res['brand'] = vehicle.brand
+            res['model'] = vehicle.model
+            res['year'] = vehicle.year
+            res['variant'] = vehicle.variant
+            
+            results.append(res)
+            
+        # Sort by core rating (highest first)
+        results.sort(key=lambda x: x.get('core_rating') or 0.0, reverse=True)
+        
+        # Take top 10
+        top_10 = results[:10]
+        
+        return Response({
+            "meta": {
+                "calculated_at": timezone.now().isoformat(),
+                "total_matches": len(results),
+                "is_estimate": True,
+                "disclaimer": "All figures are estimates only. Actual costs will vary based on individual driving habits, insurer quotes, dealer pricing, and personal circumstances."
+            },
+            "data": top_10
+        })
