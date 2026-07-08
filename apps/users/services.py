@@ -225,23 +225,13 @@ def delete_account(user: User, password: str, reason: str):
     if not user.check_password(password):
         raise ValidationError({"password": "Invalid password."})
         
-    now = timezone.now()
-    scheduled_deletion_at = now + timedelta(days=30)
+    email = user.email
     
-    AccountDeletionRequest.objects.create(
-        user=user,
-        reason=reason,
-        password_confirmed=True,
-        scheduled_deletion_at=scheduled_deletion_at
-    )
+    # Send email first before the user is removed from database
+    send_deletion_confirmation_email_task.delay(email)
     
-    user.is_deleted = True
-    user.deleted_at = now
-    user.save(update_fields=['is_deleted', 'deleted_at'])
-    
-    AuthSession.objects.filter(user=user, revoked_at__isnull=True).update(revoked_at=now)
-    
-    send_deletion_confirmation_email_task.delay(user.email)
+    # Hard delete of the entire user data. Django cascading will delete everything.
+    user.delete()
 
 @transaction.atomic
 def password_reset_request(email: str, environment: str = 'dev'):
