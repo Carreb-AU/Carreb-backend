@@ -102,4 +102,3 @@ openpyxl
 openai==1.55.0
 httpx==0.27.2
 stripe
-Pillow==11.1.0
