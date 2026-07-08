@@ -58,8 +58,9 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None):
     if garage_vehicle.status != GarageVehicleStatus.ACTIVE:
         return {"status_code": 422, "error": "invalid_status", "message": "Vehicle is not active."}
     
+    from apps.vehicles.models import PowertrainType
     vehicle_cat = garage_vehicle.vehicle_catalogue
-    if vehicle_cat.core_rating is None:
+    if vehicle_cat.powertrain_type == PowertrainType.FCEV:
         return {
             "status_code": 422, 
             "error": "ridereveal_unavailable", 

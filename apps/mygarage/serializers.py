@@ -85,14 +85,30 @@ class RideRevealResultSerializer(serializers.ModelSerializer):
         ]
 
     def get_vehicle(self, obj):
+        from apps.vehicles.services.rating_engine import calculate_core_rating
+        from apps.mygarage.models import VehicleOverride
         vehicle = obj.vehicle_catalogue
+        user = obj.user
+        
+        cv = getattr(user, 'current_vehicle', None)
+        state = cv.state if cv and cv.state else 'NSW'
+        
+        priority_state = getattr(user, 'priority_state', None)
+        priority = priority_state.priority_slider_position if priority_state else 3
+        mode = priority_state.active_core_mode if priority_state else 'pure_cost'
+        
+        overrides_qs = VehicleOverride.objects.filter(user=user, garage_vehicle=obj.garage_vehicle)
+        user_inputs = {o.field_name: o.override_value for o in overrides_qs}
+        
+        engine_data = calculate_core_rating(vehicle, state, priority, mode, user_inputs)
+        
         return {
-            'make': vehicle.make,
+            'make': vehicle.brand,
             'model': vehicle.model,
             'year': vehicle.year,
             'variant': vehicle.variant,
             'powertrain_type': vehicle.powertrain_type,
-            'core_rating': vehicle.core_rating,
-            'band_name': getattr(vehicle, 'band_name', None)
+            'core_rating': engine_data.get('core_rating'),
+            'band_name': engine_data.get('band_name')
         }
 

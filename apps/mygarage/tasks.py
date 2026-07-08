@@ -45,6 +45,21 @@ def generate_ridereveal_content(job_id, credit_type):
         user = job.user
         priority_state = getattr(user, 'priority_state', None)
         
+        from apps.vehicles.services.rating_engine import calculate_core_rating
+        from apps.mygarage.models import VehicleOverride
+        
+        cv = getattr(user, 'current_vehicle', None)
+        state = cv.state if cv and cv.state else 'NSW'
+        priority = priority_state.priority_slider_position if priority_state else 3
+        mode = priority_state.active_core_mode if priority_state else 'pure_cost'
+        
+        overrides_qs = VehicleOverride.objects.filter(user=user, garage_vehicle=job.garage_vehicle)
+        user_inputs = {o.field_name: o.override_value for o in overrides_qs}
+        
+        engine_data = calculate_core_rating(vehicle, state, priority, mode, user_inputs)
+        core_rating = engine_data.get('core_rating')
+        band_name = engine_data.get('band_name', 'Unknown')
+        
         priority_label = "balanced"
         if priority_state:
             val = priority_state.priority_slider_position
@@ -56,10 +71,10 @@ def generate_ridereveal_content(job_id, credit_type):
         custom_plate_info = f"Custom Plate: {job.custom_plate}" if job.custom_plate else ""
         
         user_prompt = f"""
-Vehicle: {vehicle.make} {vehicle.model} {vehicle.year} {vehicle.variant}
+Vehicle: {vehicle.brand} {vehicle.model} {vehicle.year} {vehicle.variant}
 Powertrain: {vehicle.powertrain_type}
-CORE Rating: {vehicle.core_rating}
-Band Name: {getattr(vehicle, 'band_name', 'Unknown')}
+CORE Rating: {core_rating}
+Band Name: {band_name}
 User Priority: {priority_label}
 {custom_plate_info}
 """
