@@ -19,7 +19,23 @@ def process_vehicle_excel_upload(file_path):
     from .models import Vehicle
 
     try:
-        df = pd.read_excel(file_path)
+        xls = pd.ExcelFile(file_path)
+        sheet_names = xls.sheet_names
+        
+        dfs_to_process = []
+        if 'v6.3.4 Data' in sheet_names or 'New Vehicles FY26' in sheet_names:
+            if 'v6.3.4 Data' in sheet_names:
+                dfs_to_process.append(pd.read_excel(xls, sheet_name='v6.3.4 Data'))
+            if 'New Vehicles FY26' in sheet_names:
+                dfs_to_process.append(pd.read_excel(xls, sheet_name='New Vehicles FY26'))
+        else:
+            # Fallback to the first sheet for old files
+            dfs_to_process.append(pd.read_excel(xls, sheet_name=0))
+            
+        if not dfs_to_process:
+            raise ValueError("No valid data sheets found.")
+            
+        df = pd.concat(dfs_to_process, ignore_index=True)
         
         vehicles_data = {}
         
@@ -38,7 +54,11 @@ def process_vehicle_excel_upload(file_path):
             
             state = str(row.get('State', '')).strip()
             driveaway = row.get('Driveaway Price ($)')
-            cost_5yr = row.get('5yr Cost of Ownership ($)')
+            
+            # Handle old and new column names
+            cost_5yr = row.get('Mode 5yr COO ($)')
+            if pd.isna(cost_5yr) and '5yr Cost of Ownership ($)' in df.columns:
+                cost_5yr = row.get('5yr Cost of Ownership ($)')
             
             if pd.isna(driveaway):
                 driveaway = 0
@@ -50,6 +70,14 @@ def process_vehicle_excel_upload(file_path):
                 if powertrain not in ['petrol', 'diesel', 'mild_hybrid', 'hybrid', 'phev', 'bev', 'fcev']:
                     powertrain = 'petrol'
                     
+                fcai_category = str(row.get('fcai_category', row.get('Category', ''))).strip()
+                if fcai_category == 'nan':
+                    fcai_category = ''
+                    
+                fuel_eff = row.get('Fuel Eff (L/100km)')
+                co2 = row.get('CO2 Tailpipe (g/km)')
+                range_km = row.get('Range (km)')
+                
                 vehicles_data[key] = {
                     'brand': make,
                     'model': model,
@@ -57,16 +85,15 @@ def process_vehicle_excel_upload(file_path):
                     'year': year,
                     'powertrain_type': powertrain,
                     'body_style': str(row.get('Body Type', '')).strip(),
-                    'fcai_category': str(row.get('Category', '')).strip(),
-                    'fuel_consumption_per_100km': float(row.get('Fuel Eff (L/100km)')) if not pd.isna(row.get('Fuel Eff (L/100km)')) else None,
-                    'tailpipe_co2_g_per_km': float(row.get('CO2 Tailpipe (g/km)')) if not pd.isna(row.get('CO2 Tailpipe (g/km)')) else None,
-                    'wltp_range_km': float(row.get('Range (km)')) if not pd.isna(row.get('Range (km)')) else None,
+                    'fcai_category': fcai_category,
+                    'fuel_consumption_per_100km': float(fuel_eff) if not pd.isna(fuel_eff) else None,
+                    'tailpipe_co2_g_per_km': float(co2) if not pd.isna(co2) else None,
+                    'wltp_range_km': float(range_km) if not pd.isna(range_km) else None,
                     'driveaway_price_by_state': {},
                     'total_5yr_cost_of_ownership_by_state': {}
                 }
                 
-            # Add state pricing
-            if state:
+            if state and str(state) != 'nan':
                 vehicles_data[key]['driveaway_price_by_state'][state] = int(driveaway * 100) # cents
                 vehicles_data[key]['total_5yr_cost_of_ownership_by_state'][state] = int(cost_5yr * 100) # cents
 
@@ -74,7 +101,6 @@ def process_vehicle_excel_upload(file_path):
         now_iso = timezone.now().isoformat()
         
         for (make, model, variant, year), data in vehicles_data.items():
-            # Set provenance for the new data
             provenance = {
                 "source_category": "carreb-core-dump",
                 "retrieved_at": now_iso
@@ -88,7 +114,7 @@ def process_vehicle_excel_upload(file_path):
                 defaults={
                     'powertrain_type': data['powertrain_type'],
                     'body_style': data['body_style'],
-                    'fcai_category': data['fcai_category'] if data['fcai_category'] != 'nan' else '',
+                    'fcai_category': data['fcai_category'],
                     'fuel_consumption_per_100km': data['fuel_consumption_per_100km'],
                     'tailpipe_co2_g_per_km': data['tailpipe_co2_g_per_km'],
                     'wltp_range_km': data['wltp_range_km'],
