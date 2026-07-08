@@ -29,6 +29,7 @@ class GarageVehicleSource(models.TextChoices):
     AI_SMART_MATCH = 'ai_smart_match', 'AI Smart Match'
     VEHICLE_LOOKUP = 'vehicle_lookup', 'Vehicle Lookup'
     FREE_MATCH_WIZARD = 'free_match_wizard', 'Free Match Wizard'
+    CORE_DIAL = 'core_dial', 'CORE Dial'
 
 class GarageVehicle(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
