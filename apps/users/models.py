@@ -55,6 +55,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(_('email address'), unique=True)
     mobile_number = models.CharField(max_length=20, blank=True, null=True)
     profile_photo_url = models.URLField(max_length=500, blank=True, null=True)
+    profile_picture = models.ImageField(upload_to='profile_pics/', blank=True, null=True)
     
     email_verified = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
@@ -95,6 +96,7 @@ class EmailVerificationToken(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='email_verification_tokens')
     token = models.UUIDField(default=uuid.uuid4, unique=True)
+    new_email = models.EmailField(null=True, blank=True)
     expires_at = models.DateTimeField()
     used_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

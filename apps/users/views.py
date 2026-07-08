@@ -9,7 +9,9 @@ from .serializers import (
     LoginSerializer,
     Verify2FASerializer,
     SocialLoginSerializer,
-    AccountDeletionRequestSerializer
+    AccountDeletionRequestSerializer,
+    UserProfileSerializer,
+    UserProfileUpdateSerializer
 )
 from .services import (
     signup_step_1,
@@ -130,3 +132,24 @@ class Confirm2FAView(APIView):
         serializer.is_valid(raise_exception=True)
         result = confirm_2fa(request.user, serializer.validated_data['totp_code'])
         return Response(result, status=status.HTTP_200_OK)
+
+class UserProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+        
+    def patch(self, request):
+        from .services import update_user_profile
+        serializer = UserProfileUpdateSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        
+        environment = request.data.get('environment', 'dev')
+        user, email_changed = update_user_profile(request.user, serializer.validated_data, environment)
+        
+        response_data = UserProfileSerializer(user).data
+        if email_changed:
+            response_data['email_change_status'] = "Verification email sent to new address. Email will update once verified."
+            
+        return Response(response_data, status=status.HTTP_200_OK)

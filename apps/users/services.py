@@ -87,8 +87,12 @@ def verify_email(token: str) -> AuthSession:
     token_obj.save(update_fields=['used_at'])
     
     user = token_obj.user
+    
+    if token_obj.new_email:
+        user.email = token_obj.new_email
+        
     user.email_verified = True
-    user.save(update_fields=['email_verified'])
+    user.save(update_fields=['email', 'email_verified'])
     
     session = _create_auth_session(user, None, None)
     tokens = _get_tokens_for_user(user)
@@ -266,3 +270,36 @@ def password_reset_verify(token: str, new_password: str):
     
     AuthSession.objects.filter(user=user, revoked_at__isnull=True).update(revoked_at=timezone.now())
     logger.info(f"Password reset successfully for {user.email}")
+
+@transaction.atomic
+def update_user_profile(user, validated_data, environment='dev'):
+    new_email = validated_data.get('email')
+    
+    # Update fields except email
+    if 'first_name' in validated_data:
+        user.first_name = validated_data['first_name']
+    if 'last_name' in validated_data:
+        user.last_name = validated_data['last_name']
+    if 'mobile_number' in validated_data:
+        user.mobile_number = validated_data['mobile_number']
+    if 'profile_picture' in validated_data:
+        user.profile_picture = validated_data['profile_picture']
+        
+    user.save()
+    
+    email_changed = False
+    if new_email and new_email != user.email:
+        # Check if new email is already taken
+        if User.objects.filter(email=new_email).exclude(id=user.id).exists():
+            raise ValidationError({"email": "This email is already in use by another account."})
+            
+        email_changed = True
+        expires_at = timezone.now() + timedelta(hours=VERIFICATION_EXPIRY_HOURS)
+        token_obj = EmailVerificationToken.objects.create(
+            user=user, 
+            new_email=new_email, 
+            expires_at=expires_at
+        )
+        send_verification_email_task.delay(new_email, str(token_obj.token), environment)
+        
+    return user, email_changed

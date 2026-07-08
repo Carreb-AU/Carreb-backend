@@ -11,7 +11,8 @@ from .views import (
     PasswordResetRequestView,
     PasswordResetVerifyView,
     Setup2FAView,
-    Confirm2FAView
+    Confirm2FAView,
+    UserProfileView
 )
 
 urlpatterns = [
@@ -22,6 +23,7 @@ urlpatterns = [
     path('login/2fa/', VerifyLogin2FAView.as_view(), name='login-2fa'),
     path('login/social/', SocialLoginView.as_view(), name='login-social'),
     path('account/delete/', AccountDeletionView.as_view(), name='account-delete'),
+    path('profile/', UserProfileView.as_view(), name='user-profile'),
     path('password-reset/', PasswordResetRequestView.as_view(), name='password-reset'),
     path('password-reset/verify/', PasswordResetVerifyView.as_view(), name='password-reset-verify'),
     

@@ -1,6 +1,6 @@
 import re
 from rest_framework import serializers
-from .models import DeletionReason, TwoFactorMethod
+from .models import DeletionReason, TwoFactorMethod, User
 
 def validate_password_complexity(value):
     if len(value) < 8:
@@ -54,3 +54,14 @@ class PasswordResetVerifySerializer(serializers.Serializer):
 class AccountDeletionRequestSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
     reason = serializers.ChoiceField(choices=DeletionReason.choices)
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'email', 'mobile_number', 'profile_picture', 'profile_photo_url', 'subscription_tier', 'email_verified']
+        read_only_fields = ['id', 'subscription_tier', 'email_verified']
+
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['first_name', 'last_name', 'email', 'mobile_number', 'profile_picture']
