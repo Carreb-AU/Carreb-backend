@@ -290,6 +290,6 @@ def update_user_profile(user, validated_data, environment='dev'):
             new_email=new_email, 
             expires_at=expires_at
         )
-        send_verification_email_task.delay(new_email, str(token_obj.token), environment)
+        send_verification_email_task.delay(new_email, str(token_obj.token), environment, is_email_change=True)
         
     return user, email_changed

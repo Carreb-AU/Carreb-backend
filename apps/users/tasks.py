@@ -14,11 +14,15 @@ def get_base_frontend_url(environment: str) -> str:
     return getattr(settings, 'FRONTEND_DEV_URL', 'http://localhost:3000')
 
 @shared_task
-def send_verification_email_task(email: str, token_str: str, environment: str = 'dev'):
+def send_verification_email_task(email: str, token_str: str, environment: str = 'dev', is_email_change: bool = False):
     try:
-        subject = 'Verify Your Email for Carreb'
+        subject = 'Verify Your Email Change for Carreb' if is_email_change else 'Verify Your Email for Carreb'
         base_url = get_base_frontend_url(environment)
-        verification_link = f'{base_url}/signup/details?token={token_str}'
+        if is_email_change:
+            verification_link = f'{base_url}/settings?token={token_str}'
+        else:
+            verification_link = f'{base_url}/signup/details?token={token_str}'
+            
         context = {'verification_link': verification_link}
         html_message = render_to_string('emails/verification.html', context)
         plain_message = f'Please verify your email by clicking the following link: {verification_link}'
@@ -43,11 +47,8 @@ def send_deletion_confirmation_email_task(email: str):
 def send_password_reset_email_task(email: str, token_str: str, environment: str = 'dev'):
     try:
         subject = 'Reset Your Password for Carreb'
-        if environment == 'production':
-            base_url = 'https://carreb-developement.vercel.app/login/reset/new'
-        else:
-            base_url = 'http://localhost:3000/login/reset/new'
-        reset_link = f'{base_url}?token={token_str}'
+        base_url = get_base_frontend_url(environment)
+        reset_link = f'{base_url}/settings?token={token_str}'
         context = {'reset_link': reset_link}
         html_message = render_to_string('emails/password_reset_link.html', context)
         plain_message = f'Please reset your password by clicking the following link: {reset_link}'

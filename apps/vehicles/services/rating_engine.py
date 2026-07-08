@@ -166,21 +166,25 @@ def calculate_core_rating(
     if category_metrics_cache is not None and fcai_category in category_metrics_cache:
         peer_costs = category_metrics_cache[fcai_category]["peer_costs"]
         peer_co2 = category_metrics_cache[fcai_category]["peer_co2"]
+        peer_powertrains = category_metrics_cache[fcai_category]["peer_powertrains"]
     else:
         peers = get_vehicles_by_fcai_category(fcai_category)
         
         peer_costs = []
         peer_co2 = []
+        peer_powertrains = []
         
         for peer in peers:
             peer_br = calculate_vehicle_cost_breakdown(peer, state, core_mode, user_inputs)
             peer_costs.append(peer_br['total_annual'])
             peer_co2.append(peer.tailpipe_co2_g_per_km or 0)
+            peer_powertrains.append(peer.powertrain_type)
             
         if category_metrics_cache is not None:
             category_metrics_cache[fcai_category] = {
                 "peer_costs": peer_costs,
-                "peer_co2": peer_co2
+                "peer_co2": peer_co2,
+                "peer_powertrains": peer_powertrains
             }
         
     coo_score = get_percentile_score(total_cost, peer_costs)
@@ -217,6 +221,34 @@ def calculate_core_rating(
         avg_class_cost = sum(peer_costs) / len(peer_costs) if peer_costs else total_cost
         est_cost_difference = int(avg_class_cost - total_cost)
         
+    # Calculate peer distribution
+    peer_distribution = {
+        "net-zero-ninja": 0,
+        "smart-move": 0,
+        "steady-cruiser": 0,
+        "the-detour": 0,
+        "captain-carbon": 0
+    }
+    
+    for p_cost, p_co2, p_pt in zip(peer_costs, peer_co2, peer_powertrains):
+        if p_pt == PowertrainType.FCEV:
+            continue
+            
+        p_coo_score = get_percentile_score(p_cost, peer_costs)
+        p_co2_score = get_percentile_score(p_co2, peer_co2)
+        p_blended = round(p_coo_score * coo_weight + p_co2_score * co2_weight, 1)
+        
+        if p_pt not in [PowertrainType.BEV, PowertrainType.FCEV]:
+            cap = None
+            if p_co2 >= 250: cap = 2.4
+            elif p_co2 >= 200: cap = 3.4
+            elif p_co2 >= 150: cap = 4.4
+            if cap is not None and p_blended > cap:
+                p_blended = cap
+                
+        p_blended = max(1.0, min(5.0, p_blended))
+        peer_distribution[get_band_slug(p_blended)] += 1
+        
     return {
         "core_rating": float(blended_score),
         "band_name": get_band_name(blended_score),
@@ -226,5 +258,6 @@ def calculate_core_rating(
         "annual_cost_breakdown": breakdown,
         "total_annual_cost": total_cost,
         "est_cost_difference": est_cost_difference,
+        "peer_band_distribution": peer_distribution,
         "is_estimate": True
     }
