@@ -249,6 +249,10 @@ def calculate_core_rating(
         p_blended = max(1.0, min(5.0, p_blended))
         peer_distribution[get_band_slug(p_blended)] += 1
         
+    annual_km = user_inputs.get('annual_km', vehicle.annual_km_default or 13300)
+    tailpipe_co2 = vehicle.tailpipe_co2_g_per_km or 0
+    annual_co2_kg = int((tailpipe_co2 * annual_km) / 1000)
+
     return {
         "core_rating": float(blended_score),
         "band_name": get_band_name(blended_score),
@@ -258,6 +262,8 @@ def calculate_core_rating(
         "annual_cost_breakdown": breakdown,
         "total_annual_cost": total_cost,
         "est_cost_difference": est_cost_difference,
+        "tailpipe_co2_g_per_km": float(tailpipe_co2),
+        "annual_co2_kg": annual_co2_kg,
         "peer_band_distribution": peer_distribution,
         "is_estimate": True
     }
