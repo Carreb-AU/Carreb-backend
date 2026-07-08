@@ -52,7 +52,10 @@ def process_vehicle_excel_upload(file_path):
             if pd.isna(year):
                 continue
                 
-            year = int(year)
+            try:
+                year = int(year)
+            except (ValueError, TypeError):
+                continue
             
             key = (make, model, variant, year)
             
@@ -101,8 +104,14 @@ def process_vehicle_excel_upload(file_path):
                 }
                 
             if state and str(state) != 'nan':
-                vehicles_data[key]['driveaway_price_by_state'][state] = int(driveaway * 100) # cents
-                vehicles_data[key]['total_5yr_cost_of_ownership_by_state'][state] = int(cost_5yr * 100) # cents
+                try:
+                    vehicles_data[key]['driveaway_price_by_state'][state] = int(float(driveaway) * 100) # cents
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    vehicles_data[key]['total_5yr_cost_of_ownership_by_state'][state] = int(float(cost_5yr) * 100) # cents
+                except (ValueError, TypeError):
+                    pass
 
         if coo_df is not None:
             for _, row in coo_df.iterrows():
@@ -113,7 +122,10 @@ def process_vehicle_excel_upload(file_path):
                 
                 if pd.isna(year):
                     continue
-                year = int(year)
+                try:
+                    year = int(year)
+                except (ValueError, TypeError):
+                    continue
                 key = (make, model, variant, year)
                 state = str(row.get('State', '')).strip()
                 
@@ -123,11 +135,20 @@ def process_vehicle_excel_upload(file_path):
                     rego = row.get('registration_pa')
                     
                     if not pd.isna(ctp):
-                        vehicles_data[key]['ctp_by_state'][state] = int(ctp * 100)
+                        try:
+                            vehicles_data[key]['ctp_by_state'][state] = int(float(ctp) * 100)
+                        except (ValueError, TypeError):
+                            pass
                     if not pd.isna(insurance):
-                        vehicles_data[key]['insurance_estimate_by_state'][state] = int(insurance * 100)
+                        try:
+                            vehicles_data[key]['insurance_estimate_by_state'][state] = int(float(insurance) * 100)
+                        except (ValueError, TypeError):
+                            pass
                     if not pd.isna(rego):
-                        vehicles_data[key]['registration_by_state'][state] = int(rego * 100)
+                        try:
+                            vehicles_data[key]['registration_by_state'][state] = int(float(rego) * 100)
+                        except (ValueError, TypeError):
+                            pass
 
         # Now create or update the DB
         now_iso = timezone.now().isoformat()
