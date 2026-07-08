@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import openai
 from django.conf import settings
 from django.utils import timezone
@@ -10,7 +11,7 @@ from apps.vehicles.tasks import emit_analytics_event
 
 logger = logging.getLogger(__name__)
 
-OPENAI_API_KEY = getattr(settings, 'OPENAI_API_KEY', None)
+OPENAI_API_KEY = getattr(settings, 'OPENAI_API_KEY', os.environ.get('OPENAI_API_KEY'))
 
 SYSTEM_PROMPT = """Generate a RideReveal personality profile with these exact fields:
 archetype_name: a 2-3 word personality archetype (e.g. Steady Optimist, Bold Pioneer)
@@ -138,8 +139,9 @@ User Priority: {priority_label}
     except SoftTimeLimitExceeded:
         error_msg = "Task timeout"
     except Exception as e:
-        logger.error(f"RideReveal generation failed: {e}")
-        error_msg = "AI generation failed"
+        import traceback
+        logger.error(f"RideReveal generation failed: {traceback.format_exc()}")
+        error_msg = f"AI generation failed: {type(e).__name__} - {str(e)}"
 
     # Handle failure
     job.status = RideRevealJobStatus.FAILED
