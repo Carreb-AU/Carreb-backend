@@ -37,6 +37,10 @@ def process_vehicle_excel_upload(file_path):
             
         df = pd.concat(dfs_to_process, ignore_index=True)
         
+        coo_df = None
+        if 'COO_Component_Breakdown' in sheet_names:
+            coo_df = pd.read_excel(xls, sheet_name='COO_Component_Breakdown')
+            
         vehicles_data = {}
         
         for _, row in df.iterrows():
@@ -90,12 +94,40 @@ def process_vehicle_excel_upload(file_path):
                     'tailpipe_co2_g_per_km': float(co2) if not pd.isna(co2) else None,
                     'wltp_range_km': float(range_km) if not pd.isna(range_km) else None,
                     'driveaway_price_by_state': {},
-                    'total_5yr_cost_of_ownership_by_state': {}
+                    'total_5yr_cost_of_ownership_by_state': {},
+                    'ctp_by_state': {},
+                    'insurance_estimate_by_state': {},
+                    'registration_by_state': {}
                 }
                 
             if state and str(state) != 'nan':
                 vehicles_data[key]['driveaway_price_by_state'][state] = int(driveaway * 100) # cents
                 vehicles_data[key]['total_5yr_cost_of_ownership_by_state'][state] = int(cost_5yr * 100) # cents
+
+        if coo_df is not None:
+            for _, row in coo_df.iterrows():
+                make = str(row.get('Make', '')).strip()
+                model = str(row.get('Model', '')).strip()
+                variant = str(row.get('Variant', '')).strip()
+                year = row.get('Year')
+                
+                if pd.isna(year):
+                    continue
+                year = int(year)
+                key = (make, model, variant, year)
+                state = str(row.get('State', '')).strip()
+                
+                if key in vehicles_data and state and str(state) != 'nan':
+                    ctp = row.get('ctp_pa')
+                    insurance = row.get('comprehensive_pa')
+                    rego = row.get('registration_pa')
+                    
+                    if not pd.isna(ctp):
+                        vehicles_data[key]['ctp_by_state'][state] = int(ctp * 100)
+                    if not pd.isna(insurance):
+                        vehicles_data[key]['insurance_estimate_by_state'][state] = int(insurance * 100)
+                    if not pd.isna(rego):
+                        vehicles_data[key]['registration_by_state'][state] = int(rego * 100)
 
         # Now create or update the DB
         now_iso = timezone.now().isoformat()
@@ -120,6 +152,9 @@ def process_vehicle_excel_upload(file_path):
                     'wltp_range_km': data['wltp_range_km'],
                     'driveaway_price_by_state': data['driveaway_price_by_state'],
                     'total_5yr_cost_of_ownership_by_state': data['total_5yr_cost_of_ownership_by_state'],
+                    'ctp_by_state': data['ctp_by_state'],
+                    'insurance_estimate_by_state': data['insurance_estimate_by_state'],
+                    'registration_by_state': data['registration_by_state'],
                     'provenance': provenance,
                     'num_seats': 5, # default
                     'annual_km_default': 13300 # default
