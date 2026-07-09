@@ -153,9 +153,9 @@ def process_stripe_webhook(payload, sig_header):
         logger.error(f"Stripe webhook error: {e}")
         return False
 
-    if event['type'] == 'payment_intent.succeeded':
-        intent = event['data']['object']
-        metadata = intent.get('metadata', {})
+    if event['type'] in ['payment_intent.succeeded', 'checkout.session.completed']:
+        intent_or_session = event['data']['object']
+        metadata = intent_or_session.get('metadata', {})
         user_id = metadata.get('user_id')
         purchase_type = metadata.get('purchase_type')
         

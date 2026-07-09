@@ -85,9 +85,15 @@ class StripeCustomerPortalView(views.APIView):
     
     def post(self, request):
         try:
-            plan = request.user.subscription_plan
+            plan, _ = SubscriptionPlan.objects.get_or_create(user=request.user)
             if not plan.stripe_customer_id:
-                return Response({"error": "No Stripe customer linked to this account."}, status=status.HTTP_400_BAD_REQUEST)
+                customer = stripe.Customer.create(
+                    email=request.user.email,
+                    name=f"{request.user.first_name} {request.user.last_name}".strip(),
+                    metadata={"user_id": request.user.id}
+                )
+                plan.stripe_customer_id = customer.id
+                plan.save()
                 
             return_url = request.data.get('return_url', getattr(settings, 'FRONTEND_URL', 'https://carreb.com.au') + '/billing')
             
@@ -97,8 +103,67 @@ class StripeCustomerPortalView(views.APIView):
             )
             return Response({"portal_url": session.url})
             
-        except SubscriptionPlan.DoesNotExist:
-            return Response({"error": "No subscription plan found."}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(f"Error creating customer portal session: {e}")
             return Response({"error": "Failed to create portal session"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class CreateCheckoutSessionView(views.APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        plan_type = request.data.get('plan_type')
+        if not plan_type:
+            return Response({"error": "plan_type is required"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Map plan_type to Stripe Price ID from settings
+        price_id = None
+        if plan_type == 'car_buying_sprint':
+            price_id = getattr(settings, 'STRIPE_PRICE_ID_CAR_BUYING_SPRINT', None)
+        elif plan_type == 'core_advantage':
+            price_id = getattr(settings, 'STRIPE_PRICE_ID_CORE_ADVANTAGE', None)
+        elif plan_type == 'full_insight_pro':
+            price_id = getattr(settings, 'STRIPE_PRICE_ID_FULL_INSIGHT_PRO', None)
+            
+        if not price_id:
+            return Response({"error": f"Invalid plan_type or price not configured for {plan_type}"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            plan, _ = SubscriptionPlan.objects.get_or_create(user=request.user)
+            if not plan.stripe_customer_id:
+                customer = stripe.Customer.create(
+                    email=request.user.email,
+                    name=f"{request.user.first_name} {request.user.last_name}".strip(),
+                    metadata={"user_id": request.user.id}
+                )
+                plan.stripe_customer_id = customer.id
+                plan.save()
+                
+            return_url = request.data.get('return_url', getattr(settings, 'FRONTEND_URL', 'https://carreb.com.au') + '/billing')
+            
+            session = stripe.checkout.Session.create(
+                customer=plan.stripe_customer_id,
+                mode="subscription",
+                payment_method_types=["card"],
+                line_items=[{
+                    "price": price_id,
+                    "quantity": 1
+                }],
+                success_url=return_url + "?success=true&session_id={CHECKOUT_SESSION_ID}",
+                cancel_url=return_url + "?canceled=true",
+                subscription_data={
+                    "metadata": {
+                        "user_id": request.user.id,
+                        "plan_type": plan_type
+                    }
+                },
+                metadata={
+                    "user_id": request.user.id,
+                    "plan_type": plan_type
+                }
+            )
+            
+            return Response({"checkout_url": session.url})
+            
+        except Exception as e:
+            logger.error(f"Error creating checkout session: {e}")
+            return Response({"error": "Failed to create checkout session"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

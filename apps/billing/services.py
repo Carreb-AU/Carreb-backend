@@ -130,6 +130,8 @@ def process_stripe_webhook_event(payload, sig_header):
         with transaction.atomic():
             if event_type == 'payment_intent.succeeded':
                 _handle_payment_intent_succeeded(event.get('data', {}).get('object', {}))
+            elif event_type == 'checkout.session.completed':
+                _handle_checkout_session_completed(event.get('data', {}).get('object', {}))
             elif event_type == 'invoice.payment_succeeded':
                 _handle_invoice_payment_succeeded(event.get('data', {}).get('object', {}))
             elif event_type == 'invoice.payment_failed':
@@ -151,6 +153,56 @@ def process_stripe_webhook_event(payload, sig_header):
         log_entry.processing_error = str(e)
         log_entry.save()
         return False
+
+def _handle_checkout_session_completed(session):
+    metadata = session.get('metadata', {})
+    user_id = metadata.get('user_id')
+    plan_type = metadata.get('plan_type')
+    purchase_type = metadata.get('purchase_type')
+    
+    if purchase_type in ['single', 'bundle']:
+        # RideReveal purchase. Handled in mygarage webhooks.
+        return
+
+    if plan_type and user_id:
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            logger.warning(f"User {user_id} not found for checkout session {session.get('id')}")
+            return
+            
+        plan, _ = SubscriptionPlan.objects.get_or_create(user=user)
+        plan.plan_type = plan_type
+        plan.status = SubscriptionStatus.ACTIVE
+        
+        customer_id = session.get('customer')
+        sub_id = session.get('subscription')
+        if customer_id:
+            plan.stripe_customer_id = customer_id
+        if sub_id:
+            plan.stripe_subscription_id = sub_id
+            
+        plan.save()
+        _sync_user_subscription_tier(user, plan_type)
+        
+        # Note: We don't create PaymentRecord here if it's a subscription, 
+        # because invoice.payment_succeeded will fire and handle the payment record cleanly.
+        # But if it's a one-off payment (mode='payment'), we should create it.
+        if session.get('mode') == 'payment' and session.get('payment_intent'):
+            intent_id = session.get('payment_intent')
+            PaymentRecord.objects.get_or_create(
+                user=user,
+                stripe_payment_intent_id=intent_id,
+                defaults={
+                    'amount_cents': session.get('amount_total'),
+                    'amount_display': f"A${session.get('amount_total', 0) / 100:.2f}",
+                    'currency': session.get('currency', 'aud'),
+                    'plan_type': plan_type,
+                    'purchase_type': PurchaseType.SUBSCRIPTION,
+                    'status': PaymentStatus.SUCCEEDED,
+                    'paid_at': timezone.now()
+                }
+            )
 
 def _handle_payment_intent_succeeded(intent):
     metadata = intent.get('metadata', {})
