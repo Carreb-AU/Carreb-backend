@@ -68,6 +68,7 @@ LOCAL_APPS = [
     "apps.vehicles",
     "apps.mygarage",
     "apps.freematch",
+    "apps.support",
 ]
 
 SITE_ID = 1
