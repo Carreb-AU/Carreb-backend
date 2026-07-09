@@ -155,7 +155,7 @@ def process_stripe_webhook(payload, sig_header):
 
     if event['type'] in ['payment_intent.succeeded', 'checkout.session.completed']:
         intent_or_session = event['data']['object']
-        metadata = intent_or_session.get('metadata', {})
+        metadata = intent_or_session.get('metadata') or {}
         user_id = metadata.get('user_id')
         purchase_type = metadata.get('purchase_type')
         
@@ -179,5 +179,8 @@ def process_stripe_webhook(payload, sig_header):
                     credits.save()
             except ObjectDoesNotExist:
                 logger.error(f"User credits not found for user {user_id}")
+            except Exception as e:
+                # Catch ValidationError (e.g. invalid UUID format) or any other db error gracefully
+                logger.error(f"Error updating RideReveal credits for user {user_id}: {e}")
                 
     return True

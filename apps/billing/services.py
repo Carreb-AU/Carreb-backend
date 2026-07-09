@@ -155,7 +155,7 @@ def process_stripe_webhook_event(payload, sig_header):
         return False
 
 def _handle_checkout_session_completed(session):
-    metadata = session.get('metadata', {})
+    metadata = session.get('metadata') or {}
     user_id = metadata.get('user_id')
     plan_type = metadata.get('plan_type')
     purchase_type = metadata.get('purchase_type')
@@ -182,8 +182,9 @@ def _handle_checkout_session_completed(session):
     if plan_type and user_id:
         try:
             user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            logger.warning(f"User {user_id} not found for checkout session {session.get('id')}")
+        except Exception as e:
+            # Catch User.DoesNotExist, ValidationError (invalid UUID format), etc.
+            logger.warning(f"User lookup failed for {user_id} on checkout session {session.get('id')}: {e}")
             return
             
         plan, _ = SubscriptionPlan.objects.get_or_create(user=user)
@@ -220,17 +221,22 @@ def _handle_checkout_session_completed(session):
             )
 
 def _handle_payment_intent_succeeded(intent):
-    metadata = intent.get('metadata', {})
+    metadata = intent.get('metadata') or {}
     user_id = metadata.get('user_id')
-    plan_type_meta = metadata.get('plan_type')
+    plan_type = metadata.get('plan_type')
     purchase_type = metadata.get('purchase_type')
     
     if purchase_type in ['single', 'bundle']:
         # RideReveal purchase. Just log and return.
         return
         
-    if plan_type_meta == PlanType.CAR_BUYING_SPRINT and user_id:
-        user = User.objects.get(id=user_id)
+    if plan_type == PlanType.CAR_BUYING_SPRINT and user_id:
+        try:
+            user = User.objects.get(id=user_id)
+        except Exception as e:
+            logger.warning(f"User lookup failed for {user_id} on payment intent {intent.get('id')}: {e}")
+            return
+            
         plan, _ = SubscriptionPlan.objects.get_or_create(user=user)
         plan.plan_type = PlanType.CAR_BUYING_SPRINT
         plan.status = SubscriptionStatus.ACTIVE
