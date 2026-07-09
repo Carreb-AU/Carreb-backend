@@ -29,6 +29,7 @@ SECRET_KEY = env('SECRET_KEY')
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['*'])
 STRIPE_SECRET_KEY = env('STRIPE_SECRET_KEY', default='')
 STRIPE_WEBHOOK_SECRET = env('STRIPE_WEBHOOK_SECRET', default='')
+STRIPE_WEBHOOK_SECRET_BILLING = env('STRIPE_WEBHOOK_SECRET_BILLING', default=STRIPE_WEBHOOK_SECRET)
  
 
 
@@ -69,6 +70,7 @@ LOCAL_APPS = [
     "apps.mygarage",
     "apps.freematch",
     "apps.support",
+    "apps.billing",
 ]
 
 SITE_ID = 1

@@ -38,6 +38,9 @@ class GarageVehicle(models.Model):
     status = models.CharField(max_length=20, choices=GarageVehicleStatus.choices, default=GarageVehicleStatus.ACTIVE)
     source = models.CharField(max_length=50, choices=GarageVehicleSource.choices)
     
+    read_only = models.BooleanField(default=False)
+    re_subscribe_required = models.BooleanField(default=False)
+    
     added_at = models.DateTimeField(auto_now_add=True)
     archived_at = models.DateTimeField(null=True, blank=True)
     

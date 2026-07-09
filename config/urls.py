@@ -28,6 +28,7 @@ urlpatterns = [
     path('', include('apps.vehicles.urls')),
     path('', include('apps.mygarage.urls')),
     path('', include('apps.freematch.urls')),
+    path('api/stripe/', include('apps.billing.urls')),
 ]
 
 if settings.DEBUG:
