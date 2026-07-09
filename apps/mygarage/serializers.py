@@ -112,3 +112,33 @@ class RideRevealResultSerializer(serializers.ModelSerializer):
             'band_name': engine_data.get('band_name')
         }
 
+def is_valid_australian_postcode(postcode: str) -> bool:
+    if not postcode.isdigit() or len(postcode) != 4:
+        return False
+    val = int(postcode)
+    if val < 200 or val > 9999:
+        return False
+    if 300 <= val <= 799:
+        return False
+    if (200 <= val <= 299) or (800 <= val <= 899) or (1000 <= val <= 9999):
+        return True
+    return False
+
+class FindDealerRequestSerializer(serializers.Serializer):
+    garage_vehicle_id = serializers.UUIDField(required=True)
+    postcode = serializers.CharField(required=True)
+    radius_km = serializers.IntegerField(required=True)
+
+    def validate_postcode(self, value):
+        if not is_valid_australian_postcode(value):
+            raise serializers.ValidationError("invalid_postcode")
+        return value
+
+    def validate_radius_km(self, value):
+        if value not in [5, 25, 50, 100]:
+            raise serializers.ValidationError("invalid_radius")
+        return value
+
+class DealerLinkClickedSerializer(serializers.Serializer):
+    vehicle_brand = serializers.CharField(required=True, max_length=255)
+

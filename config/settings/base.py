@@ -199,6 +199,7 @@ REST_FRAMEWORK = {
         'anon': '60/minute',         # Unauthenticated users (the bots)
         'user': '100/minute',        # Authenticated users
         'password_reset': '5/hour',  # Custom scope
+        'find_a_dealer': '100/day',  # Custom scope for Dealer Search
     }
 }
 
@@ -318,3 +319,6 @@ CORS_ALLOWED_ORIGINS = [
 
 # If you need to send cookies/auth tokens (e.g., sessionid) cross-origin:
 CORS_ALLOW_CREDENTIALS = True
+
+# Google Places API Configuration
+GOOGLE_PLACES_API_KEY = env('GOOGLE_PLACES_API_KEY', default='')

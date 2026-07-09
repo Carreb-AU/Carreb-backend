@@ -168,3 +168,15 @@ class RideRevealJob(models.Model):
 
     def __str__(self):
         return f"RideRevealJob {self.id} - {self.status}"
+
+class DealerSearchLog(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='dealer_searches')
+    vehicle_brand = models.CharField(max_length=255)
+    postcode = models.CharField(max_length=4)
+    radius_km = models.IntegerField()
+    results_count = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"DealerSearchLog {self.id} for {self.user.email} - {self.vehicle_brand}"

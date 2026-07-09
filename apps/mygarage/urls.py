@@ -24,8 +24,13 @@ from apps.mygarage.views import (
     RideRevealPurchaseView,
     StripeWebhookView
 )
+from apps.mygarage.find_dealer_views import FindDealerView, DealerLinkClickedAnalyticsView
 
 urlpatterns = [
+    # Find Dealer
+    path('api/my-garage/find-dealer/', FindDealerView.as_view(), name='find-dealer'),
+    path('api/analytics/dealer-link-clicked/', DealerLinkClickedAnalyticsView.as_view(), name='dealer-link-clicked'),
+
     # Current Vehicle
     path('api/my-garage/current-vehicle/', CurrentVehicleView.as_view(), name='current-vehicle'),
     path('api/my-garage/current-vehicle/search/', CurrentVehicleSearchView.as_view(), name='current-vehicle-search'),

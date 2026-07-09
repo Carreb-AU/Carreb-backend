@@ -139,3 +139,180 @@ def calculate_spotlights(garage_vehicle, user_priority_state, state, current_cos
     if is_core_all_stars: badges['core_all_stars'] = True
     
     return badges if badges else None
+
+
+import logging
+import requests
+import math
+from django.core.cache import cache
+from django.conf import settings
+from django.utils.text import slugify
+
+logger = logging.getLogger(__name__)
+
+PLACES_TEXT_URL = 'https://maps.googleapis.com/maps/api/place/textsearch/json'
+
+BRAND_LOCATORS = {
+    'toyota': 'https://www.toyota.com.au/find-dealer',
+    'mazda': 'https://www.mazda.com.au/find-a-dealer/',
+    'hyundai': 'https://www.hyundai.com/au/en/find-a-dealer',
+    'ford': 'https://www.ford.com.au/locate-a-dealer/',
+    'mitsubishi': 'https://www.mitsubishi-motors.com.au/dealer-locator.html',
+    'kia': 'https://www.kia.com.au/find-a-dealer',
+    'mg': 'https://mgmotor.com.au/find-a-dealer/',
+    'subaru': 'https://www.subaru.com.au/find-a-dealer',
+    'tesla': 'https://www.tesla.com/findus',
+    'byd': 'https://bydautomotive.com.au/dealer-locator',
+    'nissan': 'https://www.nissan.com.au/find-a-dealer.html',
+    'volkswagen': 'https://www.volkswagen.com.au/en/find-a-dealer.html',
+    'honda': 'https://www.honda.com.au/owners/find-a-dealer',
+    'bmw': 'https://www.bmw.com/en-au/fast-lane/dealer-locator.html',
+    'mercedes-benz': 'https://www.mercedes-benz.com.au/passengercars/mercedes-benz-cars/dealer-locator.html',
+    'audi': 'https://www.audi.com.au/au/web/en/dealer-locator.html',
+    'lexus': 'https://www.lexus.com.au/contact/find-a-dealer',
+    'volvo': 'https://www.volvocars.com/au/dealers',
+    'jeep': 'https://www.jeep.com.au/find-a-dealer.html',
+    'land-rover': 'https://www.landrover.com.au/dealer-locator.html',
+    'jaguar': 'https://www.jaguar.com.au/dealer-locator.html',
+    'porsche': 'https://www.porsche.com/australia/aboutporsche/porschecentres/',
+    'suzuki': 'https://www.suzuki.com.au/find-a-dealer',
+    'isuzu': 'https://www.isuzuute.com.au/find-a-dealer',
+    'gwm': 'https://www.gwmhaval.com.au/find-a-dealer',
+    'haval': 'https://www.gwmhaval.com.au/find-a-dealer',
+    'cupra': 'https://www.cupraofficial.com.au/dealer-locator',
+    'skoda': 'https://www.skoda.com.au/dealer-locator/dealer-search',
+    'polestar': 'https://www.polestar.com/au/spaces/',
+    'ldv': 'https://www.ldvautomotive.com.au/find-a-dealer/',
+    'chery': 'https://cherymotor.com.au/find-a-dealer/',
+}
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+def get_postcode_coords(postcode: str, api_key: str) -> tuple:
+    cache_key = f"postcode_coords:{postcode}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+
+    params = {
+        'query': f'{postcode}, Australia',
+        'key': api_key,
+    }
+    try:
+        resp = requests.get(PLACES_TEXT_URL, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get('status') == 'OK' and data.get('results'):
+            loc = data['results'][0]['geometry']['location']
+            coords = (loc['lat'], loc['lng'])
+            cache.set(cache_key, coords, 86400 * 30)  # 30 days
+            return coords
+    except Exception as e:
+        logger.exception("Failed to geocode postcode %s: %s", postcode, e)
+    return None, None
+
+def search_dealers_external(brand: str, postcode: str, radius_km: int) -> dict:
+    api_key = getattr(settings, 'GOOGLE_PLACES_API_KEY', None)
+    if not api_key:
+        logger.error("GOOGLE_PLACES_API_KEY is not configured in settings.")
+        return {
+            'results': [],
+            'service_unavailable': True,
+            'message': "Dealer search is temporarily unavailable. Please try again shortly."
+        }
+
+    # First, get postcode coordinates
+    lat, lng = get_postcode_coords(postcode, api_key)
+    if lat is None or lng is None:
+        return {
+            'results': [],
+            'service_unavailable': False,
+        }
+
+    # Query Google Places Text Search
+    query = f'{brand} dealer'
+    params = {
+        'query': f'{query} near {postcode}, Australia',
+        'radius': radius_km * 1000,  # meters
+        'type': 'car_dealer',
+        'region': 'au',
+        'key': api_key,
+    }
+
+    try:
+        resp = requests.get(PLACES_TEXT_URL, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        logger.exception("Google Places API call failed: %s", e)
+        return {
+            'results': [],
+            'service_unavailable': True,
+            'message': "Dealer search is temporarily unavailable. Please try again shortly."
+        }
+
+    status = data.get('status')
+    if status not in ('OK', 'ZERO_RESULTS'):
+        logger.warning("Google Places returned unexpected status %s: %s", status, data.get('error_message'))
+        if status in ('OVER_QUERY_LIMIT', 'REQUEST_DENIED', 'INVALID_REQUEST'):
+            return {
+                'results': [],
+                'service_unavailable': True,
+                'message': "Dealer search is temporarily unavailable. Please try again shortly."
+            }
+        return {
+            'results': [],
+            'service_unavailable': False,
+        }
+
+    raw_results = data.get('results', [])
+    dealers = []
+    for r in raw_results:
+        location = r.get('geometry', {}).get('location', {})
+        d_lat = location.get('lat')
+        d_lng = location.get('lng')
+        
+        if d_lat is None or d_lng is None:
+            continue
+            
+        dist = haversine_distance(lat, lng, d_lat, d_lng)
+        
+        # Filter by radius manually to be precise
+        if dist <= radius_km:
+            place_id = r.get('place_id')
+            dealers.append({
+                'dealer_name': r.get('name'),
+                'distance_km': round(dist, 1),
+                'website_url': f'https://www.google.com/maps/place/?q=place_id:{place_id}' if place_id else '',
+                'external_link_notice': "You will leave Carreb and the dealer's own terms and privacy policy will apply."
+            })
+
+    # Sort by distance and return top 5
+    dealers.sort(key=lambda x: x['distance_km'])
+    results = dealers[:5]
+
+    return {
+        'results': results,
+        'service_unavailable': False,
+    }
+
+def get_dealers(brand: str, postcode: str, radius_km: int) -> dict:
+    brand_slug = slugify(brand)
+    cache_key = f"find_a_dealer:{brand_slug}:{postcode}:{radius_km}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    res = search_dealers_external(brand, postcode, radius_km)
+    
+    # Cache only if service is NOT unavailable
+    if not res.get('service_unavailable'):
+        cache.set(cache_key, res, 86400) # 24 hours
+        
+    return res
