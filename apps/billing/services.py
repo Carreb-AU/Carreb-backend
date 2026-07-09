@@ -172,6 +172,19 @@ def _handle_payment_intent_succeeded(intent):
         
         _sync_user_subscription_tier(user, PlanType.CAR_BUYING_SPRINT)
         
+        # Extract Payment Method Details
+        payment_method_id = intent.get('payment_method')
+        brand = None
+        last4 = None
+        if payment_method_id:
+            try:
+                pm = stripe.PaymentMethod.retrieve(payment_method_id)
+                if pm and pm.get('card'):
+                    brand = pm['card'].get('brand')
+                    last4 = pm['card'].get('last4')
+            except Exception as e:
+                logger.warning(f"Could not retrieve payment method {payment_method_id}: {e}")
+
         PaymentRecord.objects.create(
             user=user,
             stripe_payment_intent_id=intent.get('id'),
@@ -181,6 +194,8 @@ def _handle_payment_intent_succeeded(intent):
             plan_type=PlanType.CAR_BUYING_SPRINT,
             purchase_type=PurchaseType.SUBSCRIPTION,
             status=PaymentStatus.SUCCEEDED,
+            payment_method_brand=brand,
+            payment_method_last4=last4,
             paid_at=timezone.now()
         )
         
@@ -226,6 +241,20 @@ def _handle_invoice_payment_succeeded(invoice):
         
         # RideReveal reset handled by period start/end and entitlements
         
+        # Extract Payment Method Details
+        pi_id = invoice.get('payment_intent')
+        brand = None
+        last4 = None
+        if pi_id:
+            try:
+                pi = stripe.PaymentIntent.retrieve(pi_id, expand=['payment_method'])
+                pm = pi.get('payment_method')
+                if pm and isinstance(pm, dict) and pm.get('card'):
+                    brand = pm['card'].get('brand')
+                    last4 = pm['card'].get('last4')
+            except Exception as e:
+                logger.warning(f"Could not retrieve payment method for invoice PI {pi_id}: {e}")
+
         PaymentRecord.objects.create(
             user=user,
             stripe_invoice_id=invoice.get('id'),
@@ -236,6 +265,8 @@ def _handle_invoice_payment_succeeded(invoice):
             plan_type=plan_type,
             purchase_type=PurchaseType.SUBSCRIPTION,
             status=PaymentStatus.SUCCEEDED,
+            payment_method_brand=brand,
+            payment_method_last4=last4,
             invoice_pdf_url=invoice.get('hosted_invoice_url'),
             paid_at=timezone.now()
         )

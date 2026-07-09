@@ -1,10 +1,15 @@
-from rest_framework import views, status
+from rest_framework import views, status, generics
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from django.conf import settings
 from apps.billing.services import process_stripe_webhook_event
+from apps.billing.models import PaymentRecord, SubscriptionPlan
+from apps.billing.serializers import PaymentRecordSerializer
+import stripe
 import logging
 
 logger = logging.getLogger(__name__)
+stripe.api_key = getattr(settings, 'STRIPE_SECRET_KEY', None)
 
 class StripeWebhookView(views.APIView):
     permission_classes = [AllowAny]
@@ -24,3 +29,76 @@ class StripeWebhookView(views.APIView):
             logger.exception("Unhandled error in Stripe Webhook View")
             
         return Response(status=status.HTTP_200_OK)
+
+class PaymentHistoryView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = PaymentRecordSerializer
+    
+    def get_queryset(self):
+        return PaymentRecord.objects.filter(
+            user=self.request.user,
+            status='succeeded'
+        ).order_by('-paid_at')
+
+class PaymentMethodsView(views.APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            plan = request.user.subscription_plan
+            if not plan.stripe_customer_id:
+                return Response([])
+                
+            payment_methods = stripe.PaymentMethod.list(
+                customer=plan.stripe_customer_id,
+                type="card",
+            )
+            
+            cards = []
+            for pm in payment_methods.data:
+                cards.append({
+                    "id": pm.id,
+                    "brand": pm.card.brand,
+                    "last4": pm.card.last4,
+                    "exp_month": pm.card.exp_month,
+                    "exp_year": pm.card.exp_year,
+                    "is_default": False # Stripe customer portal manages defaults natively, but can be derived from customer.invoice_settings.default_payment_method if needed
+                })
+                
+            # If we want to mark the default card
+            customer = stripe.Customer.retrieve(plan.stripe_customer_id)
+            default_pm = customer.invoice_settings.default_payment_method
+            for c in cards:
+                if c['id'] == default_pm:
+                    c['is_default'] = True
+                    
+            return Response(cards)
+            
+        except SubscriptionPlan.DoesNotExist:
+            return Response([])
+        except Exception as e:
+            logger.error(f"Error fetching payment methods: {e}")
+            return Response({"error": "Failed to fetch payment methods"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class StripeCustomerPortalView(views.APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        try:
+            plan = request.user.subscription_plan
+            if not plan.stripe_customer_id:
+                return Response({"error": "No Stripe customer linked to this account."}, status=status.HTTP_400_BAD_REQUEST)
+                
+            return_url = request.data.get('return_url', getattr(settings, 'FRONTEND_URL', 'https://carreb.com.au') + '/billing')
+            
+            session = stripe.billing_portal.Session.create(
+                customer=plan.stripe_customer_id,
+                return_url=return_url,
+            )
+            return Response({"portal_url": session.url})
+            
+        except SubscriptionPlan.DoesNotExist:
+            return Response({"error": "No subscription plan found."}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error creating customer portal session: {e}")
+            return Response({"error": "Failed to create portal session"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
