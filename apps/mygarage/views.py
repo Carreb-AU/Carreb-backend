@@ -232,6 +232,89 @@ class GarageVehicleListView(views.APIView):
         for gv in qs:
             results.append(_build_calculated_vehicle_response(request.user, gv, state, current_cost=cv_cost))
             
+        # --- FILTERING LOGIC ---
+        core_ratings_param = request.query_params.get('core_ratings')
+        coo_5yrs_min_param = request.query_params.get('coo_5yrs_min')
+        coo_5yrs_max_param = request.query_params.get('coo_5yrs_max')
+        co2_emissions_param = request.query_params.get('co2_emissions')
+        savings_param = request.query_params.get('savings')
+        driveaway_min_param = request.query_params.get('driveaway_min')
+        driveaway_max_param = request.query_params.get('driveaway_max')
+
+        filtered_results = []
+        for res in results:
+            engine_data = res.get('engine_data')
+            if not engine_data:
+                # If there's no calculated data, we either include or exclude. 
+                # Let's include by default unless specific filters are applied.
+                if any([core_ratings_param, coo_5yrs_min_param, coo_5yrs_max_param, co2_emissions_param, savings_param, driveaway_min_param, driveaway_max_param]):
+                    continue
+                filtered_results.append(res)
+                continue
+
+            # 1. CORE Rating Filter
+            if core_ratings_param:
+                try:
+                    valid_ratings = [int(r.strip()) for r in core_ratings_param.split(',')]
+                    rounded_rating = int(round(engine_data.get('core_rating', 0)))
+                    if rounded_rating not in valid_ratings:
+                        continue
+                except ValueError:
+                    pass
+
+            # 2. COO 5yrs Filter
+            coo_5yrs = engine_data.get('total_annual_cost', 0) * 5
+            if coo_5yrs_min_param:
+                try:
+                    if coo_5yrs < float(coo_5yrs_min_param): continue
+                except ValueError: pass
+            if coo_5yrs_max_param:
+                try:
+                    if coo_5yrs > float(coo_5yrs_max_param): continue
+                except ValueError: pass
+
+            # 3. CO2 Emissions Filter
+            if co2_emissions_param:
+                valid_buckets = [b.strip().lower() for b in co2_emissions_param.split(',')]
+                tailpipe = engine_data.get('tailpipe_co2_g_per_km', 0)
+                bucket = ''
+                if tailpipe <= 50: bucket = 'very_low'
+                elif 51 <= tailpipe <= 130: bucket = 'low'
+                elif 131 <= tailpipe <= 180: bucket = 'medium'
+                else: bucket = 'high'
+                
+                if bucket not in valid_buckets:
+                    continue
+
+            # 4. Savings (5yr) Filter
+            if savings_param:
+                valid_buckets = [b.strip().lower() for b in savings_param.split(',')]
+                savings_5yr = engine_data.get('est_cost_difference', 0) * 5
+                bucket = ''
+                if savings_5yr < 2500: bucket = 'essentials_covered'
+                elif 2500 <= savings_5yr < 7500: bucket = 'home_family'
+                elif 7500 <= savings_5yr < 12500: bucket = 'savings_security'
+                else: bucket = 'future_proof'
+
+                if bucket not in valid_buckets:
+                    continue
+
+            # 5. Driveaway Price Filter
+            driveaway_price = engine_data.get('annual_cost_breakdown', {}).get('driveaway_price', 0)
+            if driveaway_min_param:
+                try:
+                    if driveaway_price < float(driveaway_min_param): continue
+                except ValueError: pass
+            if driveaway_max_param:
+                try:
+                    if driveaway_price > float(driveaway_max_param): continue
+                except ValueError: pass
+
+            filtered_results.append(res)
+            
+        # Use filtered results moving forward
+        results = filtered_results
+
         # Optional sorting/filtering can be applied to `results` here
         sort_by = request.query_params.get('sort_by')
         if sort_by in ['core_rating', 'annual_cost', 'cost_difference', 'driveaway_price']:
