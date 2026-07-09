@@ -9,6 +9,8 @@ from apps.mygarage.models import (
     RideRevealCredit,
     RideRevealResult,
     RideRevealJob,
+    AISmartMatchRequest,
+    DealerSearchLog,
 )
 
 
@@ -208,3 +210,39 @@ class RideRevealJobAdmin(admin.ModelAdmin):
     readonly_fields = ["id", "created_at", "completed_at", "error_message"]
     raw_id_fields = ["user", "garage_vehicle", "result"]
     date_hierarchy = "created_at"
+
+
+@admin.register(AISmartMatchRequest)
+class AISmartMatchRequestAdmin(admin.ModelAdmin):
+    list_display = [
+        "user",
+        "raw_query",
+        "result_count",
+        "ai_service_available",
+        "match_count_at_time",
+        "created_at",
+    ]
+    search_fields = ["user__email", "raw_query"]
+    list_filter = ["ai_service_available"]
+    readonly_fields = ["id", "created_at"]
+    raw_id_fields = ["user"]
+    date_hierarchy = "created_at"
+    ordering = ["-created_at"]
+
+
+@admin.register(DealerSearchLog)
+class DealerSearchLogAdmin(admin.ModelAdmin):
+    list_display = [
+        "user",
+        "vehicle_brand",
+        "postcode",
+        "radius_km",
+        "results_count",
+        "created_at",
+    ]
+    search_fields = ["user__email", "vehicle_brand", "postcode"]
+    list_filter = ["radius_km"]
+    readonly_fields = ["id", "created_at"]
+    raw_id_fields = ["user"]
+    date_hierarchy = "created_at"
+    ordering = ["-created_at"]
