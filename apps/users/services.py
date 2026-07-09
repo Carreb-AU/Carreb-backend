@@ -90,6 +90,13 @@ def verify_email(token: str) -> AuthSession:
     
     if token_obj.new_email:
         user.email = token_obj.new_email
+        if hasattr(user, 'two_factor_auth') and user.two_factor_auth.is_enabled:
+            tfa = user.two_factor_auth
+            tfa.is_enabled = False
+            tfa.enrolled_at = None
+            tfa.totp_secret = None
+            tfa.save(update_fields=['is_enabled', 'enrolled_at', 'totp_secret'])
+            logger.info(f"Forcefully disabled 2FA for user {user.id} due to email address change.")
         
     user.email_verified = True
     user.save(update_fields=['email', 'email_verified'])
@@ -219,6 +226,22 @@ def confirm_2fa(user, totp_code: str):
     tfa.enrolled_at = timezone.now()
     tfa.save(update_fields=['is_enabled', 'enrolled_at'])
     return {"detail": "2FA enabled successfully."}
+
+@transaction.atomic
+def disable_2fa(user, totp_code: str):
+    if not hasattr(user, 'two_factor_auth') or not user.two_factor_auth.is_enabled:
+        raise ValidationError({"detail": "2FA is not enabled."})
+        
+    tfa = user.two_factor_auth
+    totp = pyotp.TOTP(tfa.totp_secret)
+    if not totp.verify(totp_code):
+        raise ValidationError({"totp_code": "Invalid TOTP code."})
+        
+    tfa.is_enabled = False
+    tfa.enrolled_at = None
+    tfa.totp_secret = None
+    tfa.save(update_fields=['is_enabled', 'enrolled_at', 'totp_secret'])
+    return {"detail": "2FA disabled successfully."}
 
 @transaction.atomic
 def delete_account(user: User, password: str, reason: str):

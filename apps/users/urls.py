@@ -12,6 +12,7 @@ from .views import (
     PasswordResetVerifyView,
     Setup2FAView,
     Confirm2FAView,
+    Disable2FAView,
     UserProfileView
 )
 
@@ -30,6 +31,7 @@ urlpatterns = [
     # 2FA Setup
     path('2fa/setup/', Setup2FAView.as_view(), name='2fa-setup'),
     path('2fa/enable/', Confirm2FAView.as_view(), name='2fa-enable'),
+    path('2fa/disable/', Disable2FAView.as_view(), name='2fa-disable'),
     
     # JWT Refresh Token Endpoint
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),

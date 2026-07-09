@@ -133,6 +133,20 @@ class Confirm2FAView(APIView):
         result = confirm_2fa(request.user, serializer.validated_data['totp_code'])
         return Response(result, status=status.HTTP_200_OK)
 
+class Disable2FAView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        from rest_framework import serializers
+        from .services import disable_2fa
+        
+        class Disable2FASerializer(serializers.Serializer):
+            totp_code = serializers.CharField(max_length=6)
+            
+        serializer = Disable2FASerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = disable_2fa(request.user, serializer.validated_data['totp_code'])
+        return Response(result, status=status.HTTP_200_OK)
+
 class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
     
