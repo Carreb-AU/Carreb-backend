@@ -159,6 +159,15 @@ def process_stripe_webhook(payload, sig_header):
         user_id = metadata.get('user_id')
         purchase_type = metadata.get('purchase_type')
         
+        # Fallback to client_reference_id for Payment Links
+        client_ref = intent_or_session.get('client_reference_id')
+        if client_ref and '__' in client_ref:
+            parts = client_ref.split('__', 1)
+            if not user_id:
+                user_id = parts[0]
+            if not purchase_type:
+                purchase_type = parts[1]
+        
         if user_id and purchase_type:
             try:
                 with transaction.atomic():

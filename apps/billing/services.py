@@ -160,6 +160,21 @@ def _handle_checkout_session_completed(session):
     plan_type = metadata.get('plan_type')
     purchase_type = metadata.get('purchase_type')
     
+    # Fallback to client_reference_id for Payment Links (format: user_id__plan_type)
+    client_ref = session.get('client_reference_id')
+    if client_ref and '__' in client_ref:
+        parts = client_ref.split('__', 1)
+        if not user_id:
+            user_id = parts[0]
+        
+        type_part = parts[1]
+        if type_part in ['single', 'bundle']:
+            if not purchase_type:
+                purchase_type = type_part
+        else:
+            if not plan_type:
+                plan_type = type_part
+
     if purchase_type in ['single', 'bundle']:
         # RideReveal purchase. Handled in mygarage webhooks.
         return
