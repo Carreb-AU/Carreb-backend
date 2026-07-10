@@ -691,7 +691,7 @@ class AISmartMatchView(views.APIView):
             bss = _ensure_list(filters['body_styles'])
             q = models.Q()
             for b in bss:
-                q |= models.Q(body_style__iexact=b)
+                q |= models.Q(body_style__icontains=b)
             queryset = queryset.filter(q)
         elif filters.get('primary_use'):
             use = filters['primary_use'].lower()
@@ -699,7 +699,7 @@ class AISmartMatchView(views.APIView):
             if bss:
                 q = models.Q()
                 for b in bss:
-                    q |= models.Q(body_style__iexact=b)
+                    q |= models.Q(body_style__icontains=b)
                 queryset = queryset.filter(q)
                 
         if filters.get('fcai_categories'):
