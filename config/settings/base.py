@@ -251,7 +251,11 @@ FRONTEND_URL = env('FRONTEND_URL', default='https://carreb.com')
 FRONTEND_DEV_URL = env('FRONTEND_DEV_URL', default='http://localhost:3000')
 FRONTEND_PROD_URL = env('FRONTEND_PROD_URL', default='https://carreb.com')
 
-
+# Notification Settings
+TWILIO_ACCOUNT_SID = env('TWILIO_ACCOUNT_SID', default='')
+TWILIO_AUTH_TOKEN = env('TWILIO_AUTH_TOKEN', default='')
+TWILIO_PHONE_NUMBER = env('TWILIO_PHONE_NUMBER', default='')
+FIREBASE_CREDENTIALS_PATH = env('FIREBASE_CREDENTIALS_PATH', default=str(BASE_DIR / 'firebase-credentials.json'))
 
 ACCOUNT_ADAPTER = 'allauth.account.adapter.DefaultAccountAdapter'
 ACCOUNT_AUTHENTICATION_METHOD = 'email'

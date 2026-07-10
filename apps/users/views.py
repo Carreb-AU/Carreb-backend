@@ -167,3 +167,48 @@ class UserProfileView(APIView):
             response_data['email_change_status'] = "Verification email sent to new address. Email will update once verified."
             
         return Response(response_data, status=status.HTTP_200_OK)
+
+class NotificationPreferenceView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        from .models import NotificationPreference
+        from .serializers import NotificationPreferenceSerializer
+        
+        pref, _ = NotificationPreference.objects.get_or_create(user=request.user)
+        serializer = NotificationPreferenceSerializer(pref)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+        
+    def patch(self, request):
+        from .models import NotificationPreference
+        from .serializers import NotificationPreferenceSerializer
+        
+        pref, _ = NotificationPreference.objects.get_or_create(user=request.user)
+        serializer = NotificationPreferenceSerializer(pref, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class FCMDeviceRegisterView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        from .models import FCMDevice
+        from .serializers import FCMDeviceSerializer
+        
+        device_id = request.data.get('device_id')
+        if not device_id:
+            return Response({"device_id": "This field is required."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        device = FCMDevice.objects.filter(device_id=device_id).first()
+        if device:
+            # Update existing device token/user
+            device.user = request.user
+            serializer = FCMDeviceSerializer(device, data=request.data, partial=True)
+        else:
+            # Create new device
+            serializer = FCMDeviceSerializer(data=request.data)
+            
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=request.user)
+        return Response(serializer.data, status=status.HTTP_200_OK)

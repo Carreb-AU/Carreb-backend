@@ -70,3 +70,17 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['first_name', 'last_name', 'email', 'mobile_number', 'profile_picture']
+
+from .models import NotificationPreference
+
+class NotificationPreferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NotificationPreference
+        exclude = ('id', 'user', 'created_at', 'updated_at')
+
+from .models import FCMDevice
+
+class FCMDeviceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FCMDevice
+        fields = ['device_id', 'fcm_token', 'device_type']

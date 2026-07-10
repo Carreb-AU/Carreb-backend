@@ -147,3 +147,48 @@ class AccountDeletionRequest(models.Model):
     scheduled_deletion_at = models.DateTimeField()
     requested_at = models.DateTimeField(auto_now_add=True)
     executed_at = models.DateTimeField(null=True, blank=True)
+
+class NotificationFrequency(models.TextChoices):
+    WEEKLY = 'weekly', 'Weekly'
+    MONTHLY = 'monthly', 'Monthly'
+
+class NotificationPreference(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='notification_preferences')
+    
+    # Email Settings
+    email_marketing_enabled = models.BooleanField(default=True)
+    email_frequency = models.CharField(max_length=20, choices=NotificationFrequency.choices, default=NotificationFrequency.WEEKLY)
+    
+    email_core_rating_updates = models.BooleanField(default=True)
+    email_spotlights = models.BooleanField(default=True)
+    email_quarterly_reports = models.BooleanField(default=True)
+    email_product_news = models.BooleanField(default=True)
+    
+    # App Settings
+    app_notifications_enabled = models.BooleanField(default=True)
+    
+    app_core_rating_updates = models.BooleanField(default=True)
+    app_spotlights = models.BooleanField(default=True)
+    app_quarterly_reports = models.BooleanField(default=True)
+    app_product_news = models.BooleanField(default=True)
+    
+    # SMS Settings
+    sms_notifications_enabled = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} - Notification Preferences"
+
+class FCMDevice(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fcm_devices')
+    device_id = models.CharField(max_length=255, unique=True, help_text="Unique identifier for the physical device")
+    fcm_token = models.TextField(help_text="Firebase Cloud Messaging Token")
+    device_type = models.CharField(max_length=50, blank=True, null=True, help_text="ios, android, web")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.device_type}"

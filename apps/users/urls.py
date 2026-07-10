@@ -13,7 +13,9 @@ from .views import (
     Setup2FAView,
     Confirm2FAView,
     Disable2FAView,
-    UserProfileView
+    UserProfileView,
+    NotificationPreferenceView,
+    FCMDeviceRegisterView
 )
 
 urlpatterns = [
@@ -25,6 +27,8 @@ urlpatterns = [
     path('login/social/', SocialLoginView.as_view(), name='login-social'),
     path('account/delete/', AccountDeletionView.as_view(), name='account-delete'),
     path('profile/', UserProfileView.as_view(), name='user-profile'),
+    path('profile/notifications/', NotificationPreferenceView.as_view(), name='notification-preferences'),
+    path('fcm/register/', FCMDeviceRegisterView.as_view(), name='fcm-register'),
     path('password-reset/', PasswordResetRequestView.as_view(), name='password-reset'),
     path('password-reset/verify/', PasswordResetVerifyView.as_view(), name='password-reset-verify'),
     
