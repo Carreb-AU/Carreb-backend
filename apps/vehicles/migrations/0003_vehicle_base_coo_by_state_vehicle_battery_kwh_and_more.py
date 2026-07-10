@@ -60,11 +60,7 @@ class Migration(migrations.Migration):
             name="fuel_cost_by_state",
             field=models.JSONField(default=dict),
         ),
-        migrations.AddField(
-            model_name="vehicle",
-            name="image_url",
-            field=models.URLField(blank=True, max_length=500, null=True),
-        ),
+
         migrations.AddField(
             model_name="vehicle",
             name="is_scoring_outlier",
