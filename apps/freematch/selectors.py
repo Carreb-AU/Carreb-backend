@@ -36,13 +36,13 @@ def get_freematch_candidates(session: FreeMatchSession) -> QuerySet[Vehicle]:
         
     # Style / Shape
     if session.style_preference:
-        qs = qs.filter(body_style__iexact=session.style_preference)
+        qs = qs.filter(body_style__icontains=session.style_preference)
     elif session.primary_use:
         body_styles = PRIMARY_USE_BODY_STYLES.get(session.primary_use, [])
         if body_styles:
             q = Q()
             for style in body_styles:
-                q |= Q(body_style__iexact=style)
+                q |= Q(body_style__icontains=style)
             qs = qs.filter(q)
             
     # Seating
