@@ -296,12 +296,10 @@ class GarageVehicleListView(views.APIView):
             # 4. Savings (5yr) Filter
             if savings_param:
                 valid_buckets = [b.strip().lower() for b in savings_param.split(',')]
-                savings_5yr = engine_data.get('est_cost_difference', 0) * 5
+                est_diff_obj = engine_data.get('est_cost_difference')
                 bucket = ''
-                if savings_5yr < 2500: bucket = 'essentials_covered'
-                elif 2500 <= savings_5yr < 7500: bucket = 'home_family'
-                elif 7500 <= savings_5yr < 12500: bucket = 'savings_security'
-                else: bucket = 'future_proof'
+                if isinstance(est_diff_obj, dict) and est_diff_obj.get('direction') == 'saving':
+                    bucket = est_diff_obj.get('savings_bucket') or ''
 
                 if bucket not in valid_buckets:
                     continue
@@ -325,8 +323,15 @@ class GarageVehicleListView(views.APIView):
         # Optional sorting/filtering can be applied to `results` here
         sort_by = request.query_params.get('sort_by')
         if sort_by in ['core_rating', 'annual_cost', 'cost_difference', 'driveaway_price']:
-            # Example sort implementation
-            results.sort(key=lambda x: x['engine_data'].get(sort_by) if x['engine_data'] else 0)
+            def sort_key(x):
+                if not x.get('engine_data'): return 0
+                if sort_by == 'cost_difference':
+                    diff_obj = x['engine_data'].get('est_cost_difference')
+                    if isinstance(diff_obj, dict):
+                        return diff_obj.get('value_cents', 0) if diff_obj.get('direction') == 'saving' else -diff_obj.get('value_cents', 0)
+                    return diff_obj or 0
+                return x['engine_data'].get(sort_by) or 0
+            results.sort(key=sort_key)
             
         return Response({
             "cap_counter": get_cap_counter(request.user),
@@ -546,9 +551,20 @@ class SavingsSummaryView(views.APIView):
         
         for gv in qs:
             resp = _build_calculated_vehicle_response(request.user, gv, state, current_cost=cv_cost)
-            diff = resp['engine_data'].get('est_cost_difference') if resp.get('engine_data') else None
-            if diff and diff > max_savings:
-                max_savings = diff
+            diff_obj = resp['engine_data'].get('est_cost_difference') if resp.get('engine_data') else None
+            diff_cents = None
+            if isinstance(diff_obj, dict):
+                if diff_obj.get('direction') == 'saving':
+                    diff_cents = diff_obj.get('value_cents')
+                elif diff_obj.get('direction') == 'more_expensive':
+                    diff_cents = -diff_obj.get('value_cents')
+                else:
+                    diff_cents = 0
+            else:
+                diff_cents = diff_obj
+                
+            if diff_cents is not None and diff_cents > max_savings:
+                max_savings = diff_cents
                 best_gv = gv
                 
         if max_savings > 0 and best_gv:
@@ -701,11 +717,18 @@ class AISmartMatchView(views.APIView):
                 
             reason = build_recommendation_reason(filters, v)
             
-            diff = res.get('est_cost_difference')
-            if diff is not None:
-                diff_display = f"${abs(diff) // 100:,} {'less' if diff > 0 else 'more'}"
+            diff_obj = res.get('est_cost_difference')
+            if isinstance(diff_obj, dict):
+                diff_val = diff_obj.get('value_cents')
+                if diff_obj.get('direction') == 'more_expensive':
+                    diff_val = -diff_val if diff_val else 0
+                diff_display = diff_obj.get('value_display')
             else:
-                diff_display = None
+                diff_val = diff_obj
+                if diff_val is not None:
+                    diff_display = f"${abs(diff_val) // 100:,} {'less' if diff_val > 0 else 'more'}"
+                else:
+                    diff_display = None
                 
             scored_vehicles.append({
                 "vehicle_id": str(v.id),
@@ -718,7 +741,7 @@ class AISmartMatchView(views.APIView):
                 "band_name": res.get('band_name'),
                 "total_annual_cost": res.get('total_annual_cost'),
                 "total_annual_cost_display": f"${res.get('total_annual_cost', 0) // 100:,}",
-                "est_cost_difference": diff,
+                "est_cost_difference": diff_val,
                 "est_cost_difference_display": diff_display,
                 "co2_g_per_km": v.tailpipe_co2_g_per_km,
                 "driveaway_price": driveaway,

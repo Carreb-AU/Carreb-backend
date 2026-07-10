@@ -222,12 +222,49 @@ def calculate_core_rating(
     blended_score = max(1.0, min(5.0, blended_score))
     
     # Est cost difference
-    est_cost_difference = None
+    def _build_est_cost_diff_obj(baseline: int, total: int, is_current_vehicle: bool) -> dict:
+        diff = baseline - total
+        comp_mode = "current_vehicle" if is_current_vehicle else "category_avg"
+        if is_current_vehicle:
+            base_disp = f"Est. ${int(round(baseline / 100)):,}/year"
+        else:
+            base_disp = f"Est. ${int(round(baseline / 100)):,}/year\n      ({fcai_category} category average)"
+            
+        if diff < 0:
+            direction = "more_expensive"
+            val = abs(diff)
+            bucket = None
+        elif diff > 0:
+            direction = "saving"
+            val = diff
+            s5 = val * 5
+            if s5 < 250000: bucket = "essentials_covered"
+            elif s5 < 750000: bucket = "home_family"
+            elif s5 < 1250000: bucket = "savings_security"
+            else: bucket = "future_proof"
+        else:
+            direction = "same"
+            val = 0
+            bucket = None
+            
+        s5 = val * 5
+        return {
+            "value_cents": val,
+            "value_display": f"Est. ${int(round(val / 100)):,}/year",
+            "direction": direction,
+            "comparison_mode": comp_mode,
+            "baseline_cost": baseline,
+            "baseline_cost_display": base_disp,
+            "est_5yr_savings": s5,
+            "est_5yr_savings_display": f"Est. ${int(round(s5 / 100)):,} over 5 years",
+            "savings_bucket": bucket
+        }
+
     if current_vehicle_annual_cost is not None:
-        est_cost_difference = current_vehicle_annual_cost - total_cost
+        est_cost_difference = _build_est_cost_diff_obj(current_vehicle_annual_cost, total_cost, True)
     else:
         avg_class_cost = sum(peer_costs) / len(peer_costs) if peer_costs else total_cost
-        est_cost_difference = int(avg_class_cost - total_cost)
+        est_cost_difference = _build_est_cost_diff_obj(int(avg_class_cost), total_cost, False)
         
     # Calculate peer distribution and medians
     peer_band_stats = {
@@ -283,9 +320,10 @@ def calculate_core_rating(
         if stats["count"] > 0:
             avg_class_cost = sum(peer_costs) / len(peer_costs) if peer_costs else total_cost
             med_total = get_median_or_zero([b["total_annual"] for b in stats["breakdowns"]])
-            med_est_diff = int(avg_class_cost - med_total)
             if current_vehicle_annual_cost is not None:
-                med_est_diff = current_vehicle_annual_cost - med_total
+                med_est_diff = _build_est_cost_diff_obj(current_vehicle_annual_cost, med_total, True)
+            else:
+                med_est_diff = _build_est_cost_diff_obj(int(avg_class_cost), med_total, False)
                 
             med_tailpipe = get_median_or_zero(stats["co2"])
             med_annual_co2_kg = int((med_tailpipe * annual_km) / 1000)

@@ -197,7 +197,13 @@ def build_unlocked_response(vehicle: Vehicle, user, garage_vehicle) -> dict:
     annual_cost_cents = engine_data.get("total_annual_cost") or 0
     driveaway_cents = vehicle.driveaway_price_by_state.get(state) or 0
     resale_cents = vehicle.resale_value_5yr_estimate or 0
-    est_diff_cents = engine_data.get("est_cost_difference") or 0
+    diff_obj = engine_data.get("est_cost_difference")
+    if isinstance(diff_obj, dict):
+        est_diff_cents = diff_obj.get("value_cents", 0)
+        if diff_obj.get("direction") == "more_expensive":
+            est_diff_cents = -est_diff_cents
+    else:
+        est_diff_cents = diff_obj or 0
 
     return {
         "garage_vehicle_id": str(garage_vehicle.id),
