@@ -122,9 +122,10 @@ def process_stripe_webhook_event(payload, sig_header):
     event_type = event.get('type')
     
     # Idempotency check
+    import json
     log_entry, created = StripeWebhookLog.objects.get_or_create(
         stripe_event_id=stripe_event_id,
-        defaults={'event_type': event_type, 'payload': event}
+        defaults={'event_type': event_type, 'payload': json.loads(payload)}
     )
     if not created and log_entry.processed:
         return True # Already processed successfully
