@@ -36,109 +36,175 @@ def check_cap_limit(user):
     return current_count < limit
 
 
-def calculate_spotlights(garage_vehicle, user_priority_state, state, current_cost, active_garage_vehicles):
-    user = garage_vehicle.user
+def _get_ordinal(n):
+    if 11 <= (n % 100) <= 13:
+        suffix = 'th'
+    else:
+        suffix = ['th', 'st', 'nd', 'rd', 'th'][min(n % 10, 4)]
+    return str(n) + suffix
+
+def calculate_spotlights(active_garage_vehicles, user_priority_state, state, current_cost):
+    if not active_garage_vehicles:
+        return {}
+        
+    user = active_garage_vehicles[0].user
+    
+    # We shouldn't reach here if user is on FREE, but safe to check
     if user.subscription_tier == SubscriptionTier.FREE:
-        return None # Free tier does not get spotlights
+        return {}
         
-    vehicle = garage_vehicle.vehicle_catalogue
+    results = {str(gv.id): {} for gv in active_garage_vehicles}
     
-    # 1. Gather peer data
-    peers = list(Vehicle.objects.filter(fcai_category=vehicle.fcai_category))
-    
-    # For range kings (top 3 highest range)
-    ranges = sorted([p.wltp_range_km for p in peers if p.wltp_range_km is not None], reverse=True)
-    is_range_king = False
-    if vehicle.wltp_range_km is not None:
-        if vehicle.wltp_range_km in ranges[:3]:
-            is_range_king = True
+    # Pre-group active vehicles by category
+    by_category = {}
+    for gv in active_garage_vehicles:
+        cat = gv.vehicle_catalogue.fcai_category
+        if cat:
+            by_category.setdefault(cat, []).append(gv)
             
-    mode = user_priority_state.active_core_mode
+    # Calculate category badges
     priority = user_priority_state.priority_slider_position
+    mode = user_priority_state.active_core_mode
+    budget = user_priority_state.budget_max
     
-    peer_costs = []
-    peer_co2 = []
-    for p in peers:
-        cost_5yr = p.total_5yr_cost_of_ownership_by_state.get(state)
-        if cost_5yr:
-            peer_costs.append(cost_5yr / 5.0)
-            
-        if p.tailpipe_co2_g_per_km is not None:
-            peer_co2.append(p.tailpipe_co2_g_per_km)
-            
-    peer_costs.sort()
-    peer_co2.sort()
-    
-    def is_top_20_percent_lowest(val, sorted_list):
-        if not sorted_list or val is None: return False
-        idx = sum(1 for v in sorted_list if v < val)
-        return (idx / len(sorted_list)) <= 0.20
+    for cat, gvs in by_category.items():
+        peers = list(Vehicle.objects.filter(fcai_category=cat))
+        ranges = sorted([p.wltp_range_km for p in peers if p.wltp_range_km is not None], reverse=True)
         
-    def is_top_20_percent_highest(val, sorted_list): # sorted_list is sorted ascending
-        if not sorted_list or val is None: return False
-        idx = sum(1 for v in sorted_list if v > val)
-        return (idx / len(sorted_list)) <= 0.20
-
-    my_cost_res = calculate_core_rating(vehicle, state, priority, mode, {})
-    # Use the same base cost as peer_costs to ensure an apples-to-apples percentile comparison
-    my_cost_5yr = vehicle.total_5yr_cost_of_ownership_by_state.get(state)
-    my_cost = (my_cost_5yr / 5.0) if my_cost_5yr else my_cost_res['total_annual_cost']
-    my_co2 = vehicle.tailpipe_co2_g_per_km
-    my_range = vehicle.wltp_range_km
-    
-    is_green_and_lean = is_top_20_percent_lowest(my_co2, peer_co2) and is_top_20_percent_lowest(my_cost, peer_costs)
-    
-    ranges_asc = sorted([p.wltp_range_km for p in peers if p.wltp_range_km is not None])
-    fits_budget = True
-    if user_priority_state.budget_max is not None:
-        driveaway = vehicle.driveaway_price_by_state.get(state, 0)
-        if driveaway > user_priority_state.budget_max:
-            fits_budget = False
+        peer_costs = []
+        peer_co2 = []
+        for p in peers:
+            cost_5yr = p.total_5yr_cost_of_ownership_by_state.get(state)
+            if cost_5yr:
+                peer_costs.append(cost_5yr / 5.0)
+            peer_co2.append(p.tailpipe_co2_g_per_km if p.tailpipe_co2_g_per_km is not None else 0)
+                
+        peer_costs.sort()
+        peer_co2.sort()
+        
+        def is_top_20_percent_lowest(val, sorted_list):
+            if not sorted_list or val is None: return False
+            if len(sorted_list) < 5:
+                return val == sorted_list[0]
+            idx = sum(1 for v in sorted_list if v < val)
+            return (idx / len(sorted_list)) <= 0.20
             
-    is_unicorn_match = is_top_20_percent_highest(my_range, ranges_asc) and is_top_20_percent_lowest(my_co2, peer_co2) and fits_budget
-    
-    # Category Sweep
-    is_category_sweep = False
-    my_rating = my_cost_res.get('core_rating', 0) or 0
-    
-    # Check other active garage vehicles in same category
-    same_cat_active = [gv for gv in active_garage_vehicles if gv.vehicle_catalogue.fcai_category == vehicle.fcai_category]
-    highest_rating = 0
-    for gv in same_cat_active:
-        res = calculate_core_rating(gv.vehicle_catalogue, state, priority, mode, {})
-        r = res.get('core_rating', 0) or 0
-        if r > highest_rating:
-            highest_rating = r
+        def is_top_20_percent_highest(val, sorted_list):
+            if not sorted_list or val is None: return False
+            if len(sorted_list) < 5:
+                return val == sorted_list[-1]
+            idx = sum(1 for v in sorted_list if v > val)
+            return (idx / len(sorted_list)) <= 0.20
             
-    if my_rating >= highest_rating and my_rating > 0 and len(same_cat_active) > 0:
-        # Check if it's strictly the single highest or ties allowed. Requirement: "single highest"
-        # We'll just count how many have the highest
-        winners = 0
-        for gv in same_cat_active:
+        ranges_asc = sorted([p.wltp_range_km for p in peers if p.wltp_range_km is not None])
+        
+        gvs_ratings = {}
+        highest_rating = -1
+        for gv in gvs:
             res = calculate_core_rating(gv.vehicle_catalogue, state, priority, mode, {})
-            if (res.get('core_rating', 0) or 0) == highest_rating:
-                winners += 1
-        if winners == 1 and my_rating == highest_rating:
-            is_category_sweep = True
-
-    # Core All Stars
-    modes = ['pure_cost', 'cool_choice', 'true_value', 'full_picture']
-    is_core_all_stars = True
-    for m in modes:
-        res = calculate_core_rating(vehicle, state, priority, m, {})
-        rating = res.get('core_rating', 0) or 0
-        if rating < 4.0:
-            is_core_all_stars = False
-            break
+            r = res.get('core_rating', 0) or 0
+            gvs_ratings[gv.id] = r
+            if r > highest_rating:
+                highest_rating = r
+                
+        for gv in gvs:
+            vehicle = gv.vehicle_catalogue
+            vid = str(gv.id)
             
-    badges = {}
-    if is_range_king: badges['range_kings'] = True
-    if is_green_and_lean: badges['green_and_lean'] = True
-    if is_unicorn_match: badges['unicorn_match'] = True
-    if is_category_sweep: badges['category_sweep'] = True
-    if is_core_all_stars: badges['core_all_stars'] = True
+            # Range Kings
+            my_range = vehicle.wltp_range_km
+            if my_range is not None:
+                if my_range in ranges[:3]:
+                    rank = ranges.index(my_range) + 1
+                    results[vid]['range_kings'] = {
+                        "badge_name": "Range Kings™",
+                        "badge_slug": "range_kings",
+                        "earned": True,
+                        "reason": f"Top {_get_ordinal(rank)} in {cat} by driving range among your saved vehicles"
+                    }
+                    
+            # Green & Lean
+            my_cost_res = calculate_core_rating(vehicle, state, priority, "pure_cost", {})
+            my_cost_5yr = vehicle.total_5yr_cost_of_ownership_by_state.get(state)
+            my_cost = (my_cost_5yr / 5.0) if my_cost_5yr else my_cost_res['total_annual_cost']
+            my_co2 = vehicle.tailpipe_co2_g_per_km if vehicle.tailpipe_co2_g_per_km is not None else 0
+            
+            if is_top_20_percent_lowest(my_co2, peer_co2) and is_top_20_percent_lowest(my_cost, peer_costs):
+                results[vid]['green_and_lean'] = {
+                    "badge_name": "Green & Lean™",
+                    "badge_slug": "green_and_lean",
+                    "earned": True,
+                    "reason": f"Low emissions and low estimated running cost in {cat} among your saved vehicles"
+                }
+                
+            # Unicorn Match
+            fits_budget = True
+            if budget is not None:
+                driveaway = vehicle.driveaway_price_by_state.get(state, 0)
+                if driveaway > budget:
+                    fits_budget = False
+            
+            if my_range is not None and is_top_20_percent_highest(my_range, ranges_asc) and is_top_20_percent_lowest(my_co2, peer_co2) and fits_budget:
+                results[vid]['unicorn_match'] = {
+                    "badge_name": "Unicorn Match™",
+                    "badge_slug": "unicorn_match",
+                    "earned": True,
+                    "reason": f"Strong range, low emissions, and fits your budget in {cat} among your saved vehicles"
+                }
+                
+            # Category Sweep
+            if highest_rating > 0 and gvs_ratings[gv.id] == highest_rating:
+                results[vid]['category_sweep'] = {
+                    "badge_name": "Category Sweep™",
+                    "badge_slug": "category_sweep",
+                    "earned": True,
+                    "reason": f"Highest CORE Rating in {cat} among your saved vehicles"
+                }
+                
+    # CORE All-Stars via internal batch endpoint request
+    from apps.vehicles.views import CoreRatingBatchView
+    from rest_framework.test import APIRequestFactory
+    import json
     
-    return badges if badges else None
+    factory = APIRequestFactory()
+    vehicle_ids = [str(gv.vehicle_catalogue_id) for gv in active_garage_vehicles]
+    all_stars_scores = {str(gv.id): True for gv in active_garage_vehicles}
+    
+    modes = ['pure_cost', 'cool_choice', 'true_value', 'full_picture']
+    for m in modes:
+        payload = {
+            "vehicle_ids": vehicle_ids,
+            "state": state,
+            "priority_slider": priority,
+            "core_mode": m,
+            "current_vehicle_annual_cost": current_cost
+        }
+        request = factory.post('/api/core-rating/batch/', data=json.dumps(payload), content_type='application/json')
+        request.user = user
+        response = CoreRatingBatchView.as_view()(request)
+        if response.status_code == 200:
+            data_list = response.data.get('data', [])
+            score_map = {str(d['vehicle_id']): (d.get('core_rating', 0) or 0) for d in data_list}
+            for gv in active_garage_vehicles:
+                v_cat_id = str(gv.vehicle_catalogue_id)
+                rating = score_map.get(v_cat_id, 0)
+                if rating < 4.0:
+                    all_stars_scores[str(gv.id)] = False
+        else:
+            for gv in active_garage_vehicles:
+                all_stars_scores[str(gv.id)] = False
+                
+    for gv in active_garage_vehicles:
+        vid = str(gv.id)
+        if all_stars_scores[vid]:
+            results[vid]['core_all_stars'] = {
+                "badge_name": "CORE All-Stars™",
+                "badge_slug": "core_all_stars",
+                "earned": True,
+                "reason": "Scores 4★ or above across all four CORE views"
+            }
+            
+    return results
 
 
 import logging

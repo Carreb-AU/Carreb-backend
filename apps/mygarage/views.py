@@ -2,6 +2,7 @@ from rest_framework import views, status, generics
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
+from django.core.cache import cache
 from django.db import models
 from django.shortcuts import get_object_or_404
 from apps.mygarage.models import (
@@ -137,6 +138,7 @@ class CurrentVehicleView(views.APIView):
             state = UserPriorityState.objects.create(user=request.user)
             
         resp = _build_calculated_vehicle_response(request.user, cv, state, is_current_vehicle=True)
+        cache.delete(f"spotlights_{request.user.id}")
         return Response(resp)
 
 class CurrentVehicleSearchView(views.APIView):
@@ -178,6 +180,7 @@ class CurrentVehicleDetailsView(views.APIView):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_field_overridden', {'field_name': serializer.validated_data['field_name']})
             
         state = getattr(request.user, 'priority_state', None)
+        cache.delete(f"spotlights_{request.user.id}")
         return Response(_build_calculated_vehicle_response(request.user, cv, state, is_current_vehicle=True))
 
 class CurrentVehicleOverrideDeleteView(views.APIView):
@@ -194,6 +197,7 @@ class CurrentVehicleOverrideDeleteView(views.APIView):
             return Response({"detail": "Override not found"}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
             
         state = getattr(request.user, 'priority_state', None)
+        cache.delete(f"spotlights_{request.user.id}")
         return Response(_build_calculated_vehicle_response(request.user, cv, state, is_current_vehicle=True))
 
 class CurrentVehicleAutoFillView(views.APIView):
@@ -346,6 +350,7 @@ class GarageVehicleListView(views.APIView):
         if getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_added_to_garage', {})
             
+        cache.delete(f"spotlights_{request.user.id}")
         return Response(GarageVehicleSerializer(gv).data, status=status.HTTP_201_CREATED)
 
 class GarageVehicleDetailView(views.APIView):
@@ -406,6 +411,7 @@ class GarageVehicleArchiveView(views.APIView):
         if getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_archived', {})
             
+        cache.delete(f"spotlights_{request.user.id}")
         return Response({"status": "archived"})
 
 class GarageVehicleUnarchiveView(views.APIView):
@@ -430,6 +436,7 @@ class GarageVehicleUnarchiveView(views.APIView):
         if getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_unarchived', {})
             
+        cache.delete(f"spotlights_{request.user.id}")
         return Response({"status": "active"})
 
 class GarageVehicleDeleteView(views.APIView):
@@ -497,6 +504,7 @@ class PriorityStateView(views.APIView):
                 if b_key in bands:
                     bands[b_key] += 1
                     
+        cache.delete(f"spotlights_{request.user.id}")
         return Response({"state": serializer.data, "band_counts": bands})
 
 class CoreDialBandBreakdownView(views.APIView):
@@ -558,9 +566,23 @@ class SpotlightsView(views.APIView):
     
     def get(self, request):
         if request.user.subscription_tier == SubscriptionTier.FREE:
-            return Response({"detail": "Spotlights locked on free tier"}, status=status.HTTP_403_FORBIDDEN)
+            return Response({
+                "error": "spotlights_locked",
+                "message": "Spotlight badges are available on Car Buying Sprint and above.",
+                "upgrade_required": True,
+                "minimum_plan": "car_buying_sprint"
+            }, status=status.HTTP_403_FORBIDDEN)
             
-        qs = GarageVehicle.objects.filter(user=request.user, status=GarageVehicleStatus.ACTIVE)
+        cache_key = f"spotlights_{request.user.id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+            
+        qs = GarageVehicle.objects.filter(
+            user=request.user, 
+            status=GarageVehicleStatus.ACTIVE
+        ).select_related('vehicle_catalogue')
+        
         user_state = getattr(request.user, 'priority_state', None)
         
         cv = getattr(request.user, 'current_vehicle', None)
@@ -572,11 +594,9 @@ class SpotlightsView(views.APIView):
             cv_resp = _build_calculated_vehicle_response(request.user, cv, user_state, is_current_vehicle=True)
             cv_cost = cv_resp['engine_data'].get('total_annual_cost') if cv_resp.get('engine_data') else None
             
-        results = {}
-        for gv in qs:
-            badges = calculate_spotlights(gv, user_state, s, cv_cost, list(qs))
-            results[str(gv.id)] = badges
-            
+        results = calculate_spotlights(list(qs), user_state, s, cv_cost)
+        
+        cache.set(cache_key, results, 300)
         return Response(results)
 
 class AISmartMatchView(views.APIView):
