@@ -172,6 +172,10 @@ def process_stripe_webhook(payload, sig_header):
                 purchase_type = parts[1]
         
         if user_id and purchase_type:
+            if purchase_type not in ['single', 'bundle']:
+                from apps.billing.services import process_stripe_webhook_event
+                return process_stripe_webhook_event(payload, sig_header)
+                
             try:
                 with transaction.atomic():
                     credits = RideRevealCredit.objects.select_for_update().get(user_id=user_id)
