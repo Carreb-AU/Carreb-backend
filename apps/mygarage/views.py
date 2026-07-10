@@ -689,12 +689,18 @@ class AISmartMatchView(views.APIView):
         
         if filters.get('body_styles'):
             bss = _ensure_list(filters['body_styles'])
-            queryset = queryset.filter(body_style__in=[b.lower() for b in bss])
+            q = models.Q()
+            for b in bss:
+                q |= models.Q(body_style__iexact=b)
+            queryset = queryset.filter(q)
         elif filters.get('primary_use'):
             use = filters['primary_use'].lower()
             bss = PRIMARY_USE_BODY_STYLES.get(use, [])
             if bss:
-                queryset = queryset.filter(body_style__in=bss)
+                q = models.Q()
+                for b in bss:
+                    q |= models.Q(body_style__iexact=b)
+                queryset = queryset.filter(q)
                 
         if filters.get('fcai_categories'):
             fcs = _ensure_list(filters['fcai_categories'])
@@ -748,6 +754,7 @@ class AISmartMatchView(views.APIView):
         unique_vehicles = [v for _, v in cheapest_variants.values()]
 
         scored_vehicles = []
+        category_metrics_cache = {}
         for v in unique_vehicles:
             driveaway = v.driveaway_price_by_state.get(state)
             
@@ -756,7 +763,15 @@ class AISmartMatchView(views.APIView):
             if filters.get('budget_min') and driveaway and driveaway < filters['budget_min'] * 100:
                 continue
                 
-            res = calculate_core_rating(v, state, priority, mode, {}, current_vehicle_annual_cost=cv_cost)
+            res = calculate_core_rating(
+                vehicle=v,
+                state=state,
+                priority_slider=priority,
+                core_mode=mode,
+                user_inputs={},
+                current_vehicle_annual_cost=cv_cost,
+                category_metrics_cache=category_metrics_cache
+            )
             rating = res.get('core_rating', 0)
             
             if filters.get('core_rating_min') and (not rating or rating < filters['core_rating_min']):
