@@ -9,6 +9,8 @@ from apps.users.models import (
     TwoFactorChallenge,
     PasswordResetToken,
     AccountDeletionRequest,
+    NotificationPreference,
+    FCMDevice,
 )
 
 
@@ -161,3 +163,18 @@ class AccountDeletionRequestAdmin(admin.ModelAdmin):
             "fields": ("scheduled_deletion_at", "executed_at"),
         }),
     )
+
+@admin.register(NotificationPreference)
+class NotificationPreferenceAdmin(admin.ModelAdmin):
+    list_display = ["user", "email_marketing_enabled", "app_notifications_enabled", "sms_notifications_enabled"]
+    search_fields = ["user__email"]
+    raw_id_fields = ["user"]
+    readonly_fields = ["created_at", "updated_at"]
+
+@admin.register(FCMDevice)
+class FCMDeviceAdmin(admin.ModelAdmin):
+    list_display = ["user", "device_type", "device_id", "created_at"]
+    search_fields = ["user__email", "device_id", "fcm_token"]
+    list_filter = ["device_type"]
+    raw_id_fields = ["user"]
+    readonly_fields = ["id", "created_at", "updated_at"]
