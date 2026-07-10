@@ -153,11 +153,24 @@ def process_stripe_webhook(payload, sig_header):
         logger.error(f"Stripe webhook error: {e}")
         return False
 
-    if event['type'] in ['payment_intent.succeeded', 'checkout.session.completed']:
+    if event['type'] in ['payment_intent.succeeded', 'checkout.session.completed', 'invoice.paid', 'invoice.payment_failed', 'customer.subscription.updated', 'customer.subscription.deleted']:
         intent_or_session = event['data']['object']
         if hasattr(intent_or_session, 'to_dict'):
             intent_or_session = intent_or_session.to_dict()
             
+        if event['type'] in ['invoice.paid', 'invoice.payment_failed', 'customer.subscription.updated', 'customer.subscription.deleted']:
+            # Forward directly to billing handlers without re-verifying signature
+            from apps.billing.services import _handle_invoice_paid, _handle_invoice_payment_failed, _handle_subscription_updated, _handle_subscription_deleted
+            if event['type'] == 'invoice.paid':
+                _handle_invoice_paid(intent_or_session)
+            elif event['type'] == 'invoice.payment_failed':
+                _handle_invoice_payment_failed(intent_or_session)
+            elif event['type'] == 'customer.subscription.updated':
+                _handle_subscription_updated(intent_or_session)
+            elif event['type'] == 'customer.subscription.deleted':
+                _handle_subscription_deleted(intent_or_session)
+            return True
+
         metadata = intent_or_session.get('metadata') or {}
         user_id = metadata.get('user_id')
         purchase_type = metadata.get('purchase_type')

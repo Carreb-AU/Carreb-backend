@@ -136,8 +136,8 @@ def process_stripe_webhook_event(payload, sig_header):
                 _handle_payment_intent_succeeded(obj)
             elif event_type == 'checkout.session.completed':
                 _handle_checkout_session_completed(obj)
-            elif event_type == 'invoice.payment_succeeded':
-                _handle_invoice_payment_succeeded(obj)
+            elif event_type == 'invoice.paid':
+                _handle_invoice_paid(obj)
             elif event_type == 'invoice.payment_failed':
                 _handle_invoice_payment_failed(obj)
             elif event_type == 'customer.subscription.updated':
@@ -279,7 +279,7 @@ def _handle_payment_intent_succeeded(intent):
         _enforce_vehicle_limits(user)
         # TODO: Queue email (plan activation confirmation)
 
-def _handle_invoice_payment_succeeded(invoice):
+def _handle_invoice_paid(invoice):
     sub_id = invoice.get('subscription')
     customer_id = invoice.get('customer')
     if not sub_id:
