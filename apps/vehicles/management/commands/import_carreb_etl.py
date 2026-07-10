@@ -156,6 +156,7 @@ class Command(BaseCommand):
                 engine_l, drive = None, ''
                 is_scoring_outlier = False
                 scoring_version = ''
+                image_url = ''
                 
                 if data_row is not None:
                     fuel_eff = self._safe_float(data_row.get('Fuel Eff (L/100km)'))
@@ -168,6 +169,7 @@ class Command(BaseCommand):
                     drive = self._safe_str(data_row.get('Drive'))
                     is_scoring_outlier = self._safe_bool(data_row.get('is_scoring_outlier'))
                     scoring_version = self._safe_str(data_row.get('scoring_version'))
+                    image_url = self._safe_str(data_row.get('Image url '))
                 
                 v = Vehicle(
                     brand=self._safe_str(make),
@@ -175,6 +177,7 @@ class Command(BaseCommand):
                     year=self._safe_int(year) or 2026,
                     variant=self._safe_str(variant),
                     body_style=body_type,
+                    image_url=image_url if image_url else None,
                     num_seats=5,
                     powertrain_type=self.map_powertrain(fuel_type),
                     

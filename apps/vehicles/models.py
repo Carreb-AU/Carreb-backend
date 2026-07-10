@@ -24,6 +24,7 @@ class Vehicle(models.Model):
     year = models.IntegerField()
     variant = models.CharField(max_length=255)
     body_style = models.CharField(max_length=100)
+    image_url = models.URLField(max_length=500, blank=True, null=True)
     num_seats = models.IntegerField(default=5)
     powertrain_type = models.CharField(max_length=50, choices=PowertrainType.choices)
     fcai_category = models.CharField(max_length=100)

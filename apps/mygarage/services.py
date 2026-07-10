@@ -109,6 +109,17 @@ def calculate_spotlights(active_garage_vehicles, user_priority_state, state, cur
                 
         for gv in gvs:
             vehicle = gv.vehicle_catalogue
+            vehicle_data = {
+                "id": str(vehicle.id),
+                "brand": vehicle.brand,
+                "model": vehicle.model,
+                "year": vehicle.year,
+                "variant": vehicle.variant,
+                "powertrain_type": vehicle.powertrain_type,
+                "body_style": vehicle.body_style,
+                "num_seats": vehicle.num_seats,
+                "image_url": vehicle.image_url,
+            }
             vid = str(gv.id)
             
             # Range Kings

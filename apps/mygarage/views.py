@@ -51,6 +51,9 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         cv = getattr(user, 'current_vehicle', None)
         state = cv.state if cv and cv.state else 'NSW'
         catalogue = vehicle_instance.vehicle_catalogue
+        
+    if catalogue and base_data:
+        base_data['image_url'] = catalogue.image_url
 
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
     
