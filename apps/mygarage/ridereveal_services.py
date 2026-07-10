@@ -155,6 +155,9 @@ def process_stripe_webhook(payload, sig_header):
 
     if event['type'] in ['payment_intent.succeeded', 'checkout.session.completed']:
         intent_or_session = event['data']['object']
+        if hasattr(intent_or_session, 'to_dict'):
+            intent_or_session = intent_or_session.to_dict()
+            
         metadata = intent_or_session.get('metadata') or {}
         user_id = metadata.get('user_id')
         purchase_type = metadata.get('purchase_type')

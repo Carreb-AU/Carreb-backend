@@ -128,18 +128,22 @@ def process_stripe_webhook_event(payload, sig_header):
         
     try:
         with transaction.atomic():
+            obj = event.get('data', {}).get('object', {})
+            if hasattr(obj, 'to_dict'):
+                obj = obj.to_dict()
+                
             if event_type == 'payment_intent.succeeded':
-                _handle_payment_intent_succeeded(event.get('data', {}).get('object', {}))
+                _handle_payment_intent_succeeded(obj)
             elif event_type == 'checkout.session.completed':
-                _handle_checkout_session_completed(event.get('data', {}).get('object', {}))
+                _handle_checkout_session_completed(obj)
             elif event_type == 'invoice.payment_succeeded':
-                _handle_invoice_payment_succeeded(event.get('data', {}).get('object', {}))
+                _handle_invoice_payment_succeeded(obj)
             elif event_type == 'invoice.payment_failed':
-                _handle_invoice_payment_failed(event.get('data', {}).get('object', {}))
+                _handle_invoice_payment_failed(obj)
             elif event_type == 'customer.subscription.updated':
-                _handle_subscription_updated(event.get('data', {}).get('object', {}))
+                _handle_subscription_updated(obj)
             elif event_type == 'customer.subscription.deleted':
-                _handle_subscription_deleted(event.get('data', {}).get('object', {}))
+                _handle_subscription_deleted(obj)
             elif event_type in ['payment_method.attached', 'payment_method.detached']:
                 pass # Informational only
                 
