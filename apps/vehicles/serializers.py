@@ -6,7 +6,9 @@ class VehicleListSerializer(serializers.ModelSerializer):
         model = Vehicle
         fields = [
             'id', 'brand', 'model', 'year', 'variant', 'body_style',
-            'num_seats', 'powertrain_type', 'fcai_category', 'ancap_safety_rating'
+            'num_seats', 'powertrain_type', 'fcai_category', 'fcai_broad', 
+            'ancap_safety_rating', 'energy_norm', 'drive', 'engine_l', 
+            'battery_kwh', 'is_scoring_outlier', 'scoring_version'
         ]
 
 class VehicleDetailSerializer(serializers.ModelSerializer):

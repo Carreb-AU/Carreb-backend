@@ -26,6 +26,7 @@ class VehicleAdmin(admin.ModelAdmin):
         "fcai_category",
         "ancap_safety_rating",
         "test_cycle",
+        "is_scoring_outlier",
     ]
     search_fields = ["brand", "model", "variant", "fcai_category"]
     ordering = ["brand", "model", "year", "variant"]
@@ -38,12 +39,13 @@ class VehicleAdmin(admin.ModelAdmin):
                 "id",
                 "brand", "model", "year", "variant",
                 "body_style", "num_seats",
-                "powertrain_type", "fcai_category",
-                "ancap_safety_rating",
+                "powertrain_type", "fcai_category", "fcai_broad",
+                "ancap_safety_rating", "is_scoring_outlier", "scoring_version",
             ),
         }),
-        ("Emissions & Efficiency", {
+        ("Emissions, Efficiency & Specs", {
             "fields": (
+                "engine_l", "battery_kwh", "drive", "energy_norm",
                 "fuel_consumption_per_100km",
                 "electricity_consumption_per_100km",
                 "tailpipe_co2_g_per_km",
@@ -64,6 +66,17 @@ class VehicleAdmin(admin.ModelAdmin):
                 "insurance_estimate_by_state",
                 "ctp_by_state",
                 "registration_by_state",
+                "fuel_cost_by_state",
+                "electricity_cost_by_state",
+                "ev_levy_by_state",
+                "base_coo_by_state",
+                "components_sum_by_state",
+            ),
+        }),
+        ("Advanced Mode Data by State", {
+            "classes": ("collapse",),
+            "fields": (
+                "mode_data_by_state",
             ),
         }),
         ("5-Year Cost Estimates (cents)", {
