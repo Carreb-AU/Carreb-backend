@@ -9,6 +9,7 @@ State mutations and complex business logic live here.
 """
 
 import logging
+import random
 from typing import Optional
 
 from django.db import transaction
@@ -43,16 +44,24 @@ PRIORITY_TO_SLIDER = {
 def _score_and_pick_best(candidates, state: str, priority_slider: int) -> Optional[Vehicle]:
     """
     Score each candidate with the CORE Rating Engine and return
-    the single highest-scoring vehicle.
+    a single highest-scoring vehicle. Break ties randomly across models.
     """
     if not candidates:
         return None
 
-    best_vehicle = None
     best_score = -1.0
+    best_vehicles = []
     category_metrics_cache = {}
 
-    for vehicle in candidates:
+    unique_candidates = []
+    seen_models = set()
+    for v in candidates:
+        model_key = (v.brand, v.model, v.year)
+        if model_key not in seen_models:
+            seen_models.add(model_key)
+            unique_candidates.append(v)
+
+    for vehicle in unique_candidates:
         try:
             result = calculate_core_rating(
                 vehicle=vehicle,
@@ -68,11 +77,16 @@ def _score_and_pick_best(candidates, state: str, priority_slider: int) -> Option
                 continue
             if rating > best_score:
                 best_score = rating
-                best_vehicle = vehicle
+                best_vehicles = [vehicle]
+            elif rating == best_score:
+                best_vehicles.append(vehicle)
         except Exception:
             logger.exception("CORE Rating Engine error for vehicle %s — skipping", vehicle.id)
 
-    return best_vehicle
+    if not best_vehicles:
+        return None
+        
+    return random.choice(best_vehicles)
 
 
 # ── Match Logic ──────────────────────────────────────────────────────────────
