@@ -115,6 +115,9 @@ def process_stripe_webhook_event(payload, sig_header):
         logger.error(f"Stripe webhook error: {e}")
         return False
 
+    if hasattr(event, 'to_dict'):
+        event = event.to_dict()
+        
     stripe_event_id = event.get('id')
     event_type = event.get('type')
     
@@ -256,6 +259,8 @@ def _handle_payment_intent_succeeded(intent):
         if payment_method_id:
             try:
                 pm = stripe.PaymentMethod.retrieve(payment_method_id)
+                if hasattr(pm, 'to_dict'):
+                    pm = pm.to_dict()
                 if pm and pm.get('card'):
                     brand = pm['card'].get('brand')
                     last4 = pm['card'].get('last4')
@@ -287,6 +292,9 @@ def _handle_invoice_paid(invoice):
         
     try:
         stripe_sub = stripe.Subscription.retrieve(sub_id)
+        if hasattr(stripe_sub, 'to_dict'):
+            stripe_sub = stripe_sub.to_dict()
+            
         metadata = stripe_sub.get('metadata', {})
         user_id = metadata.get('user_id')
         plan_type = metadata.get('plan_type')
@@ -325,6 +333,8 @@ def _handle_invoice_paid(invoice):
         if pi_id:
             try:
                 pi = stripe.PaymentIntent.retrieve(pi_id, expand=['payment_method'])
+                if hasattr(pi, 'to_dict'):
+                    pi = pi.to_dict()
                 pm = pi.get('payment_method')
                 if pm and isinstance(pm, dict) and pm.get('card'):
                     brand = pm['card'].get('brand')
