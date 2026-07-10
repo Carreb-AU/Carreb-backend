@@ -173,8 +173,14 @@ def process_stripe_webhook(payload, sig_header):
         
         if user_id and purchase_type:
             if purchase_type not in ['single', 'bundle']:
-                from apps.billing.services import process_stripe_webhook_event
-                return process_stripe_webhook_event(payload, sig_header)
+                from apps.billing.services import _handle_checkout_session_completed, _handle_payment_intent_succeeded
+                
+                if event['type'] == 'checkout.session.completed':
+                    _handle_checkout_session_completed(intent_or_session)
+                elif event['type'] == 'payment_intent.succeeded':
+                    _handle_payment_intent_succeeded(intent_or_session)
+                
+                return True
                 
             try:
                 with transaction.atomic():
