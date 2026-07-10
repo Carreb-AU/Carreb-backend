@@ -209,17 +209,16 @@ def _handle_checkout_session_completed(session):
         plan.save()
         _sync_user_subscription_tier(user, plan_type)
         
-        # Note: We don't create PaymentRecord here if it's a subscription, 
-        # because invoice.payment_succeeded will fire and handle the payment record cleanly.
-        # But if it's a one-off payment (mode='payment'), we should create it.
-        if session.get('mode') == 'payment' and session.get('payment_intent'):
-            intent_id = session.get('payment_intent')
+        # Create PaymentRecord for initial payment to avoid invoice.paid race conditions
+        amount_cents = session.get('amount_total', 0)
+        if amount_cents > 0:
             PaymentRecord.objects.get_or_create(
                 user=user,
-                stripe_payment_intent_id=intent_id,
+                stripe_invoice_id=session.get('invoice'),
                 defaults={
-                    'amount_cents': session.get('amount_total'),
-                    'amount_display': f"A${session.get('amount_total', 0) / 100:.2f}",
+                    'stripe_payment_intent_id': session.get('payment_intent'),
+                    'amount_cents': amount_cents,
+                    'amount_display': f"A${amount_cents / 100:.2f}",
                     'currency': session.get('currency', 'aud'),
                     'plan_type': plan_type,
                     'purchase_type': PurchaseType.SUBSCRIPTION,
@@ -343,20 +342,22 @@ def _handle_invoice_paid(invoice):
             except Exception as e:
                 logger.warning(f"Could not retrieve payment method for invoice PI {pi_id}: {e}")
 
-        PaymentRecord.objects.create(
+        PaymentRecord.objects.get_or_create(
             user=user,
             stripe_invoice_id=invoice.get('id'),
-            stripe_payment_intent_id=invoice.get('payment_intent'),
-            amount_cents=invoice.get('amount_paid'),
-            amount_display=f"A${invoice.get('amount_paid') / 100:.2f}",
-            currency='aud',
-            plan_type=plan_type,
-            purchase_type=PurchaseType.SUBSCRIPTION,
-            status=PaymentStatus.SUCCEEDED,
-            payment_method_brand=brand,
-            payment_method_last4=last4,
-            invoice_pdf_url=invoice.get('hosted_invoice_url'),
-            paid_at=timezone.now()
+            defaults={
+                'stripe_payment_intent_id': invoice.get('payment_intent'),
+                'amount_cents': invoice.get('amount_paid'),
+                'amount_display': f"A${invoice.get('amount_paid') / 100:.2f}",
+                'currency': 'aud',
+                'plan_type': plan_type,
+                'purchase_type': PurchaseType.SUBSCRIPTION,
+                'status': PaymentStatus.SUCCEEDED,
+                'payment_method_brand': brand,
+                'payment_method_last4': last4,
+                'invoice_pdf_url': invoice.get('hosted_invoice_url'),
+                'paid_at': timezone.now()
+            }
         )
         
         _enforce_vehicle_limits(user)
