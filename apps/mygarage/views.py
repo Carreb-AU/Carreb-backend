@@ -678,9 +678,24 @@ class AISmartMatchView(views.APIView):
         if filters.get('powertrain_types'):
             pts = _ensure_list(filters['powertrain_types'])
             queryset = queryset.filter(powertrain_type__in=[p.lower() for p in pts])
+            
+        PRIMARY_USE_BODY_STYLES = {
+            'city_commuter':  ["hatchback", "sedan"],
+            'family_car':     ["suv", "wagon"],
+            'mixed_use':      ["suv", "hatchback"],
+            'long_distance':  ["suv", "sedan"],
+            'work_vehicle':   ["ute", "van"],
+        }
+        
         if filters.get('body_styles'):
             bss = _ensure_list(filters['body_styles'])
             queryset = queryset.filter(body_style__in=[b.lower() for b in bss])
+        elif filters.get('primary_use'):
+            use = filters['primary_use'].lower()
+            bss = PRIMARY_USE_BODY_STYLES.get(use, [])
+            if bss:
+                queryset = queryset.filter(body_style__in=bss)
+                
         if filters.get('fcai_categories'):
             fcs = _ensure_list(filters['fcai_categories'])
             queryset = queryset.filter(fcai_category__in=fcs)
@@ -699,9 +714,41 @@ class AISmartMatchView(views.APIView):
         if cv and cv.vehicle_catalogue:
             cv_resp = calculate_core_rating(cv.vehicle_catalogue, state, priority, mode, {})
             cv_cost = cv_resp.get('total_annual_cost')
+            
+        all_vehicles = list(queryset)
+        mode_map = {
+            'pure_cost': 'B',
+            'cool_choice': 'C',
+            'true_value': 'E',
+            'full_picture': 'F'
+        }
+        mode_letter = mode_map.get(mode, 'B')
+        
+        cheapest_variants = {}
+        for vehicle in all_vehicles:
+            val = float('inf')
+            try:
+                state_data = vehicle.mode_data_by_state.get(state, {})
+                if isinstance(state_data, dict):
+                    mode_data = state_data.get(mode_letter, {})
+                    if isinstance(mode_data, dict):
+                        coo = mode_data.get("mode_5yr_coo")
+                        if coo is not None:
+                            val = float(coo)
+            except (AttributeError, ValueError, TypeError):
+                pass
+            
+            key = (vehicle.brand, vehicle.model, vehicle.year)
+            if key not in cheapest_variants:
+                cheapest_variants[key] = (val, vehicle)
+            else:
+                if val < cheapest_variants[key][0]:
+                    cheapest_variants[key] = (val, vehicle)
+                    
+        unique_vehicles = [v for _, v in cheapest_variants.values()]
 
         scored_vehicles = []
-        for v in queryset:
+        for v in unique_vehicles:
             driveaway = v.driveaway_price_by_state.get(state)
             
             if filters.get('budget_max') and driveaway and driveaway > filters['budget_max'] * 100:
@@ -751,6 +798,7 @@ class AISmartMatchView(views.APIView):
             })
             
         scored_vehicles.sort(key=lambda x: x['core_rating'] or 0, reverse=True)
+        scored_vehicles = scored_vehicles[:10]
         
         if not scored_vehicles:
             return Response({
