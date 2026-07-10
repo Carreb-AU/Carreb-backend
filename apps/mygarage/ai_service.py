@@ -62,7 +62,8 @@ def build_recommendation_reason(interpreted_filters, vehicle):
     
     pt_filter = interpreted_filters.get('powertrain_types')
     if pt_filter and getattr(vehicle, 'powertrain_type', None):
-        if vehicle.powertrain_type.lower() in [p.lower() for p in pt_filter]:
+        pts = pt_filter if isinstance(pt_filter, list) else [pt_filter]
+        if vehicle.powertrain_type.lower() in [p.lower() for p in pts]:
             if vehicle.powertrain_type.lower() == 'bev':
                 reasons.append("Battery electric")
             else:
@@ -81,7 +82,8 @@ def build_recommendation_reason(interpreted_filters, vehicle):
     if use_case:
         reasons.append(f"suits your {use_case.replace('_', ' ')} use case")
     elif interpreted_filters.get('body_styles') and getattr(vehicle, 'body_style', None):
-        if vehicle.body_style.lower() in [b.lower() for b in interpreted_filters['body_styles']]:
+        bss = interpreted_filters['body_styles'] if isinstance(interpreted_filters['body_styles'], list) else [interpreted_filters['body_styles']]
+        if vehicle.body_style.lower() in [b.lower() for b in bss]:
             reasons.append(f"{vehicle.body_style.title()}")
             
     if interpreted_filters.get('num_seats_min'):

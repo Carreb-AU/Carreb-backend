@@ -651,12 +651,20 @@ class AISmartMatchView(views.APIView):
         # Step 4: Query vehicles
         queryset = Vehicle.objects.all()
         
+        def _ensure_list(val):
+            if isinstance(val, str):
+                return [val]
+            return val if isinstance(val, list) else []
+
         if filters.get('powertrain_types'):
-            queryset = queryset.filter(powertrain_type__in=[p.lower() for p in filters['powertrain_types']])
+            pts = _ensure_list(filters['powertrain_types'])
+            queryset = queryset.filter(powertrain_type__in=[p.lower() for p in pts])
         if filters.get('body_styles'):
-            queryset = queryset.filter(body_style__in=[b.lower() for b in filters['body_styles']])
+            bss = _ensure_list(filters['body_styles'])
+            queryset = queryset.filter(body_style__in=[b.lower() for b in bss])
         if filters.get('fcai_categories'):
-            queryset = queryset.filter(fcai_category__in=filters['fcai_categories'])
+            fcs = _ensure_list(filters['fcai_categories'])
+            queryset = queryset.filter(fcai_category__in=fcs)
         if filters.get('num_seats_min'):
             queryset = queryset.filter(num_seats__gte=filters['num_seats_min'])
         if filters.get('ancap_rating_min'):
