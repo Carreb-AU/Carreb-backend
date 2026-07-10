@@ -106,9 +106,22 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> Optional[Vehicle]:
         if vehicle:
             return vehicle
 
-    # ── Attempt 2: fuel only (relax body style, budget, etc) ──────────────────────────
+    # ── Attempt 1.5: relax budget and nice-to-have features ───────────────────
     logger.info(
-        "Free match wizard: no results with specific filters — relaxing (session %s)",
+        "Free match wizard: no results with specific filters — relaxing budget & ANCAP (session %s)",
+        session.session_token[:8],
+    )
+    from apps.freematch.selectors import get_freematch_candidates_relaxed
+    candidates = list(get_freematch_candidates_relaxed(session))
+
+    if candidates:
+        vehicle = _score_and_pick_best(candidates, state, priority_slider)
+        if vehicle:
+            return vehicle
+
+    # ── Attempt 2: fuel only (relax body style, seating, etc) ──────────────────────────
+    logger.info(
+        "Free match wizard: no results with relaxed filters — dropping to fuel only (session %s)",
         session.session_token[:8],
     )
     candidates = list(get_freematch_candidates_fuel_only(session.fuel_type_preference))

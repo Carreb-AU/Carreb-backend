@@ -69,6 +69,36 @@ def get_freematch_candidates_base() -> QuerySet[Vehicle]:
     """
     return Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV)
 
+def get_freematch_candidates_relaxed(session: FreeMatchSession) -> QuerySet[Vehicle]:
+    """
+    Returns candidates with relaxed constraints (drops budget, ANCAP, towing).
+    Keeps fundamental requirements: body style, seating (if possible), and fuel type.
+    """
+    qs = Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV)
+    
+    # Fuel Preference
+    fuel_pref = session.fuel_type_preference
+    if fuel_pref and fuel_pref != FuelTypePreference.NO_PREFERENCE:
+        qs = qs.filter(powertrain_type=fuel_pref)
+        
+    # Style / Shape
+    if session.style_preference:
+        qs = qs.filter(body_style__icontains=session.style_preference)
+    elif session.primary_use:
+        body_styles = PRIMARY_USE_BODY_STYLES.get(session.primary_use, [])
+        if body_styles:
+            q = Q()
+            for style in body_styles:
+                q |= Q(body_style__icontains=style)
+            qs = qs.filter(q)
+            
+    # Seating (only enforce if there is at least one vehicle that meets it)
+    if session.seating_preference:
+        if qs.filter(num_seats__gte=session.seating_preference).exists():
+            qs = qs.filter(num_seats__gte=session.seating_preference)
+            
+    return qs
+
 def get_freematch_candidates_fuel_only(fuel_pref: Optional[str]) -> QuerySet[Vehicle]:
     """
     Returns candidate queryset with only the fuel filter applied.
