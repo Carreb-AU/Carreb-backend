@@ -27,6 +27,12 @@ class Vehicle(models.Model):
     num_seats = models.IntegerField(default=5)
     powertrain_type = models.CharField(max_length=50, choices=PowertrainType.choices)
     fcai_category = models.CharField(max_length=100)
+    fcai_broad = models.CharField(max_length=100, blank=True)
+    energy_norm = models.CharField(max_length=50, blank=True)
+    drive = models.CharField(max_length=50, blank=True)
+    engine_l = models.FloatField(null=True, blank=True)
+    battery_kwh = models.FloatField(null=True, blank=True)
+    
     ancap_safety_rating = models.IntegerField(null=True, blank=True)
     driveaway_price_by_state = models.JSONField(default=dict)
     
@@ -44,6 +50,16 @@ class Vehicle(models.Model):
     tyre_replacement_estimate = models.IntegerField(null=True, blank=True)
     resale_value_5yr_estimate = models.IntegerField(null=True, blank=True)
     total_5yr_cost_of_ownership_by_state = models.JSONField(default=dict)
+    
+    fuel_cost_by_state = models.JSONField(default=dict)
+    electricity_cost_by_state = models.JSONField(default=dict)
+    ev_levy_by_state = models.JSONField(default=dict)
+    base_coo_by_state = models.JSONField(default=dict)
+    components_sum_by_state = models.JSONField(default=dict)
+    
+    mode_data_by_state = models.JSONField(default=dict)
+    is_scoring_outlier = models.BooleanField(default=False)
+    scoring_version = models.CharField(max_length=50, blank=True)
     
     provenance = models.JSONField(default=dict) 
     # Example:
