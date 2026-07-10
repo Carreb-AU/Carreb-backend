@@ -108,6 +108,7 @@ class RideRevealResultSerializer(serializers.ModelSerializer):
             'year': vehicle.year,
             'variant': vehicle.variant,
             'powertrain_type': vehicle.powertrain_type,
+            'image_url': vehicle.image_url,
             'core_rating': engine_data.get('core_rating'),
             'band_name': engine_data.get('band_name')
         }

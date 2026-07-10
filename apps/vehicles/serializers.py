@@ -8,7 +8,7 @@ class VehicleListSerializer(serializers.ModelSerializer):
             'id', 'brand', 'model', 'year', 'variant', 'body_style',
             'num_seats', 'powertrain_type', 'fcai_category', 'fcai_broad', 
             'ancap_safety_rating', 'energy_norm', 'drive', 'engine_l', 
-            'battery_kwh', 'is_scoring_outlier', 'scoring_version'
+            'battery_kwh', 'is_scoring_outlier', 'scoring_version', 'image_url'
         ]
 
 class VehicleDetailSerializer(serializers.ModelSerializer):

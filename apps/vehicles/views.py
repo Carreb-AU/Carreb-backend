@@ -142,6 +142,7 @@ class CoreRatingCalculateView(views.APIView):
             budget_min=budget_min, budget_max=budget_max,
             current_vehicle_annual_cost=current_cost
         )
+        result['image_url'] = vehicle.image_url
         
         if request.user.is_authenticated and getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_match_result_viewed', {'vehicle_id': str(vehicle.id), 'core_mode': core_mode})
@@ -196,6 +197,7 @@ class CoreRatingBatchView(views.APIView):
                 category_metrics_cache=category_metrics_cache
             )
             res['vehicle_id'] = str(vid)
+            res['image_url'] = vehicle.image_url
             results.append(res)
             
         return Response({
@@ -257,7 +259,43 @@ class CoreSearchView(views.APIView):
         if fcai_category:
             queryset = queryset.filter(fcai_category__iexact=fcai_category)
             
-        vehicles = list(queryset)
+        all_vehicles = list(queryset)
+        
+        # Deduplicate variants: keep only the cheapest variant per (brand, model, year)
+        # for the requested core_mode and state to optimize processing.
+        mode_map = {
+            'pure_cost': 'B',
+            'cool_choice': 'C',
+            'true_value': 'E',
+            'full_picture': 'F'
+        }
+        mode_letter = mode_map.get(core_mode, 'B')
+        
+        cheapest_variants = {}
+        for vehicle in all_vehicles:
+            val = float('inf')
+            try:
+                # mode_data_by_state is expected to be a dict. 
+                # Path: state -> mode_letter -> "mode_5yr_coo"
+                state_data = vehicle.mode_data_by_state.get(state, {})
+                if isinstance(state_data, dict):
+                    mode_data = state_data.get(mode_letter, {})
+                    if isinstance(mode_data, dict):
+                        coo = mode_data.get("mode_5yr_coo")
+                        if coo is not None:
+                            val = float(coo)
+            except (AttributeError, ValueError, TypeError):
+                pass
+            
+            key = (vehicle.brand, vehicle.model, vehicle.year)
+            if key not in cheapest_variants:
+                cheapest_variants[key] = (val, vehicle)
+            else:
+                if val < cheapest_variants[key][0]:
+                    cheapest_variants[key] = (val, vehicle)
+                    
+        # Extract the optimized unique vehicles
+        vehicles = [v for _, v in cheapest_variants.values()]
         
         results = []
         category_metrics_cache = {}
@@ -287,6 +325,7 @@ class CoreSearchView(views.APIView):
             res['model'] = vehicle.model
             res['year'] = vehicle.year
             res['variant'] = vehicle.variant
+            res['image_url'] = vehicle.image_url
             
             results.append(res)
             
