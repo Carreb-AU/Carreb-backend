@@ -211,23 +211,32 @@ class CurrentVehicleSearchView(views.APIView):
             "name": f"{obj.year} {obj.make} {obj.model} {obj.variant}".strip(),
         }
 
+    def _build_token_query(self, tokens, make_field='make', model_field='model', year_field='year'):
+        """Require every token to match make, model, or year."""
+        q = models.Q()
+        for token in tokens:
+            q &= (
+                models.Q(**{f'{make_field}__icontains': token}) |
+                models.Q(**{f'{model_field}__icontains': token}) |
+                models.Q(**{f'{year_field}__icontains': token})
+            )
+        return q
+
     def post(self, request):
-        query = request.data.get('query', '').lower()
+        query = request.data.get('query', '').lower().strip()
         if not query:
             return Response([])
 
+        tokens = query.split()
+
         # 1. Carreb catalogue (new vehicles)
         carreb_qs = Vehicle.objects.filter(
-            models.Q(brand__icontains=query) |
-            models.Q(model__icontains=query) |
-            models.Q(year__icontains=query)
+            self._build_token_query(tokens, make_field='brand', model_field='model', year_field='year')
         )[:10]
 
         # 2. GVG records (older vehicles)
         gvg_qs = GreenVehicleGuideRecord.objects.filter(
-            models.Q(make__icontains=query) |
-            models.Q(model__icontains=query) |
-            models.Q(year__icontains=query)
+            self._build_token_query(tokens, make_field='make', model_field='model', year_field='year')
         )[:10]
 
         # 3. Merge and dedup by (year, make, model, variant). Prefer Carreb.
