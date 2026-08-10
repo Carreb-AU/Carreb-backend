@@ -105,14 +105,14 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='greenvehicleguiderecord',
-            index=models.Index(fields=['make', 'model', 'year'], name='vehicles_gr_make_mod_yea_9c3d53_idx'),
+            index=models.Index(fields=['make', 'model', 'year'], name='vehicles_gr_make_ddb2d9_idx'),
         ),
         migrations.AddIndex(
             model_name='greenvehicleguiderecord',
-            index=models.Index(fields=['powertrain_type'], name='vehicles_gr_powertr_5c3d53_idx'),
+            index=models.Index(fields=['powertrain_type'], name='vehicles_gr_powertr_f24807_idx'),
         ),
         migrations.AddIndex(
             model_name='greenvehicleguiderecord',
-            index=models.Index(fields=['fcai_category'], name='vehicles_gr_fcai_ca_7a3d53_idx'),
+            index=models.Index(fields=['fcai_category'], name='vehicles_gr_fcai_ca_16c8e1_idx'),
         ),
     ]
