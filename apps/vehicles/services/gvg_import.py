@@ -65,17 +65,18 @@ class VehicleLike:
         self.wltp_range_km = record.electric_range_km
         self.test_cycle = record.test_cycle or 'ADR'
 
-        # Costs by state
+        # Costs by state. GVG records do not store every field that a full Carreb
+        # Vehicle has, so fall back to empty dicts / None and let defaults fill the gaps.
         self.ctp_by_state = record.ctp_by_state or {}
         self.insurance_estimate_by_state = record.insurance_estimate_by_state or {}
         self.registration_by_state = record.registration_by_state or {}
-        self.fuel_cost_by_state = record.fuel_cost_by_state or {}
-        self.electricity_cost_by_state = record.electricity_cost_by_state or {}
-        self.ev_levy_by_state = record.ev_levy_by_state or {}
+        self.fuel_cost_by_state = getattr(record, 'fuel_cost_by_state', None) or {}
+        self.electricity_cost_by_state = getattr(record, 'electricity_cost_by_state', None) or {}
+        self.ev_levy_by_state = getattr(record, 'ev_levy_by_state', None) or {}
         self.base_coo_by_state = record.total_5yr_cost_of_ownership_by_state or {}
         self.components_sum_by_state = record.total_5yr_cost_of_ownership_by_state or {}
         self.total_5yr_cost_of_ownership_by_state = record.total_5yr_cost_of_ownership_by_state or {}
-        self.mode_data_by_state = {}
+        self.mode_data_by_state = getattr(record, 'mode_data_by_state', None) or {}
 
         self._apply_defaults_if_missing()
 
