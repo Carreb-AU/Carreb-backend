@@ -3,7 +3,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
 from django.core.cache import cache
-from django.db import models
+from django.db import models, connection
+from django.contrib.postgres.search import TrigramSimilarity
 from django.shortcuts import get_object_or_404
 from apps.mygarage.models import (
     CurrentVehicle, GarageVehicle, GarageVehicleStatus, GarageVehicleSource,
@@ -211,51 +212,66 @@ class CurrentVehicleSearchView(views.APIView):
             "name": f"{obj.year} {obj.make} {obj.model} {obj.variant}".strip(),
         }
 
-    def _build_token_query(self, tokens, make_field='make', model_field='model', year_field='year'):
-        """Require every token to match make, model, or year."""
-        q = models.Q()
-        for token in tokens:
-            q &= (
-                models.Q(**{f'{make_field}__icontains': token}) |
-                models.Q(**{f'{model_field}__icontains': token}) |
-                models.Q(**{f'{year_field}__icontains': token})
-            )
-        return q
-
     def post(self, request):
-        query = request.data.get('query', '').lower().strip()
+        import re
+        query = (request.data.get('query') or '').strip()
         if not query:
             return Response([])
 
-        tokens = query.split()
+        # Tokenise: a 4-digit token filters year; the rest match brand/model/variant.
+        year_match = re.search(r'\b(19|20)\d{2}\b', query)
+        year = int(year_match.group()) if year_match else None
+        words = [w for w in re.sub(r'\b(19|20)\d{2}\b', ' ', query).split() if w]
 
-        # 1. Carreb catalogue (new vehicles)
-        carreb_qs = Vehicle.objects.filter(
-            self._build_token_query(tokens, make_field='brand', model_field='model', year_field='year')
-        )[:10]
+        def text_filter(qs, brand_field='brand', model_field='model'):
+            for w in words:
+                qs = qs.filter(
+                    models.Q(**{f'{brand_field}__icontains': w}) |
+                    models.Q(**{f'{model_field}__icontains': w})
+                )
+            return qs
 
-        # 2. GVG records (older vehicles)
-        gvg_qs = GreenVehicleGuideRecord.objects.filter(
-            self._build_token_query(tokens, make_field='make', model_field='model', year_field='year')
-        )[:10]
+        results, seen = [], set()
 
-        # 3. Merge and dedup by (year, make, model, variant). Prefer Carreb.
-        seen = set()
-        results = []
+        def identity_key(brand, model_name, variant, yr):
+            return ((brand or '').casefold(), (model_name or '').casefold(),
+                    (variant or '').casefold(), yr)
 
-        for v in carreb_qs:
-            key = (v.year, v.brand.lower(), v.model.lower(), (v.variant or '').lower())
-            if key not in seen:
-                seen.add(key)
-                results.append(self._normalize_result(v, 'carreb'))
+        # 1. Carreb catalogue (new vehicles; preferred on collision)
+        carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
+        if year:
+            carreb_qs = carreb_qs.filter(year=year)
+        for v in carreb_qs.order_by('brand', 'model', '-year')[:10]:
+            seen.add(identity_key(v.brand, v.model, v.variant, v.year))
+            results.append(self._normalize_result(v, 'carreb'))
 
-        for r in gvg_qs:
-            key = (r.year, r.make.lower(), r.model.lower(), (r.variant or '').lower())
-            if key not in seen:
+        # 2. GVG records (older vehicles) - trigram fuzzy type-ahead
+        if len(results) < 10:
+            gvg_qs = GreenVehicleGuideRecord.objects.all()
+            if connection.vendor == 'postgresql':
+                needle = (' '.join(([str(year)] if year else []) + words) or query).lower()
+                gvg_qs = gvg_qs.annotate(
+                    sim=TrigramSimilarity('search_text', needle)
+                ).filter(sim__gt=0.05).order_by('-sim', '-year')
+                if year:
+                    gvg_qs = gvg_qs.filter(year=year)
+            else:
+                # Fallback for SQLite/development
+                gvg_qs = text_filter(gvg_qs, brand_field='make', model_field='model')
+                if year:
+                    gvg_qs = gvg_qs.filter(year=year)
+                gvg_qs = gvg_qs.order_by('make', 'model', '-year')
+
+            for r in gvg_qs[:20]:
+                if len(results) >= 10:
+                    break
+                key = identity_key(r.make, r.model, r.variant, r.year)
+                if key in seen:
+                    continue
                 seen.add(key)
                 results.append(self._normalize_result(r, 'gvg'))
 
-        return Response(results[:15])
+        return Response(results)
 
 class CurrentVehicleDetailsView(views.APIView):
     permission_classes = [IsAuthenticated]

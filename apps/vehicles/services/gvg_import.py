@@ -475,6 +475,7 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
             test_cycle=_safe_str(row.get('Test Cycle')) or 'ADR',
             source_dataset='GVG-CURRENT',
             raw_data=_plain_dict_from_row(row),
+            search_text=' '.join(p for p in [str(year), make, model, variant] if p).lower(),
         )
 
         records.append(record)
@@ -553,6 +554,7 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
             test_cycle='ADR',
             source_dataset='GVG-OLDER-8603',
             raw_data=_plain_dict_from_row(row),
+            search_text=' '.join(p for p in [str(year), make, model] if p).lower(),
         )
 
         records.append(record)

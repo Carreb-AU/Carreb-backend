@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from django.contrib.postgres.indexes import GinIndex
 from django.utils.translation import gettext_lazy as _
 
 class PowertrainType(models.TextChoices):
@@ -125,6 +126,9 @@ class GreenVehicleGuideRecord(models.Model):
     source_dataset = models.CharField(max_length=50, blank=True)
     raw_data = models.JSONField(default=dict, blank=True)
 
+    # Fuzzy type-ahead support (trigram GIN index). Maintained automatically by save().
+    search_text = models.TextField(blank=True, default='')
+
     imported_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -134,7 +138,15 @@ class GreenVehicleGuideRecord(models.Model):
             models.Index(fields=['make', 'model', 'year']),
             models.Index(fields=['powertrain_type']),
             models.Index(fields=['fcai_category']),
+            GinIndex(fields=['search_text'], name='gvg_search_trgm_idx', opclasses=['gin_trgm_ops']),
         ]
+
+    def build_search_text(self):
+        return ' '.join(p for p in [str(self.year), self.make, self.model, self.variant] if p).lower()
+
+    def save(self, *args, **kwargs):
+        self.search_text = self.build_search_text()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.year} {self.make} {self.model} {self.variant}"
