@@ -18,6 +18,19 @@ from apps.vehicles.models import (
     Vehicle,
 )
 
+# Spec §3.5 modifiers (partial — insurance state modifiers supplied by client).
+# EnergyTypeModifier and DepreciationBrandModifier tables are pending.
+INSURANCE_STATE_MODIFIERS = {
+    'NSW': 1.178,
+    'VIC': 1.510,
+    'QLD': 0.932,
+    'SA':  0.923,
+    'WA':  0.652,
+    'TAS': 0.762,
+    'NT':  1.146,
+    'ACT': 0.899,
+}
+
 
 class VehicleLike:
     """
@@ -92,7 +105,12 @@ class VehicleLike:
         return d.get(self._state)
 
     def _apply_defaults_if_missing(self):
-        """Pull category defaults for the chosen state if cost fields are empty."""
+        """Pull category defaults for the chosen state if cost fields are empty.
+
+        The client spec calls for CategoryBenchmark × modifiers. Insurance
+        state modifiers are implemented; EnergyTypeModifier and
+        DepreciationBrandModifier are pending the full tables.
+        """
         if not self.fcai_category:
             return
         default = CategoryCostDefault.objects.filter(
@@ -107,7 +125,9 @@ class VehicleLike:
         if self._state and not self._state_value(self.ctp_by_state):
             self.ctp_by_state[self._state] = default.ctp_pa
         if self._state and not self._state_value(self.insurance_estimate_by_state):
-            self.insurance_estimate_by_state[self._state] = default.comprehensive_pa
+            base = default.comprehensive_pa or 0
+            modifier = INSURANCE_STATE_MODIFIERS.get(self._state, 1.0)
+            self.insurance_estimate_by_state[self._state] = int(round(base * modifier)) if base else None
         if self._state and not self._state_value(self.registration_by_state):
             self.registration_by_state[self._state] = default.registration_pa
         if self._state and not self._state_value(self.fuel_cost_by_state):
@@ -401,7 +421,9 @@ def apply_cost_defaults(record: GreenVehicleGuideRecord, state: str) -> None:
         record.total_5yr_cost_of_ownership_by_state = {}
 
     record.ctp_by_state[state] = default.ctp_pa
-    record.insurance_estimate_by_state[state] = default.comprehensive_pa
+    base_insurance = default.comprehensive_pa or 0
+    modifier = INSURANCE_STATE_MODIFIERS.get(state, 1.0)
+    record.insurance_estimate_by_state[state] = int(round(base_insurance * modifier)) if base_insurance else None
     record.registration_by_state[state] = default.registration_pa
     record.fuel_cost_by_state = record.fuel_cost_by_state or {}
     record.fuel_cost_by_state[state] = default.fuel_cost_pa
