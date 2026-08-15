@@ -133,6 +133,20 @@ CHANNEL_LAYERS = {
 }
 
 
+# Cache backend for type-ahead and other ephemeral data.
+# Default is LocMemCache to avoid a new dependency. For production multi-process
+# deployments, install django-redis and point REDIS_CACHE_URL at Redis.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "carreb-default",
+        "TIMEOUT": 300,
+    }
+}
+
+REDIS_CACHE_URL = env('REDIS_CACHE_URL', default='redis://redis:6379/1')
+
+
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 

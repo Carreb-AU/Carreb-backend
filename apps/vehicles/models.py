@@ -125,6 +125,18 @@ class GreenVehicleGuideRecord(models.Model):
     test_cycle = models.CharField(max_length=50, blank=True)
     source_dataset = models.CharField(max_length=50, blank=True)
     raw_data = models.JSONField(default=dict, blank=True)
+    provenance = models.JSONField(default=dict, blank=True)
+    # Example:
+    # {
+    #   "source_id": "<uuid>",
+    #   "source_code": "S-GVG-CURRENT",
+    #   "source_name": "Green Vehicle Guide — Vehicles 2004-2025",
+    #   "source_url": "https://greenvehicleguide.gov.au",
+    #   "retrieved_at": "2026-08-14T00:00:00Z",
+    #   "archived_file": "data/source_archives/S-GVG-CURRENT.xlsx",
+    #   "dataset_type": "xlsx",
+    #   "test_cycle": "ADR"
+    # }
 
     # Fuzzy type-ahead support (trigram GIN index). Maintained automatically by save().
     search_text = models.TextField(blank=True, default='')

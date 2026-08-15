@@ -1,6 +1,6 @@
 from rest_framework import generics, views, status, pagination
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from django.utils import timezone
 from apps.vehicles.models import Vehicle
 from apps.vehicles.serializers import (
@@ -210,7 +210,7 @@ class CoreRatingBatchView(views.APIView):
         })
 
 class VehicleDataUploadView(views.APIView):
-    permission_classes = [AllowAny] # In a real app this should be IsAdminUser or similar
+    permission_classes = [IsAdminUser]
     
     def post(self, request, *args, **kwargs):
         file_obj = request.FILES.get('file')
@@ -263,10 +263,11 @@ class CoreSearchView(views.APIView):
         
         # Deduplicate variants: keep only the cheapest variant per (brand, model, year)
         # for the requested core_mode and state to optimize processing.
+        # Spec §4 mode letters: B=Pure Cost, E=COOL Choice, C=True Value, F=Full Picture
         mode_map = {
             'pure_cost': 'B',
-            'cool_choice': 'C',
-            'true_value': 'E',
+            'cool_choice': 'E',
+            'true_value': 'C',
             'full_picture': 'F'
         }
         mode_letter = mode_map.get(core_mode, 'B')

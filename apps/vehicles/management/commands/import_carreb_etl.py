@@ -37,6 +37,13 @@ class Command(BaseCommand):
             return False
         return bool(val)
 
+    def _dollars_to_cents(self, val):
+        """Convert a dollar value to whole cents for storage."""
+        f = self._safe_float(val)
+        if f is None:
+            return None
+        return int(round(f * 100))
+
     def map_powertrain(self, fuel_type):
         if pd.isna(fuel_type):
             return PowertrainType.PETROL
@@ -104,14 +111,14 @@ class Command(BaseCommand):
                 for _, row in group.iterrows():
                     state = self._safe_str(row['State']).upper()
                     if state:
-                        ctp_by_state[state] = self._safe_float(row.get('ctp_pa'))
-                        comprehensive_by_state[state] = self._safe_float(row.get('comprehensive_pa'))
-                        rego_by_state[state] = self._safe_float(row.get('registration_pa'))
-                        fuel_cost_by_state[state] = self._safe_float(row.get('fuel_cost_pa'))
-                        electricity_cost_by_state[state] = self._safe_float(row.get('electricity_cost_pa'))
-                        ev_levy_by_state[state] = self._safe_float(row.get('ev_levy_pa'))
-                        base_coo_by_state[state] = self._safe_float(row.get('base_coo_pa_canonical'))
-                        components_sum_by_state[state] = self._safe_float(row.get('components_sum_pa'))
+                        ctp_by_state[state] = self._dollars_to_cents(row.get('ctp_pa'))
+                        comprehensive_by_state[state] = self._dollars_to_cents(row.get('comprehensive_pa'))
+                        rego_by_state[state] = self._dollars_to_cents(row.get('registration_pa'))
+                        fuel_cost_by_state[state] = self._dollars_to_cents(row.get('fuel_cost_pa'))
+                        electricity_cost_by_state[state] = self._dollars_to_cents(row.get('electricity_cost_pa'))
+                        ev_levy_by_state[state] = self._dollars_to_cents(row.get('ev_levy_pa'))
+                        base_coo_by_state[state] = self._dollars_to_cents(row.get('base_coo_pa_canonical'))
+                        components_sum_by_state[state] = self._dollars_to_cents(row.get('components_sum_pa'))
                         
                         mode_data_by_state[state] = {}
                 
@@ -122,11 +129,11 @@ class Command(BaseCommand):
                     
                     if state:
                         if state not in driveaway_by_state:
-                            driveaway_by_state[state] = self._safe_float(row.get('Driveaway Price ($)'))
-                        
+                            driveaway_by_state[state] = self._dollars_to_cents(row.get('Driveaway Price ($)'))
+
                         # Total 5yr COO is flattened by taking 'CASH' or the first mode seen
                         if mode == 'CASH' or state not in coo_5yr_by_state:
-                            coo_5yr_by_state[state] = self._safe_float(row.get('Mode 5yr COO ($)'))
+                            coo_5yr_by_state[state] = self._dollars_to_cents(row.get('Mode 5yr COO ($)'))
                             
                         # Build nested mode data dictionary
                         if state not in mode_data_by_state:
@@ -146,8 +153,8 @@ class Command(BaseCommand):
                                 'mode_label': self._safe_str(row.get('Mode Label')),
                             }
                 
-                maintenance_pa = self._safe_float(base_row.get('maintenance_pa', 0))
-                tyre_cost_pa = self._safe_float(base_row.get('tyre_cost_pa', 0))
+                maintenance_pa = self._dollars_to_cents(base_row.get('maintenance_pa', 0))
+                tyre_cost_pa = self._dollars_to_cents(base_row.get('tyre_cost_pa', 0))
                 
                 data_row = data_group.iloc[0] if not data_group.empty else None
                 

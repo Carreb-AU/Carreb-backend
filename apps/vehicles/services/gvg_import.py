@@ -1,11 +1,13 @@
 import os
 import re
+import shutil
 from decimal import Decimal
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
 
 import pandas as pd
 import numpy as np
+from django.conf import settings
 from django.db import transaction
 
 from apps.vehicles.models import (
@@ -48,7 +50,7 @@ class VehicleLike:
         self.resale_value_5yr_estimate = record.resale_value_5yr_estimate
         self.is_scoring_outlier = False
         self.scoring_version = 'gvg-v1'
-        self.provenance = {
+        self.provenance = record.provenance or {
             'source': 'green_vehicle_guide_record',
             'source_dataset': record.source_dataset,
             'record_id': str(record.id),
@@ -77,6 +79,12 @@ class VehicleLike:
         self.components_sum_by_state = record.total_5yr_cost_of_ownership_by_state or {}
         self.total_5yr_cost_of_ownership_by_state = record.total_5yr_cost_of_ownership_by_state or {}
         self.mode_data_by_state = getattr(record, 'mode_data_by_state', None) or {}
+
+        # Use any vehicle-specific GVG cost fields before falling back to category averages.
+        if record.annual_fuel_cost:
+            self.fuel_cost_by_state[self._state] = record.annual_fuel_cost
+        if record.driveaway_price_estimate:
+            self.driveaway_price_by_state = {self._state: record.driveaway_price_estimate}
 
         self._apply_defaults_if_missing()
 
@@ -450,6 +458,7 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
         fuel_type_raw = _safe_str(row.get('FuelType'))
         powertrain = map_powertrain(fuel_type_raw)
 
+        test_cycle = _safe_str(row.get('Test Cycle')) or 'ADR'
         record = GreenVehicleGuideRecord(
             source=source,
             make=make,
@@ -473,9 +482,10 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
             annual_fuel_cost=_dollars_to_cents(row.get('AnnualFuelCost')),
             is_current_model=str(row.get('IsCurrentModel')).lower().strip() == 'yes' if pd.notna(row.get('IsCurrentModel')) else None,
             model_end_year=_safe_int(row.get('ModelEndYear')),
-            test_cycle=_safe_str(row.get('Test Cycle')) or 'ADR',
+            test_cycle=test_cycle,
             source_dataset='GVG-CURRENT',
             raw_data=_plain_dict_from_row(row),
+            provenance=_build_record_provenance(source, test_cycle),
             search_text=' '.join(p for p in [str(year), make, model, variant] if p).lower(),
         )
 
@@ -534,6 +544,7 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
 
         co2 = estimate_co2_from_fuel_and_consumption(fuel_type_raw, combined)
 
+        test_cycle = 'ADR'
         record = GreenVehicleGuideRecord(
             source=source,
             make=make,
@@ -552,9 +563,10 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
             fuel_consumption_urban_l_100km=city,
             fuel_consumption_extra_urban_l_100km=highway,
             tailpipe_co2_g_per_km=co2,
-            test_cycle='ADR',
+            test_cycle=test_cycle,
             source_dataset='GVG-OLDER-8603',
             raw_data=_plain_dict_from_row(row),
+            provenance=_build_record_provenance(source, test_cycle),
             search_text=' '.join(p for p in [str(year), make, model] if p).lower(),
         )
 
@@ -575,21 +587,70 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
 # Orchestration helpers
 # ---------------------------------------------------------------------------
 
-def create_or_update_datasource(code: str, name: str, url: str, dataset_type: str, archived_path: str = '') -> DataSource:
+def _archive_source_file(source_path: str, code: str) -> str:
+    """Copy a source file into the media archive and return the relative path.
+
+    The archived file is named by source code (e.g. S-GVG-CURRENT.xlsx) so each
+    re-import overwrites the prior archive for that source. Returns the path
+    relative to MEDIA_ROOT suitable for DataSource.archived_file.
+    """
+    if not source_path or not os.path.isfile(source_path):
+        return ''
+
+    ext = os.path.splitext(source_path)[1].lower()
+    archive_dir = os.path.join(settings.MEDIA_ROOT, 'data', 'source_archives')
+    os.makedirs(archive_dir, exist_ok=True)
+
+    archive_name = f"{code}{ext}"
+    archive_path = os.path.join(archive_dir, archive_name)
+    shutil.copy2(source_path, archive_path)
+
+    return f"data/source_archives/{archive_name}"
+
+
+def create_or_update_datasource(
+    code: str,
+    name: str,
+    url: str,
+    dataset_type: str,
+    archived_path: str = '',
+    source_file_path: str = '',
+) -> DataSource:
+    """Register or update a DataSource and archive the source file."""
+    archived_file = archived_path
+    if source_file_path:
+        archived_file = _archive_source_file(source_file_path, code)
+
     defaults = {
         'name': name,
         'url': url,
         'dataset_type': dataset_type,
         'retrieved_at': datetime.now(timezone.utc),
     }
-    if archived_path:
-        defaults['archived_file'] = archived_path
+    if archived_file:
+        defaults['archived_file'] = archived_file
 
     source, _ = DataSource.objects.update_or_create(
         code=code,
         defaults=defaults
     )
     return source
+
+
+def _build_record_provenance(source: Optional[DataSource], test_cycle: str) -> dict:
+    """Return a citation-ready provenance block for a GVG record."""
+    if not source:
+        return {}
+    return {
+        "source_id": str(source.id),
+        "source_code": source.code,
+        "source_name": source.name,
+        "source_url": source.url,
+        "retrieved_at": source.retrieved_at.isoformat() if source.retrieved_at else None,
+        "archived_file": source.archived_file.name if source.archived_file else None,
+        "dataset_type": source.dataset_type,
+        "test_cycle": test_cycle,
+    }
 
 
 def import_all(
@@ -606,12 +667,14 @@ def import_all(
         name='Green Vehicle Guide — Vehicles 2004-2025',
         url='https://greenvehicleguide.gov.au',
         dataset_type='xlsx',
+        source_file_path=gvg_xlsx_path,
     )
     older_source = create_or_update_datasource(
         code='S-GVG-OLDER-8603',
         name='Fuel Consumption Guide 1986-2003',
         url='https://greenvehicleguide.gov.au',
         dataset_type='csv',
+        source_file_path=old_csv_path,
     )
 
     results['category_defaults'] = import_category_cost_defaults(workbook_path, clear=clear)

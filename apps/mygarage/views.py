@@ -20,8 +20,14 @@ from apps.mygarage.serializers import (
     AISmartMatchInputSerializer
 )
 from apps.mygarage.services import check_cap_limit, get_cap_counter, calculate_spotlights
-from apps.mygarage.ai_service import extract_search_parameters, build_recommendation_reason
-from apps.vehicles.services.rating_engine import calculate_core_rating
+from apps.mygarage.ai_service import (
+    extract_search_parameters,
+    build_recommendation_reason,
+    estimate_engine_displacement,
+    estimate_ancap_rating,
+    estimate_resale_value,
+)
+from apps.vehicles.services.rating_engine import calculate_core_rating, _get_state_cents
 from apps.vehicles.tasks import emit_analytics_event
 
 def _get_overrides(user, current_vehicle=None, garage_vehicle=None):
@@ -323,12 +329,271 @@ class CurrentVehicleAutoFillView(views.APIView):
         section = request.data.get('section')
         if section not in ['technical_details', 'vehicle_costs', 'finance']:
             return Response({"detail": "Invalid section"}, status=status.HTTP_400_BAD_REQUEST)
-        # Placeholder for AI logic
+
+        try:
+            cv = request.user.current_vehicle
+        except CurrentVehicle.DoesNotExist:
+            return Response({"detail": "No current vehicle set"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Resolve the vehicle record (Carreb catalogue preferred, then GVG).
+        rating_vehicle = cv.vehicle_catalogue
+        gvg_record = cv.green_vehicle_guide_record
+        if not rating_vehicle and gvg_record:
+            rating_vehicle = build_vehicle_like_from_gvg(gvg_record, cv.state or 'NSW')
+
+        if not rating_vehicle:
+            return Response({"detail": "No vehicle data available"}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        suggested_values = {}
+        badges = {}
+
+        if section == 'technical_details':
+            if getattr(rating_vehicle, 'engine_l', None) is None:
+                estimated = estimate_engine_displacement(
+                    make=getattr(rating_vehicle, 'brand', '') or getattr(rating_vehicle, 'make', ''),
+                    model=getattr(rating_vehicle, 'model', ''),
+                    variant=getattr(rating_vehicle, 'variant', ''),
+                    year=getattr(rating_vehicle, 'year', 0) or 0,
+                )
+                if estimated:
+                    suggested_values['engine_l'] = estimated
+                    badges['engine_l'] = {"source": "AI est.", "category": "technical_details"}
+
+            if getattr(rating_vehicle, 'ancap_safety_rating', None) is None:
+                estimated = estimate_ancap_rating(
+                    make=getattr(rating_vehicle, 'brand', '') or getattr(rating_vehicle, 'make', ''),
+                    model=getattr(rating_vehicle, 'model', ''),
+                    year=getattr(rating_vehicle, 'year', 0) or 0,
+                )
+                if estimated:
+                    suggested_values['ancap_safety_rating'] = estimated
+                    badges['ancap_safety_rating'] = {"source": "AI est.", "category": "technical_details"}
+
+        elif section == 'vehicle_costs':
+            if getattr(rating_vehicle, 'resale_value_5yr_estimate', None) is None:
+                # Prefer a user-entered driveaway if available; fall back to stored value.
+                state = (cv.state or 'NSW').upper()
+                driveaway_cents = _get_state_cents(
+                    getattr(rating_vehicle, 'driveaway_price_by_state', {}) or {},
+                    state,
+                )
+                estimated = estimate_resale_value(
+                    driveaway_cents=driveaway_cents,
+                    year=getattr(rating_vehicle, 'year', 0) or 0,
+                )
+                if estimated:
+                    suggested_values['resale_value_5yr_estimate'] = estimated
+                    badges['resale_value_5yr_estimate'] = {"source": "Default", "category": "vehicle_costs"}
+
+        elif section == 'finance':
+            # Conservative defaults for finance inputs.
+            suggested_values['loan_term_months'] = 60
+            suggested_values['interest_rate'] = 7.5
+
         return Response({
-            "suggested_values": {
-                "annual_km": 15000,
-                "insurance_override": 1200
-            }
+            "suggested_values": suggested_values,
+            "badges": badges,
+            "is_estimate": True,
+            "disclaimer": "All figures are estimates only.",
+        })
+
+
+class CurrentVehicleSuggestionsView(views.APIView):
+    """
+    Type-ahead contract for current-vehicle lookup (Spec Type-Ahead §5-§7).
+
+    - suggestions: ?q= query, >=3 chars, <=8 results, dedup preferring catalogue.
+    - makes / models / years: cascade endpoints, include "Other / not listed".
+    - Cached in Redis for 24 h; falls back to in-process cache if Redis is down.
+    """
+    permission_classes = [IsAuthenticated]
+
+    MIN_QUERY_LEN = 3
+    MAX_RESULTS = 8
+    CACHE_TTL = 24 * 60 * 60  # 24 hours
+
+    def _cache_key(self, prefix: str, *parts) -> str:
+        safe = '_'.join(str(p).lower().replace(' ', '_') for p in parts if p is not None)
+        return f'cv_typeahead_{prefix}_{safe}'[:250]
+
+    def _other_option(self) -> dict:
+        return {
+            "id": "other",
+            "name": "Other / not listed",
+            "source": "other",
+        }
+
+    def _normalize_vehicle(self, v: Vehicle) -> dict:
+        return {
+            "id": str(v.id),
+            "source": "carreb",
+            "year": v.year,
+            "make": v.brand,
+            "model": v.model,
+            "variant": v.variant,
+            "body_style": v.body_style,
+            "powertrain_type": v.powertrain_type,
+            "name": str(v),
+        }
+
+    def _normalize_gvg(self, r: GreenVehicleGuideRecord) -> dict:
+        return {
+            "id": str(r.id),
+            "source": "gvg",
+            "year": r.year,
+            "make": r.make,
+            "model": r.model,
+            "variant": r.variant,
+            "body_style": r.body_style,
+            "powertrain_type": r.powertrain_type,
+            "name": f"{r.year} {r.make} {r.model} {r.variant}".strip(),
+        }
+
+    def _search_suggestions(self, query: str):
+        query = (query or '').strip().lower()
+        if len(query) < self.MIN_QUERY_LEN:
+            return []
+
+        cache_key = self._cache_key('suggestions', query)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        import re
+        year_match = re.search(r'\b(19|20)\d{2}\b', query)
+        year = int(year_match.group()) if year_match else None
+        words = [w for w in re.sub(r'\b(19|20)\d{2}\b', ' ', query).split() if w]
+
+        def text_filter(qs, brand_field='brand', model_field='model'):
+            for w in words:
+                qs = qs.filter(
+                    models.Q(**{f'{brand_field}__icontains': w}) |
+                    models.Q(**{f'{model_field}__icontains': w})
+                )
+            return qs
+
+        results, seen = [], set()
+
+        def identity_key(make, model_name, variant, yr):
+            return ((make or '').casefold(), (model_name or '').casefold(),
+                    (variant or '').casefold(), yr)
+
+        # 1. Carreb catalogue (preferred on collision)
+        carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
+        if year:
+            carreb_qs = carreb_qs.filter(year=year)
+        for v in carreb_qs.order_by('brand', 'model', '-year')[:self.MAX_RESULTS]:
+            seen.add(identity_key(v.brand, v.model, v.variant, v.year))
+            results.append(self._normalize_vehicle(v))
+
+        # 2. GVG records - trigram fuzzy fallback
+        if len(results) < self.MAX_RESULTS:
+            gvg_qs = GreenVehicleGuideRecord.objects.all()
+            remaining = self.MAX_RESULTS - len(results)
+
+            if connection.vendor == 'postgresql':
+                needle = (' '.join(([str(year)] if year else []) + words) or query).lower()
+                gvg_qs = gvg_qs.annotate(
+                    sim=TrigramSimilarity('search_text', needle)
+                ).filter(sim__gt=0.05).order_by('-sim', '-year')
+                if year:
+                    gvg_qs = gvg_qs.filter(year=year)
+            else:
+                gvg_qs = text_filter(gvg_qs, brand_field='make', model_field='model')
+                if year:
+                    gvg_qs = gvg_qs.filter(year=year)
+                gvg_qs = gvg_qs.order_by('make', 'model', '-year')
+
+            for r in gvg_qs[:self.MAX_RESULTS * 2]:
+                if len(results) >= self.MAX_RESULTS:
+                    break
+                key = identity_key(r.make, r.model, r.variant, r.year)
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append(self._normalize_gvg(r))
+
+        cache.set(cache_key, results, self.CACHE_TTL)
+        return results
+
+    def get(self, request):
+        endpoint = request.resolver_match.url_name if request.resolver_match else 'suggestions'
+
+        if endpoint == 'current-vehicle-makes':
+            return self._makes(request)
+        if endpoint == 'current-vehicle-models':
+            return self._models(request)
+        if endpoint == 'current-vehicle-years':
+            return self._years(request)
+        return self._suggestions(request)
+
+    def _suggestions(self, request):
+        query = request.query_params.get('q', '').strip()
+        results = self._search_suggestions(query)
+        return Response({
+            "q": query,
+            "results": results,
+            "not_found": not bool(results),
+        })
+
+    def _makes(self, request):
+        cache_key = self._cache_key('makes')
+        cached = cache.get(cache_key)
+        if cached is None:
+            carreb_makes = set(Vehicle.objects.values_list('brand', flat=True).distinct())
+            gvg_makes = set(GreenVehicleGuideRecord.objects.values_list('make', flat=True).distinct())
+            cached = sorted({m for m in (carreb_makes | gvg_makes) if m})
+            cache.set(cache_key, cached, self.CACHE_TTL)
+
+        return Response({
+            "results": [{"value": m, "label": m} for m in cached] + [self._other_option()],
+        })
+
+    def _models(self, request):
+        make = (request.query_params.get('make') or '').strip()
+        if not make:
+            return Response({"results": [self._other_option()]})
+
+        cache_key = self._cache_key('models', make)
+        cached = cache.get(cache_key)
+        if cached is None:
+            q_make = make.casefold()
+            carreb_models = set(
+                Vehicle.objects.filter(brand__iexact=q_make).values_list('model', flat=True).distinct()
+            )
+            gvg_models = set(
+                GreenVehicleGuideRecord.objects.filter(make__iexact=q_make).values_list('model', flat=True).distinct()
+            )
+            cached = sorted({m for m in (carreb_models | gvg_models) if m})
+            cache.set(cache_key, cached, self.CACHE_TTL)
+
+        return Response({
+            "make": make,
+            "results": [{"value": m, "label": m} for m in cached] + [self._other_option()],
+        })
+
+    def _years(self, request):
+        make = (request.query_params.get('make') or '').strip()
+        model = (request.query_params.get('model') or '').strip()
+        if not make or not model:
+            return Response({"results": [self._other_option()]})
+
+        cache_key = self._cache_key('years', make, model)
+        cached = cache.get(cache_key)
+        if cached is None:
+            carreb_years = set(
+                Vehicle.objects.filter(brand__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()
+            )
+            gvg_years = set(
+                GreenVehicleGuideRecord.objects.filter(make__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()
+            )
+            cached = sorted({int(y) for y in (carreb_years | gvg_years) if y}, reverse=True)
+            cache.set(cache_key, cached, self.CACHE_TTL)
+
+        return Response({
+            "make": make,
+            "model": model,
+            "results": [{"value": y, "label": str(y)} for y in cached] + [self._other_option()],
         })
 
 class GarageVehicleListView(views.APIView):
@@ -626,7 +891,19 @@ class PriorityStateView(views.APIView):
                     bands[b_key] += 1
                     
         cache.delete(f"spotlights_{request.user.id}")
-        return Response({"state": serializer.data, "band_counts": bands})
+
+        # Return enough data for the CORE Dial to refresh its numbers.
+        # The dial should read from peer_band_medians[band_slug] inside engine_data.
+        response = {"state": serializer.data, "band_counts": bands}
+        cv = getattr(request.user, 'current_vehicle', None)
+        if cv:
+            cv_state = getattr(request.user, 'priority_state', serializer.instance)
+            cv_resp = _build_calculated_vehicle_response(
+                request.user, cv, cv_state, is_current_vehicle=True
+            )
+            response["current_vehicle"] = cv_resp
+
+        return Response(response)
 
 class CoreDialBandBreakdownView(views.APIView):
     permission_classes = [IsAuthenticated]
@@ -835,10 +1112,11 @@ class AISmartMatchView(views.APIView):
             cv_cost = cv_resp.get('total_annual_cost')
             
         all_vehicles = list(queryset)
+        # Spec §4 mode letters: B=Pure Cost, E=COOL Choice, C=True Value, F=Full Picture
         mode_map = {
             'pure_cost': 'B',
-            'cool_choice': 'C',
-            'true_value': 'E',
+            'cool_choice': 'E',
+            'true_value': 'C',
             'full_picture': 'F'
         }
         mode_letter = mode_map.get(mode, 'B')

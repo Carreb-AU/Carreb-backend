@@ -1,5 +1,8 @@
 import json
 import os
+from datetime import datetime
+from typing import Optional
+
 import openai
 from django.conf import settings
 import logging
@@ -106,3 +109,111 @@ def build_recommendation_reason(interpreted_filters, vehicle):
     if getattr(vehicle, 'fcai_category', None):
         return f"{prefix} - great option in the {vehicle.fcai_category} class"
     return prefix
+
+
+# ---------------------------------------------------------------------------
+# Field-level AI estimation for current-vehicle / GVG enrichment (P0.5)
+# ---------------------------------------------------------------------------
+
+ENGINE_DISPLACEMENT_PROMPT = """You are a vehicle database assistant. Estimate the engine displacement in litres for the vehicle described.
+
+Vehicle: {year} {make} {model} {variant}
+
+Return ONLY a valid JSON object with this exact schema:
+{
+  "engine_l": float or null,  // engine displacement in litres, e.g. 2.0
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "one short sentence"
+}
+
+If the vehicle is electric (BEV) or hydrogen (FCEV), return null for engine_l. If you are uncertain, use your best estimate and set confidence to low. Do not return any text outside the JSON object."""
+
+ANCAP_RATING_PROMPT = """You are a vehicle safety database assistant. Estimate the ANCAP safety rating for the vehicle described.
+
+Vehicle: {year} {make} {model}
+
+Return ONLY a valid JSON object with this exact schema:
+{
+  "ancap_rating": integer or null,  // 1 to 5 stars
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "one short sentence"
+}
+
+ANCAP ratings did not exist before 1993, so for older vehicles return null. If the exact model-year rating is unknown, use your best estimate and set confidence to low. Do not return any text outside the JSON object."""
+
+
+def _call_openai_json(prompt: str, model: str = "gpt-4o-mini") -> dict:
+    """Call OpenAI with a prompt and return parsed JSON, or {} on failure."""
+    if not OPENAI_API_KEY:
+        logger.error("OpenAI API key is missing; cannot run field estimation.")
+        return {}
+
+    client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=8.0)
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You return only valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_object"},
+            timeout=8.0,
+        )
+        content = response.choices[0].message.content
+        return json.loads(content)
+    except Exception as e:
+        logger.error(f"OpenAI JSON call failed: {e}")
+        return {}
+
+
+def estimate_engine_displacement(make: str, model: str, variant: str, year: int) -> Optional[float]:
+    """Return estimated engine displacement in litres, or None."""
+    prompt = ENGINE_DISPLACEMENT_PROMPT.format(
+        make=make or '',
+        model=model or '',
+        variant=variant or '',
+        year=year or '',
+    )
+    result = _call_openai_json(prompt)
+    engine_l = result.get('engine_l')
+    if engine_l is None:
+        return None
+    try:
+        return float(engine_l)
+    except (ValueError, TypeError):
+        return None
+
+
+def estimate_ancap_rating(make: str, model: str, year: int) -> Optional[int]:
+    """Return estimated ANCAP rating 1-5, or None for pre-ANCAP vehicles."""
+    prompt = ANCAP_RATING_PROMPT.format(
+        make=make or '',
+        model=model or '',
+        year=year or '',
+    )
+    result = _call_openai_json(prompt)
+    rating = result.get('ancap_rating')
+    if rating is None:
+        return None
+    try:
+        rating = int(rating)
+        return rating if 1 <= rating <= 5 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def estimate_resale_value(driveaway_cents: int, year: int, current_year: Optional[int] = None, retention_rate: float = 0.50) -> Optional[int]:
+    """Return a simple retention-based 5-year resale estimate in cents.
+
+    This is a Tier-3 fallback until the modifier tables
+    (EnergyTypeModifier, InsuranceStateModifier, DepreciationBrandModifier)
+    are implemented. The client spec calls for retention_5yr_pct × modifiers.
+    """
+    if not driveaway_cents or not year:
+        return None
+    if current_year is None:
+        current_year = datetime.now().year
+    age = max(0, current_year - year)
+    # Avoid compounding to zero for very old cars; floor at 5% of driveaway.
+    value_cents = int(driveaway_cents * max(0.05, retention_rate ** age))
+    return value_cents

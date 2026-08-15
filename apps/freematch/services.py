@@ -26,6 +26,11 @@ from apps.mygarage.models import GarageVehicle, GarageVehicleSource
 
 logger = logging.getLogger(__name__)
 
+
+class NoMatchFoundError(Exception):
+    """Raised when the wizard cannot find any candidate matching the user's core preferences."""
+    pass
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
 WIZARD_CORE_MODE = "pure_cost"
@@ -107,7 +112,7 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[Optional[Vehicl
         if vehicle:
             return vehicle, False
 
-    # ── Attempt 1.5: relax budget and nice-to-have features ───────────────────
+    # ── Attempt 2: relax budget and nice-to-have features ───────────────────
     logger.info(
         "Free match wizard: no results with specific filters — relaxing budget & ANCAP (session %s)",
         session.session_token[:8],
@@ -120,33 +125,15 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[Optional[Vehicl
         if vehicle:
             return vehicle, True
 
-    # ── Attempt 2: fuel only (relax body style, seating, etc) ──────────────────────────
-    logger.info(
-        "Free match wizard: no results with relaxed filters — dropping to fuel only (session %s)",
+    # ── No acceptable match ───────────────────────────────────────────────────
+    logger.warning(
+        "Free match wizard: no candidates even with relaxed budget/ANCAP (session %s)",
         session.session_token[:8],
     )
-    candidates = list(get_freematch_candidates_fuel_only(session.fuel_type_preference))
-
-    if candidates:
-        vehicle = _score_and_pick_best(candidates, state, priority_slider)
-        if vehicle:
-            return vehicle, True
-
-    # ── Attempt 3: no filters (relax fuel type too) ──────────────────────
-    logger.info(
-        "Free match wizard: no results with fuel filter — relaxing all (session %s)",
-        session.session_token[:8],
+    raise NoMatchFoundError(
+        "No vehicle matches your fuel type, body style and seating requirements. "
+        "Try broadening your budget, fuel type or body style."
     )
-    candidates = list(get_freematch_candidates_base())
-
-    if not candidates:
-        raise RuntimeError("Vehicle catalogue is empty — cannot produce a match.")
-
-    vehicle = _score_and_pick_best(candidates, state, priority_slider)
-    if not vehicle:
-        raise RuntimeError("CORE Rating Engine returned no scorable vehicle.")
-
-    return vehicle, True
 
 
 # ── Response Builders ────────────────────────────────────────────────────────

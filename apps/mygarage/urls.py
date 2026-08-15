@@ -5,6 +5,7 @@ from apps.mygarage.views import (
     CurrentVehicleDetailsView,
     CurrentVehicleOverrideDeleteView,
     CurrentVehicleAutoFillView,
+    CurrentVehicleSuggestionsView,
     GarageVehicleListView,
     GarageVehicleDetailView,
     GarageVehicleOverrideView,
@@ -37,6 +38,10 @@ urlpatterns = [
     path('api/my-garage/current-vehicle/details/', CurrentVehicleDetailsView.as_view(), name='current-vehicle-details'),
     path('api/my-garage/current-vehicle/override/<str:field_name>/', CurrentVehicleOverrideDeleteView.as_view(), name='current-vehicle-override-delete'),
     path('api/my-garage/current-vehicle/auto-fill/', CurrentVehicleAutoFillView.as_view(), name='current-vehicle-auto-fill'),
+    path('api/current-vehicle/suggestions/', CurrentVehicleSuggestionsView.as_view(), name='current-vehicle-suggestions'),
+    path('api/current-vehicle/makes/', CurrentVehicleSuggestionsView.as_view(), name='current-vehicle-makes'),
+    path('api/current-vehicle/models/', CurrentVehicleSuggestionsView.as_view(), name='current-vehicle-models'),
+    path('api/current-vehicle/years/', CurrentVehicleSuggestionsView.as_view(), name='current-vehicle-years'),
     
     # Garage Vehicles
     path('api/my-garage/vehicles/', GarageVehicleListView.as_view(), name='garage-vehicles'),

@@ -11,6 +11,7 @@ from apps.freematch.services import (
     process_free_match,
     convert_session_to_garage,
     discard_freematch_session,
+    NoMatchFoundError,
 )
 from apps.mygarage.services import check_cap_limit, get_cap_counter
 from apps.vehicles.tasks import emit_analytics_event
@@ -84,6 +85,18 @@ class FreeMatchCalculateView(views.APIView):
                 )
 
             return Response(response_data, status=status.HTTP_200_OK)
+
+        except NoMatchFoundError as exc:
+            logger.info("Free match wizard no-match: %s", exc)
+            return Response(
+                {
+                    "vehicle": None,
+                    "is_suggested": False,
+                    "message": str(exc),
+                    "detail": "No matching vehicle found for the selected preferences.",
+                },
+                status=status.HTTP_200_OK,
+            )
 
         except RuntimeError as exc:
             logger.error("Free match wizard match failure: %s", exc)
