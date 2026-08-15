@@ -9,6 +9,7 @@ from apps.vehicles.serializers import (
     CoreSearchRequestSerializer
 )
 from apps.vehicles.services.rating_engine import calculate_core_rating
+from apps.vehicles.services.json_ld import build_car_json_ld
 from apps.vehicles.tasks import emit_analytics_event, process_vehicle_excel_upload
 import os
 from django.core.files.storage import default_storage
@@ -60,6 +61,23 @@ class VehicleDetailView(generics.RetrieveAPIView):
     permission_classes = [AllowAny]
     lookup_field = 'id'
     lookup_url_kwarg = 'vehicle_id'
+
+
+class VehicleJsonLdView(views.APIView):
+    """Return schema.org/Car JSON-LD for a vehicle detail page (GEO §5.1)."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, vehicle_id):
+        try:
+            vehicle = Vehicle.objects.get(id=vehicle_id)
+        except Vehicle.DoesNotExist:
+            return Response({"detail": "Vehicle not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        json_ld = build_car_json_ld(vehicle, request=request)
+        return Response({"@context": "https://schema.org", **json_ld})
+
 
 class VehicleBrandsView(views.APIView):
     authentication_classes = []

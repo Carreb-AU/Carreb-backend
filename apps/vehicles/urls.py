@@ -2,6 +2,7 @@ from django.urls import path
 from apps.vehicles.views import (
     VehicleListView,
     VehicleDetailView,
+    VehicleJsonLdView,
     VehicleBrandsView,
     VehicleModelsView,
     VehicleYearsView,
@@ -20,6 +21,7 @@ urlpatterns = [
     path('api/vehicles/variants/', VehicleVariantsView.as_view(), name='vehicle-variants'),
     
     path('api/vehicles/<uuid:vehicle_id>/', VehicleDetailView.as_view(), name='vehicle-detail'),
+    path('api/vehicles/<uuid:vehicle_id>/json-ld/', VehicleJsonLdView.as_view(), name='vehicle-json-ld'),
     
     path('api/core-rating/calculate/', CoreRatingCalculateView.as_view(), name='core-rating-calculate'),
     path('api/core-rating/batch/', CoreRatingBatchView.as_view(), name='core-rating-batch'),

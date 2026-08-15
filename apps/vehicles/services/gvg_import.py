@@ -32,6 +32,19 @@ INSURANCE_STATE_MODIFIERS = {
 }
 
 
+def _get_manual_source() -> Optional[DataSource]:
+    """Return the registered S-CARREB-MANUAL source, creating it if absent."""
+    source, _ = DataSource.objects.get_or_create(
+        code='S-CARREB-MANUAL',
+        defaults={
+            'name': 'Carreb Manual Enrichment',
+            'url': '',
+            'dataset_type': 'manual',
+        },
+    )
+    return source
+
+
 class VehicleLike:
     """
     Duck-typed stand-in for Vehicle used when a GVG record is selected as the
@@ -69,6 +82,9 @@ class VehicleLike:
             'record_id': str(record.id),
         }
 
+        # Apply admin-level manual enrichment if present.
+        self._apply_manual_enrichment()
+
         # Consumption / emissions
         self.fuel_consumption_per_100km = record.fuel_consumption_combined_l_100km
         # GVG gives Wh/km; CORE expects kWh/100km -> divide by 10.
@@ -103,6 +119,39 @@ class VehicleLike:
 
     def _state_value(self, d):
         return d.get(self._state)
+
+    def _apply_manual_enrichment(self):
+        """Apply admin-curated ManualVehicleEnrichment values and badge them."""
+        enrichment = getattr(self._record, 'manual_enrichment', None)
+        if not enrichment:
+            return
+
+        manual_source = _get_manual_source()
+        manual_badge = {
+            'source_code': 'S-CARREB-MANUAL',
+            'source_name': 'Carreb Manual Enrichment',
+            'source_id': str(manual_source.id) if manual_source else None,
+        }
+
+        if enrichment.engine_l is not None and self.engine_l is None:
+            self.engine_l = enrichment.engine_l
+            self.provenance.setdefault('engine_l', manual_badge)
+
+        if enrichment.ancap_safety_rating is not None and self.ancap_safety_rating is None:
+            self.ancap_safety_rating = enrichment.ancap_safety_rating
+            self.provenance.setdefault('ancap_safety_rating', manual_badge)
+
+        if enrichment.image_url and not self.image_url:
+            self.image_url = enrichment.image_url
+            self.provenance.setdefault('image_url', manual_badge)
+
+        if enrichment.driveaway_price_estimate is not None:
+            self.driveaway_price_by_state[self._state] = enrichment.driveaway_price_estimate
+            self.provenance.setdefault('driveaway_price', manual_badge)
+
+        if enrichment.resale_value_5yr_estimate is not None and self.resale_value_5yr_estimate is None:
+            self.resale_value_5yr_estimate = enrichment.resale_value_5yr_estimate
+            self.provenance.setdefault('resale_value_5yr_estimate', manual_badge)
 
     def _apply_defaults_if_missing(self):
         """Pull category defaults for the chosen state if cost fields are empty.

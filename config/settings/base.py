@@ -67,6 +67,7 @@ THIRD_PARTY_APPS = [
 ]
 
 LOCAL_APPS = [
+    "apps.config",
     "apps.users",
     "apps.prelaunch",
     "apps.vehicles",
@@ -318,6 +319,11 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.freematch.tasks.cleanup_expired_free_match_sessions',
         'schedule': crontab(hour=1, minute=0),  # 01:00 UTC daily
     },
+
+    'quarterly-gvg-import': {
+        'task': 'apps.vehicles.tasks.quarterly_gvg_import_task',
+        'schedule': crontab(hour=2, minute=0, day_of_month=1, month='1,4,7,10'),
+    },
 }
 
 # OTP Configuration
@@ -338,8 +344,16 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5175",
     "https://www.carreb.com.au",
-    "https://carreb.com.au"
+    "https://carreb.com.au",
 ]
+
+# Append env-configured frontend URLs dynamically.
+_FRONTEND_DEV_URL = env('FRONTEND_DEV_URL', default='')
+_FRONTEND_PROD_URL = env('FRONTEND_PROD_URL', default='')
+if _FRONTEND_DEV_URL and _FRONTEND_DEV_URL not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(_FRONTEND_DEV_URL)
+if _FRONTEND_PROD_URL and _FRONTEND_PROD_URL not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(_FRONTEND_PROD_URL)
 
 # If you need to send cookies/auth tokens (e.g., sessionid) cross-origin:
 CORS_ALLOW_CREDENTIALS = True

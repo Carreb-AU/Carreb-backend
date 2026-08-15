@@ -185,3 +185,37 @@ def process_vehicle_excel_upload(file_path):
     except Exception as e:
         logger.error(f"Failed to process vehicle upload from {file_path}: {e}")
 
+
+@shared_task
+def quarterly_gvg_import_task():
+    """
+    Re-import GVG and category-cost data each quarter.
+
+    Uses the same source files shipped in the repo / docs folder. The archived
+    copies and provenance records are updated automatically by import_all().
+    """
+    import os
+    from django.conf import settings
+    from apps.vehicles.services.gvg_import import import_all
+
+    base_dir = settings.BASE_DIR
+    workbook = os.path.join(base_dir, "Carreb Calc Workbook and Data - v6.4 Launch 10-Jul-26.xlsx")
+    gvg_xlsx = os.path.join(base_dir, "docs", "GVG-Vehicles-2004-2025.xlsx")
+    old_csv = os.path.join(base_dir, "docs", "FuelConsumptionGuide1986-2003.csv")
+
+    missing = [p for p in [workbook, gvg_xlsx, old_csv] if not os.path.exists(p)]
+    if missing:
+        logger.error(f"Quarterly GVG import skipped: missing files {missing}")
+        return
+
+    try:
+        results = import_all(workbook, gvg_xlsx, old_csv, clear=False)
+        logger.info(
+            f"Quarterly GVG import complete. "
+            f"Category defaults: {results['category_defaults']}, "
+            f"GVG current: {results['gvg_current']['created']} created / {results['gvg_current']['skipped']} skipped, "
+            f"GVG older: {results['gvg_older']['created']} created / {results['gvg_older']['skipped']} skipped."
+        )
+    except Exception as e:
+        logger.error(f"Quarterly GVG import failed: {e}")
+

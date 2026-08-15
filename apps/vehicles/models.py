@@ -225,3 +225,35 @@ class Vehicle(models.Model):
 
     def __str__(self):
         return f"{self.year} {self.brand} {self.model} {self.variant}"
+
+
+class ManualVehicleEnrichment(models.Model):
+    """
+    Admin-curated enrichment for GVG / legacy records. Used when the original
+    source lacks a field (e.g. engine_l, ANCAP, image_url). Each field carries
+    its own provenance badge (S-CARREB-MANUAL) so the citation chain is intact.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    record = models.OneToOneField(
+        GreenVehicleGuideRecord,
+        on_delete=models.CASCADE,
+        related_name='manual_enrichment',
+    )
+
+    engine_l = models.FloatField(null=True, blank=True)
+    ancap_safety_rating = models.IntegerField(null=True, blank=True)
+    image_url = models.URLField(max_length=2000, blank=True, null=True)
+    driveaway_price_estimate = models.IntegerField(null=True, blank=True)  # cents
+    resale_value_5yr_estimate = models.IntegerField(null=True, blank=True)  # cents
+    notes = models.TextField(blank=True, default='')
+
+    enriched_by = models.CharField(max_length=255, blank=True)
+    enriched_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Manual Vehicle Enrichment'
+        verbose_name_plural = 'Manual Vehicle Enrichments'
+
+    def __str__(self):
+        return f"Manual enrichment for {self.record}"

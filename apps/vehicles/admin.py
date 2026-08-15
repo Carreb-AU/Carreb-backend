@@ -2,7 +2,7 @@ import os
 from django.contrib import admin, messages
 from django.conf import settings
 
-from apps.vehicles.models import Vehicle, DataSource, GreenVehicleGuideRecord, CategoryCostDefault
+from apps.vehicles.models import Vehicle, DataSource, GreenVehicleGuideRecord, CategoryCostDefault, ManualVehicleEnrichment
 from apps.vehicles.services.gvg_import import import_all
 
 
@@ -47,12 +47,19 @@ class CategoryCostDefaultAdmin(admin.ModelAdmin):
     readonly_fields = ["id", "created_at", "updated_at"]
 
 
+class ManualVehicleEnrichmentInline(admin.StackedInline):
+    model = ManualVehicleEnrichment
+    extra = 0
+    readonly_fields = ["id", "enriched_at", "updated_at"]
+
+
 @admin.register(GreenVehicleGuideRecord)
 class GreenVehicleGuideRecordAdmin(admin.ModelAdmin):
     list_display = ["make", "model", "year", "variant", "body_style", "powertrain_type", "fcai_category", "tailpipe_co2_g_per_km", "source_dataset", "imported_at"]
     list_filter = ["source_dataset", "powertrain_type", "fcai_category", "year", "make"]
     search_fields = ["make", "model", "variant", "year"]
     readonly_fields = ["id", "imported_at", "updated_at"]
+    inlines = [ManualVehicleEnrichmentInline]
 
 
 @admin.register(Vehicle)
