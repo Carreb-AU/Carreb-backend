@@ -6,6 +6,7 @@ from django.core.cache import cache
 from django.db import models, connection
 from django.contrib.postgres.search import TrigramSimilarity
 from django.shortcuts import get_object_or_404
+import statistics
 from apps.mygarage.models import (
     CurrentVehicle, GarageVehicle, GarageVehicleStatus, GarageVehicleSource,
     VehicleOverride, UserPriorityState, CoreMode, AISmartMatchRequest
@@ -110,6 +111,77 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
             "disclaimer": "All figures are estimates only."
         }
     }
+
+
+def _median_or_none(values):
+    return int(statistics.median(values)) if values else None
+
+
+def _build_dial_bands(user, priority_state):
+    """
+    Build the band-level numbers the CORE Dial expects.
+
+    Returns a list of band dicts (one per star band) containing:
+      - slug: band identifier matching frontend DIAL_MODES ids
+      - vehicle_count: number of active garage vehicles in this band
+      - coo: median total annual cost ($/year) for vehicles in this band
+      - co2: median annual CO2 (kg/year) for vehicles in this band
+      - cost_diff: median estimated cost difference vs the current vehicle (cents)
+    """
+    band_slugs = [
+        'captain-carbon',
+        'the-detour',
+        'steady-cruiser',
+        'smart-move',
+        'net-zero-ninja',
+    ]
+    band_stats = {
+        slug: {'costs': [], 'co2s': [], 'diffs': [], 'count': 0}
+        for slug in band_slugs
+    }
+
+    cv = getattr(user, 'current_vehicle', None)
+    cv_cost = None
+    if cv:
+        cv_resp = _build_calculated_vehicle_response(user, cv, priority_state, is_current_vehicle=True)
+        cv_cost = cv_resp.get('engine_data', {}).get('total_annual_cost')
+
+    active_qs = GarageVehicle.objects.filter(user=user, status=GarageVehicleStatus.ACTIVE)
+    for gv in active_qs:
+        resp = _build_calculated_vehicle_response(user, gv, priority_state)
+        engine_data = resp.get('engine_data')
+        if not engine_data:
+            continue
+        slug = engine_data.get('band_slug')
+        if slug not in band_stats:
+            continue
+
+        band_stats[slug]['count'] += 1
+        total = engine_data.get('total_annual_cost')
+        co2 = engine_data.get('annual_co2_kg')
+        if total is not None:
+            band_stats[slug]['costs'].append(total)
+        if co2 is not None:
+            band_stats[slug]['co2s'].append(co2)
+
+        diff_obj = engine_data.get('est_cost_difference')
+        diff_cents = None
+        if isinstance(diff_obj, dict):
+            diff_cents = diff_obj.get('value_cents')
+        if diff_cents is not None and cv_cost is not None:
+            band_stats[slug]['diffs'].append(diff_cents)
+
+    return [
+        {
+            'slug': slug,
+            'vehicle_count': band_stats[slug]['count'],
+            'coo': _median_or_none(band_stats[slug]['costs']),
+            'co2': _median_or_none(band_stats[slug]['co2s']),
+            'cost_diff': _median_or_none(band_stats[slug]['diffs']),
+        }
+        for slug in band_slugs
+    ]
+
 
 class CurrentVehicleView(views.APIView):
     permission_classes = [IsAuthenticated]
@@ -854,8 +926,12 @@ class PriorityStateView(views.APIView):
     
     def get(self, request):
         state, _ = UserPriorityState.objects.get_or_create(user=request.user)
-        return Response(UserPriorityStateSerializer(state).data)
-        
+        return Response({
+            "state": UserPriorityStateSerializer(state).data,
+            "band_counts": {},
+            "bands": _build_dial_bands(request.user, state),
+        })
+
     def patch(self, request):
         state, _ = UserPriorityState.objects.get_or_create(user=request.user)
         
@@ -875,26 +951,17 @@ class PriorityStateView(views.APIView):
                 'active_core_mode': serializer.validated_data.get('active_core_mode')
             })
             
-        # recalculate band counts
-        qs = GarageVehicle.objects.filter(user=request.user, status=GarageVehicleStatus.ACTIVE)
-        bands = {'net_zero_ninja': 0, 'smart_move': 0, 'steady_cruiser': 0, 'the_detour': 0, 'captain_carbon': 0}
-        
-        cv = getattr(request.user, 'current_vehicle', None)
-        user_state = getattr(cv, 'state', 'NSW') if cv else 'NSW'
-        
-        for gv in qs:
-            resp = _build_calculated_vehicle_response(request.user, gv, serializer.instance)
-            b = resp['engine_data'].get('band_slug') if resp.get('engine_data') else None
-            if b:
-                b_key = b.replace('-', '_')
-                if b_key in bands:
-                    bands[b_key] += 1
-                    
         cache.delete(f"spotlights_{request.user.id}")
 
-        # Return enough data for the CORE Dial to refresh its numbers.
-        # The dial should read from peer_band_medians[band_slug] inside engine_data.
-        response = {"state": serializer.data, "band_counts": bands}
+        # Build the band-level numbers the CORE Dial needs.
+        dial_bands = _build_dial_bands(request.user, serializer.instance)
+        band_counts = {b['slug'].replace('-', '_'): b['vehicle_count'] for b in dial_bands}
+
+        response = {
+            "state": serializer.data,
+            "band_counts": band_counts,
+            "bands": dial_bands,
+        }
         cv = getattr(request.user, 'current_vehicle', None)
         if cv:
             cv_state = getattr(request.user, 'priority_state', serializer.instance)

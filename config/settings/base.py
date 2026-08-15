@@ -322,7 +322,7 @@ CELERY_BEAT_SCHEDULE = {
 
     'quarterly-gvg-import': {
         'task': 'apps.vehicles.tasks.quarterly_gvg_import_task',
-        'schedule': crontab(hour=2, minute=0, day_of_month=1, month='1,4,7,10'),
+        'schedule': crontab(hour=2, minute=0, day_of_month=1, month_of_year='1,4,7,10'),
     },
 }
 
