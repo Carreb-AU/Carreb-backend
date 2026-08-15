@@ -13,13 +13,16 @@ from django.db import transaction
 from apps.vehicles.models import (
     CategoryCostDefault,
     DataSource,
+    DepreciationBrandModifier,
+    EnergyTypeModifier,
     GreenVehicleGuideRecord,
     PowertrainType,
     Vehicle,
 )
 
-# Spec §3.5 modifiers (partial — insurance state modifiers supplied by client).
-# EnergyTypeModifier and DepreciationBrandModifier tables are pending.
+# Spec §3.5 modifiers.
+# Insurance state modifiers are fixed below; EnergyTypeModifier and
+# DepreciationBrandModifier are now models and applied at runtime.
 INSURANCE_STATE_MODIFIERS = {
     'NSW': 1.178,
     'VIC': 1.510,
@@ -30,6 +33,71 @@ INSURANCE_STATE_MODIFIERS = {
     'NT':  1.146,
     'ACT': 0.899,
 }
+
+
+def _get_energy_modifier(powertrain_type: str) -> Optional[EnergyTypeModifier]:
+    if not powertrain_type:
+        return None
+    return EnergyTypeModifier.objects.filter(powertrain_type=powertrain_type).first()
+
+
+def _get_brand_modifier(brand: str) -> Optional[DepreciationBrandModifier]:
+    if not brand:
+        return None
+    return DepreciationBrandModifier.objects.filter(brand__iexact=brand).first()
+
+
+def _apply_energy_modifiers(vehicle_like, default: CategoryCostDefault):
+    """Apply powertrain-based multipliers to category benchmark components."""
+    modifier = _get_energy_modifier(getattr(vehicle_like, 'powertrain_type', None))
+    if not modifier:
+        return
+
+    state = vehicle_like._state
+
+    def _apply(field_name: str, multiplier: float, json_field: str):
+        data = getattr(vehicle_like, json_field, None) or {}
+        value = data.get(state)
+        if value:
+            data[state] = int(round(value * multiplier))
+            setattr(vehicle_like, json_field, data)
+
+    _apply('fuel_cost_pa', modifier.fuel_cost_multiplier, 'fuel_cost_by_state')
+    _apply('electricity_cost_pa', modifier.electricity_cost_multiplier, 'electricity_cost_by_state')
+    _apply('registration_pa', modifier.registration_cost_multiplier, 'registration_by_state')
+
+    # Insurance already got the state modifier; the energy multiplier is secondary.
+    _apply('comprehensive_pa', modifier.insurance_cost_multiplier, 'insurance_estimate_by_state')
+
+    # CTP is government-mandated; leave it alone by default.
+
+    if default.servicing_5yr_estimate and modifier.servicing_cost_multiplier != 1.0:
+        vehicle_like.servicing_5yr_estimate = int(round(
+            default.servicing_5yr_estimate * modifier.servicing_cost_multiplier
+        ))
+
+    if default.tyre_replacement_estimate and modifier.tyre_cost_multiplier != 1.0:
+        vehicle_like.tyre_replacement_estimate = int(round(
+            default.tyre_replacement_estimate * modifier.tyre_cost_multiplier
+        ))
+
+
+def _get_resale_modifiers(powertrain_type: str, brand: str) -> tuple[float, float]:
+    """Return (energy_multiplier, brand_multiplier) for resale/retention."""
+    energy_mod = _get_energy_modifier(powertrain_type)
+    brand_mod = _get_brand_modifier(brand)
+    energy_mult = energy_mod.resale_value_multiplier if energy_mod else 1.0
+    brand_mult = brand_mod.resale_value_multiplier if brand_mod else 1.0
+    return energy_mult, brand_mult
+
+
+def _get_retention_modifiers(powertrain_type: str, brand: str) -> tuple[float, float]:
+    """Return (energy_multiplier, brand_multiplier) for retention rate."""
+    energy_mod = _get_energy_modifier(powertrain_type)
+    brand_mod = _get_brand_modifier(brand)
+    energy_mult = energy_mod.retention_multiplier if energy_mod else 1.0
+    brand_mult = brand_mod.retention_multiplier if brand_mod else 1.0
+    return energy_mult, brand_mult
 
 
 def _get_manual_source() -> Optional[DataSource]:
@@ -109,11 +177,10 @@ class VehicleLike:
         self.total_5yr_cost_of_ownership_by_state = record.total_5yr_cost_of_ownership_by_state or {}
         self.mode_data_by_state = getattr(record, 'mode_data_by_state', None) or {}
 
-        # Use any vehicle-specific GVG cost fields before falling back to category averages.
-        if record.annual_fuel_cost:
-            self.fuel_cost_by_state[self._state] = record.annual_fuel_cost
-        if record.driveaway_price_estimate:
-            self.driveaway_price_by_state = {self._state: record.driveaway_price_estimate}
+        # Do not use GVG's own AnnualFuelCost or driveaway estimate as the
+        # displayed Carreb value. The Carreb model uses consumption × state fuel
+        # price × km p.a. and its own driveaway data. Category defaults fill any
+        # gaps until state fuel-price and depreciation modifier tables are ready.
 
         self._apply_defaults_if_missing()
 
@@ -156,9 +223,9 @@ class VehicleLike:
     def _apply_defaults_if_missing(self):
         """Pull category defaults for the chosen state if cost fields are empty.
 
-        The client spec calls for CategoryBenchmark × modifiers. Insurance
-        state modifiers are implemented; EnergyTypeModifier and
-        DepreciationBrandModifier are pending the full tables.
+        The client spec calls for CategoryBenchmark × modifiers.
+        Insurance state modifiers and energy-type modifiers are applied here.
+        Brand depreciation modifiers are applied at resale/retention time.
         """
         if not self.fcai_category:
             return
@@ -181,6 +248,9 @@ class VehicleLike:
             self.registration_by_state[self._state] = default.registration_pa
         if self._state and not self._state_value(self.fuel_cost_by_state):
             self.fuel_cost_by_state[self._state] = default.fuel_cost_pa
+
+        # Apply powertrain-based multipliers on top of the category benchmark.
+        _apply_energy_modifiers(self, default)
         if self._state and not self._state_value(self.electricity_cost_by_state):
             self.electricity_cost_by_state[self._state] = default.electricity_cost_pa
         if self._state and not self._state_value(self.ev_levy_by_state):

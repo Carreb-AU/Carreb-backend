@@ -2,7 +2,15 @@ import os
 from django.contrib import admin, messages
 from django.conf import settings
 
-from apps.vehicles.models import Vehicle, DataSource, GreenVehicleGuideRecord, CategoryCostDefault, ManualVehicleEnrichment
+from apps.vehicles.models import (
+    Vehicle,
+    DataSource,
+    GreenVehicleGuideRecord,
+    CategoryCostDefault,
+    ManualVehicleEnrichment,
+    EnergyTypeModifier,
+    DepreciationBrandModifier,
+)
 from apps.vehicles.services.gvg_import import import_all
 
 
@@ -44,6 +52,31 @@ class CategoryCostDefaultAdmin(admin.ModelAdmin):
     list_display = ["fcai_category", "state", "annual_km", "ctp_pa", "comprehensive_pa", "registration_pa", "updated_at"]
     list_filter = ["fcai_category", "state"]
     search_fields = ["fcai_category", "fcai_broad"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(EnergyTypeModifier)
+class EnergyTypeModifierAdmin(admin.ModelAdmin):
+    list_display = [
+        "powertrain_type",
+        "fuel_cost_multiplier",
+        "electricity_cost_multiplier",
+        "servicing_cost_multiplier",
+        "tyre_cost_multiplier",
+        "insurance_cost_multiplier",
+        "registration_cost_multiplier",
+        "resale_value_multiplier",
+        "retention_multiplier",
+        "updated_at",
+    ]
+    list_filter = ["powertrain_type"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(DepreciationBrandModifier)
+class DepreciationBrandModifierAdmin(admin.ModelAdmin):
+    list_display = ["brand", "retention_multiplier", "resale_value_multiplier", "updated_at"]
+    search_fields = ["brand"]
     readonly_fields = ["id", "created_at", "updated_at"]
 
 

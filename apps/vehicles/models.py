@@ -257,3 +257,59 @@ class ManualVehicleEnrichment(models.Model):
 
     def __str__(self):
         return f"Manual enrichment for {self.record}"
+
+
+class EnergyTypeModifier(models.Model):
+    """
+    Multipliers applied to CategoryCostDefault benchmark components based on
+    powertrain type (Spec §3.5). All defaults are 1.0 so an unseeded table is
+    safe; admins tune from real data over time.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    powertrain_type = models.CharField(
+        max_length=50,
+        choices=PowertrainType.choices,
+        unique=True,
+    )
+
+    fuel_cost_multiplier = models.FloatField(default=1.0)
+    electricity_cost_multiplier = models.FloatField(default=1.0)
+    servicing_cost_multiplier = models.FloatField(default=1.0)
+    tyre_cost_multiplier = models.FloatField(default=1.0)
+    insurance_cost_multiplier = models.FloatField(default=1.0)
+    registration_cost_multiplier = models.FloatField(default=1.0)
+
+    resale_value_multiplier = models.FloatField(default=1.0)
+    retention_multiplier = models.FloatField(default=1.0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Energy Type Modifier'
+        verbose_name_plural = 'Energy Type Modifiers'
+
+    def __str__(self):
+        return f"{self.get_powertrain_type_display()} modifiers"
+
+
+class DepreciationBrandModifier(models.Model):
+    """
+    Per-brand modifiers applied to depreciation / resale estimates (Spec §3.5).
+    A multiplier >1 means stronger-than-average resale / retention.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    brand = models.CharField(max_length=255, unique=True)
+
+    retention_multiplier = models.FloatField(default=1.0)
+    resale_value_multiplier = models.FloatField(default=1.0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Depreciation Brand Modifier'
+        verbose_name_plural = 'Depreciation Brand Modifiers'
+
+    def __str__(self):
+        return f"{self.brand} depreciation modifiers"

@@ -14,6 +14,7 @@ from apps.vehicles.tasks import emit_analytics_event, process_vehicle_excel_uplo
 import os
 from django.core.files.storage import default_storage
 from apps.users.models import SubscriptionTier
+from apps.users.permissions import IsPaidMember
 
 class StandardResultsSetPagination(pagination.PageNumberPagination):
     page_size = 20
@@ -247,7 +248,7 @@ class VehicleDataUploadView(views.APIView):
         }, status=status.HTTP_202_ACCEPTED)
 
 class CoreSearchView(views.APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsPaidMember]
     
     def post(self, request):
         serializer = CoreSearchRequestSerializer(data=request.data)

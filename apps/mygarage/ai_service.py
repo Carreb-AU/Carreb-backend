@@ -202,18 +202,47 @@ def estimate_ancap_rating(make: str, model: str, year: int) -> Optional[int]:
         return None
 
 
-def estimate_resale_value(driveaway_cents: int, year: int, current_year: Optional[int] = None, retention_rate: float = 0.50) -> Optional[int]:
-    """Return a simple retention-based 5-year resale estimate in cents.
+def estimate_resale_value(
+    driveaway_cents: int,
+    year: int,
+    current_year: Optional[int] = None,
+    retention_rate: float = 0.50,
+    powertrain_type: Optional[str] = None,
+    brand: Optional[str] = None,
+) -> Optional[int]:
+    """Return a retention-based 5-year resale estimate in cents, with modifiers.
 
-    This is a Tier-3 fallback until the modifier tables
-    (EnergyTypeModifier, InsuranceStateModifier, DepreciationBrandModifier)
-    are implemented. The client spec calls for retention_5yr_pct × modifiers.
+    Applies EnergyTypeModifier and DepreciationBrandModifier multipliers to
+    the base retention curve (Spec §3.5).
     """
+    from apps.vehicles.services.gvg_import import (
+        _get_energy_modifier,
+        _get_brand_modifier,
+    )
+
     if not driveaway_cents or not year:
         return None
     if current_year is None:
         current_year = datetime.now().year
+
+    energy_mod = _get_energy_modifier(powertrain_type)
+    brand_mod = _get_brand_modifier(brand)
+
+    retention_mult = (
+        retention_rate
+        * (energy_mod.retention_multiplier if energy_mod else 1.0)
+        * (brand_mod.retention_multiplier if brand_mod else 1.0)
+    )
+    resale_mult = (
+        (energy_mod.resale_value_multiplier if energy_mod else 1.0)
+        * (brand_mod.resale_value_multiplier if brand_mod else 1.0)
+    )
+
     age = max(0, current_year - year)
     # Avoid compounding to zero for very old cars; floor at 5% of driveaway.
-    value_cents = int(driveaway_cents * max(0.05, retention_rate ** age))
+    value_cents = int(
+        driveaway_cents
+        * max(0.05, retention_mult ** age)
+        * resale_mult
+    )
     return value_cents

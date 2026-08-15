@@ -14,6 +14,7 @@ from apps.mygarage.models import (
 from apps.vehicles.models import Vehicle, GreenVehicleGuideRecord
 from apps.vehicles.services.gvg_import import build_vehicle_like_from_gvg
 from apps.users.models import SubscriptionTier
+from apps.users.permissions import IsPaidMember
 from apps.mygarage.serializers import (
     CurrentVehicleSerializer, GarageVehicleSerializer,
     UserPriorityStateSerializer, CurrentVehicleCreateSerializer,
@@ -452,6 +453,8 @@ class CurrentVehicleAutoFillView(views.APIView):
                 estimated = estimate_resale_value(
                     driveaway_cents=driveaway_cents,
                     year=getattr(rating_vehicle, 'year', 0) or 0,
+                    powertrain_type=getattr(rating_vehicle, 'powertrain_type', None),
+                    brand=getattr(rating_vehicle, 'brand', None) or getattr(rating_vehicle, 'make', None),
                 )
                 if estimated:
                     suggested_values['resale_value_5yr_estimate'] = estimated
@@ -1076,7 +1079,7 @@ class SpotlightsView(views.APIView):
         return Response(results)
 
 class AISmartMatchView(views.APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPaidMember]
 
     def post(self, request):
         serializer = AISmartMatchInputSerializer(data=request.data)
