@@ -17,6 +17,6 @@ class Migration(migrations.Migration):
         migrations.RenameIndex(
             model_name='vehicleidentity',
             old_name='gvg_search_trgm_idx',
-            new_name='vehicle_identity_search_trgm_idx',
+            new_name='vehicle_identity_search_idx',
         ),
     ]
