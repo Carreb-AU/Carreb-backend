@@ -21,9 +21,21 @@ class Command(BaseCommand):
             self.stderr.write(f"Error reading Excel file: {e}")
             return
             
-        if 'Image url ' not in df.columns:
-            self.stderr.write("Column 'Image url ' not found in the spreadsheet.")
+        # Normalise column names so trailing spaces or case variants do not break the import.
+        col_map = {str(c).strip().lower(): c for c in df.columns}
+        image_col = None
+        for candidate in ('image url', 'image_url', 'imageurl', 'image url '):
+            if candidate in col_map:
+                image_col = col_map[candidate]
+                break
+
+        if image_col is None:
+            self.stderr.write(
+                f"Image URL column not found. Available columns: {list(df.columns)}"
+            )
             return
+
+        self.stdout.write(f"Using image URL column: {image_col!r}")
 
         updated_count = 0
         missing_count = 0
@@ -36,7 +48,7 @@ class Command(BaseCommand):
             year_val = row.get('Year')
             year = int(float(year_val)) if not pd.isna(year_val) and year_val != '' else 2026
             
-            image_url = str(row.get('Image url ')).strip() if not pd.isna(row.get('Image url ')) else ''
+            image_url = str(row.get(image_col)).strip() if not pd.isna(row.get(image_col)) else ''
             
             if image_url:
                 # Find the vehicle and update it
