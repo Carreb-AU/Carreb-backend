@@ -11,7 +11,7 @@ from apps.mygarage.models import (
     CurrentVehicle, GarageVehicle, GarageVehicleStatus, GarageVehicleSource,
     VehicleOverride, UserPriorityState, CoreMode, AISmartMatchRequest
 )
-from apps.vehicles.models import Vehicle, GreenVehicleGuideRecord
+from apps.vehicles.models import Vehicle, VehicleIdentity
 from apps.vehicles.services.gvg_import import build_vehicle_like_from_gvg
 from apps.users.models import SubscriptionTier
 from apps.users.permissions import IsPaidMember
@@ -326,7 +326,7 @@ class CurrentVehicleSearchView(views.APIView):
 
         # 2. GVG records (older vehicles) - trigram fuzzy type-ahead
         if len(results) < 10:
-            gvg_qs = GreenVehicleGuideRecord.objects.all()
+            gvg_qs = VehicleIdentity.objects.all()
             if connection.vendor == 'postgresql':
                 needle = (' '.join(([str(year)] if year else []) + words) or query).lower()
                 gvg_qs = gvg_qs.annotate(
@@ -511,7 +511,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
             "name": str(v),
         }
 
-    def _normalize_gvg(self, r: GreenVehicleGuideRecord) -> dict:
+    def _normalize_gvg(self, r: VehicleIdentity) -> dict:
         return {
             "id": str(r.id),
             "source": "gvg",
@@ -563,7 +563,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
 
         # 2. GVG records - trigram fuzzy fallback
         if len(results) < self.MAX_RESULTS:
-            gvg_qs = GreenVehicleGuideRecord.objects.all()
+            gvg_qs = VehicleIdentity.objects.all()
             remaining = self.MAX_RESULTS - len(results)
 
             if connection.vendor == 'postgresql':
@@ -616,7 +616,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
         cached = cache.get(cache_key)
         if cached is None:
             carreb_makes = set(Vehicle.objects.values_list('brand', flat=True).distinct())
-            gvg_makes = set(GreenVehicleGuideRecord.objects.values_list('make', flat=True).distinct())
+            gvg_makes = set(VehicleIdentity.objects.values_list('make', flat=True).distinct())
             cached = sorted({m for m in (carreb_makes | gvg_makes) if m})
             cache.set(cache_key, cached, self.CACHE_TTL)
 
@@ -637,7 +637,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
                 Vehicle.objects.filter(brand__iexact=q_make).values_list('model', flat=True).distinct()
             )
             gvg_models = set(
-                GreenVehicleGuideRecord.objects.filter(make__iexact=q_make).values_list('model', flat=True).distinct()
+                VehicleIdentity.objects.filter(make__iexact=q_make).values_list('model', flat=True).distinct()
             )
             cached = sorted({m for m in (carreb_models | gvg_models) if m})
             cache.set(cache_key, cached, self.CACHE_TTL)
@@ -660,7 +660,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
                 Vehicle.objects.filter(brand__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()
             )
             gvg_years = set(
-                GreenVehicleGuideRecord.objects.filter(make__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()
+                VehicleIdentity.objects.filter(make__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()
             )
             cached = sorted({int(y) for y in (carreb_years | gvg_years) if y}, reverse=True)
             cache.set(cache_key, cached, self.CACHE_TTL)

@@ -38,8 +38,8 @@ class CurrentVehicleCreateSerializer(serializers.Serializer):
         return value
 
     def validate_green_vehicle_guide_record_id(self, value):
-        from apps.vehicles.models import GreenVehicleGuideRecord
-        if value and not GreenVehicleGuideRecord.objects.filter(id=value).exists():
+        from apps.vehicles.models import VehicleIdentity
+        if value and not VehicleIdentity.objects.filter(id=value).exists():
             raise serializers.ValidationError("Green Vehicle Guide record with this ID does not exist.")
         return value
 

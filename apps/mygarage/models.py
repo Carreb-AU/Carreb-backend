@@ -9,7 +9,7 @@ class CurrentVehicle(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='current_vehicle')
     vehicle_catalogue = models.ForeignKey(Vehicle, on_delete=models.SET_NULL, null=True, blank=True, related_name='current_vehicles')
     green_vehicle_guide_record = models.ForeignKey(
-        'vehicles.GreenVehicleGuideRecord',
+        'vehicles.VehicleIdentity',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

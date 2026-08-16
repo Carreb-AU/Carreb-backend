@@ -15,7 +15,7 @@ from apps.vehicles.models import (
     DataSource,
     DepreciationBrandModifier,
     EnergyTypeModifier,
-    GreenVehicleGuideRecord,
+    VehicleIdentity,
     PowertrainType,
     Vehicle,
 )
@@ -118,7 +118,7 @@ class VehicleLike:
     Duck-typed stand-in for Vehicle used when a GVG record is selected as the
     user's current vehicle. It exposes the fields calculate_core_rating expects.
     """
-    def __init__(self, record: GreenVehicleGuideRecord, state: str):
+    def __init__(self, record: VehicleIdentity, state: str):
         self._record = record
         self._state = state.upper()
         self.id = record.id
@@ -262,7 +262,7 @@ class VehicleLike:
             self.tyre_replacement_estimate = default.tyre_replacement_estimate
 
 
-def build_vehicle_like_from_gvg(record: GreenVehicleGuideRecord, state: str) -> VehicleLike:
+def build_vehicle_like_from_gvg(record: VehicleIdentity, state: str) -> VehicleLike:
     return VehicleLike(record, state)
 
 
@@ -520,7 +520,7 @@ def import_category_cost_defaults(filepath: str, clear: bool = False) -> int:
     return created
 
 
-def apply_cost_defaults(record: GreenVehicleGuideRecord, state: str) -> None:
+def apply_cost_defaults(record: VehicleIdentity, state: str) -> None:
     """Mutate the record's cost fields from CategoryCostDefault if blank."""
     default = CategoryCostDefault.objects.filter(
         fcai_category=record.fcai_category,
@@ -573,7 +573,7 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
     df = pd.read_excel(filepath, sheet_name='Vehicles 2004-2025')
 
     if clear:
-        GreenVehicleGuideRecord.objects.filter(source_dataset='GVG-CURRENT').delete()
+        VehicleIdentity.objects.filter(source_dataset='GVG-CURRENT').delete()
 
     created = 0
     skipped = 0
@@ -600,7 +600,7 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
         powertrain = map_powertrain(fuel_type_raw)
 
         test_cycle = _safe_str(row.get('Test Cycle')) or 'ADR'
-        record = GreenVehicleGuideRecord(
+        record = VehicleIdentity(
             source=source,
             make=make,
             model=model,
@@ -632,12 +632,12 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
 
         records.append(record)
         if len(records) >= 1000:
-            GreenVehicleGuideRecord.objects.bulk_create(records, batch_size=1000)
+            VehicleIdentity.objects.bulk_create(records, batch_size=1000)
             created += len(records)
             records = []
 
     if records:
-        GreenVehicleGuideRecord.objects.bulk_create(records, batch_size=1000)
+        VehicleIdentity.objects.bulk_create(records, batch_size=1000)
         created += len(records)
 
     return {'created': created, 'skipped': skipped}
@@ -651,7 +651,7 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
     df = pd.read_csv(filepath)
 
     if clear:
-        GreenVehicleGuideRecord.objects.filter(source_dataset='GVG-OLDER-8603').delete()
+        VehicleIdentity.objects.filter(source_dataset='GVG-OLDER-8603').delete()
 
     created = 0
     skipped = 0
@@ -686,7 +686,7 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
         co2 = estimate_co2_from_fuel_and_consumption(fuel_type_raw, combined)
 
         test_cycle = 'ADR'
-        record = GreenVehicleGuideRecord(
+        record = VehicleIdentity(
             source=source,
             make=make,
             model=model,
@@ -713,12 +713,12 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
 
         records.append(record)
         if len(records) >= 1000:
-            GreenVehicleGuideRecord.objects.bulk_create(records, batch_size=1000)
+            VehicleIdentity.objects.bulk_create(records, batch_size=1000)
             created += len(records)
             records = []
 
     if records:
-        GreenVehicleGuideRecord.objects.bulk_create(records, batch_size=1000)
+        VehicleIdentity.objects.bulk_create(records, batch_size=1000)
         created += len(records)
 
     return {'created': created, 'skipped': skipped}
@@ -749,6 +749,10 @@ def _archive_source_file(source_path: str, code: str) -> str:
     return f"data/source_archives/{archive_name}"
 
 
+class SourceArchiveError(ValueError):
+    """Raised when a required source file cannot be archived."""
+
+
 def create_or_update_datasource(
     code: str,
     name: str,
@@ -757,10 +761,20 @@ def create_or_update_datasource(
     archived_path: str = '',
     source_file_path: str = '',
 ) -> DataSource:
-    """Register or update a DataSource and archive the source file."""
+    """Register or update a DataSource and archive the source file.
+
+    Raises SourceArchiveError if a source_file_path is supplied but the file
+    is missing or cannot be archived. A job with no registered active source
+    archive refuses to run (Spec §5 / Decision Note 3).
+    """
     archived_file = archived_path
     if source_file_path:
         archived_file = _archive_source_file(source_file_path, code)
+        if not archived_file:
+            raise SourceArchiveError(
+                f"Source archive is required for {code} but "
+                f"{source_file_path!r} was missing or could not be copied."
+            )
 
     defaults = {
         'name': name,
@@ -775,6 +789,13 @@ def create_or_update_datasource(
         code=code,
         defaults=defaults
     )
+
+    if source_file_path and not source.archived_file:
+        raise SourceArchiveError(
+            f"DataSource {code} was saved without an archived_file. "
+            f"The source file must be persisted before import can proceed."
+        )
+
     return source
 
 

@@ -75,7 +75,7 @@ class CategoryCostDefault(models.Model):
         return f"{self.fcai_category} — {self.state}"
 
 
-class GreenVehicleGuideRecord(models.Model):
+class VehicleIdentity(models.Model):
     """
     Imported GVG / Fuel Consumption Guide data for prior-year current-vehicle lookup.
     """
@@ -150,7 +150,7 @@ class GreenVehicleGuideRecord(models.Model):
             models.Index(fields=['make', 'model', 'year']),
             models.Index(fields=['powertrain_type']),
             models.Index(fields=['fcai_category']),
-            GinIndex(fields=['search_text'], name='gvg_search_trgm_idx', opclasses=['gin_trgm_ops']),
+            GinIndex(fields=['search_text'], name='vehicle_identity_search_trgm_idx', opclasses=['gin_trgm_ops']),
         ]
 
     def build_search_text(self):
@@ -235,7 +235,7 @@ class ManualVehicleEnrichment(models.Model):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     record = models.OneToOneField(
-        GreenVehicleGuideRecord,
+        VehicleIdentity,
         on_delete=models.CASCADE,
         related_name='manual_enrichment',
     )

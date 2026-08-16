@@ -5,7 +5,7 @@ from django.conf import settings
 from apps.vehicles.models import (
     Vehicle,
     DataSource,
-    GreenVehicleGuideRecord,
+    VehicleIdentity,
     CategoryCostDefault,
     ManualVehicleEnrichment,
     EnergyTypeModifier,
@@ -86,8 +86,8 @@ class ManualVehicleEnrichmentInline(admin.StackedInline):
     readonly_fields = ["id", "enriched_at", "updated_at"]
 
 
-@admin.register(GreenVehicleGuideRecord)
-class GreenVehicleGuideRecordAdmin(admin.ModelAdmin):
+@admin.register(VehicleIdentity)
+class VehicleIdentityAdmin(admin.ModelAdmin):
     list_display = ["make", "model", "year", "variant", "body_style", "powertrain_type", "fcai_category", "tailpipe_co2_g_per_km", "source_dataset", "imported_at"]
     list_filter = ["source_dataset", "powertrain_type", "fcai_category", "year", "make"]
     search_fields = ["make", "model", "variant", "year"]

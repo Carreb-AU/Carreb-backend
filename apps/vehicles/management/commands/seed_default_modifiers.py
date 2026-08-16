@@ -3,7 +3,7 @@ from django.core.management.base import BaseCommand
 from apps.vehicles.models import (
     PowertrainType,
     Vehicle,
-    GreenVehicleGuideRecord,
+    VehicleIdentity,
     EnergyTypeModifier,
     DepreciationBrandModifier,
 )
@@ -39,7 +39,7 @@ class Command(BaseCommand):
             Vehicle.objects.values_list('brand', flat=True).distinct()
         )
         brands.update(
-            GreenVehicleGuideRecord.objects.values_list('make', flat=True).distinct()
+            VehicleIdentity.objects.values_list('make', flat=True).distinct()
         )
 
         brand_created = 0
