@@ -46,16 +46,25 @@ class Command(BaseCommand):
             default="",
             help="Optional host to prepend to MEDIA_URL, e.g. https://api.carreb.com.au",
         )
+        parser.add_argument(
+            "--replace-existing",
+            type=str,
+            default="",
+            help="Re-fetch images for vehicles whose current image_url matches this value",
+        )
 
     def handle(self, *args, **options):
         delay = options["delay"]
         limit = options["limit"]
         fallback_url = options["fallback_url"]
         base_url = options["base_url"].rstrip("/")
+        replace_existing = options["replace_existing"]
 
         qs = Vehicle.objects.filter(image_url__isnull=True) | Vehicle.objects.filter(
             image_url=""
         )
+        if replace_existing:
+            qs = qs | Vehicle.objects.filter(image_url=replace_existing)
         if limit:
             qs = qs[:limit]
 
@@ -72,10 +81,11 @@ class Command(BaseCommand):
             query = f"{vehicle.brand} {vehicle.model}"
             self.stdout.write(f"Searching: {query} … ", ending="")
 
-            image_url = self._find_commons_image(query, headers)
+            time.sleep(delay)
+            image_url = self._find_commons_image(query, headers, delay)
 
             if image_url:
-                local_path = self._download_image(image_url, out_dir, headers)
+                local_path = self._download_image(image_url, out_dir, headers, delay)
                 if local_path:
                     relative_url = settings.MEDIA_URL + "vehicle_images/" + os.path.basename(local_path)
                     vehicle.image_url = (base_url + relative_url) if base_url else relative_url
@@ -88,8 +98,6 @@ class Command(BaseCommand):
             else:
                 missing += 1
                 self.stdout.write(self.style.WARNING("not found"))
-
-            time.sleep(delay)
 
         if fallback_url:
             remaining = (
@@ -111,8 +119,9 @@ class Command(BaseCommand):
             )
         )
 
-    def _find_commons_image(self, query: str, headers: dict) -> str:
+    def _find_commons_image(self, query: str, headers: dict, delay: float) -> str:
         """Return the URL of the first Wikimedia Commons image matching the query, or ''."""
+        time.sleep(delay)
         search_params = {
             "action": "query",
             "generator": "search",
@@ -145,7 +154,7 @@ class Command(BaseCommand):
                 return url
         return ""
 
-    def _download_image(self, url: str, out_dir: str, headers: dict) -> str:
+    def _download_image(self, url: str, out_dir: str, headers: dict, delay: float) -> str:
         """Download image to out_dir, return local file path or ''."""
         ext = os.path.splitext(unquote(url).split("?")[0])[1].lower()
         if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
@@ -154,8 +163,12 @@ class Command(BaseCommand):
         filename = f"{uuid.uuid4().hex}{ext}"
         local_path = os.path.join(out_dir, filename)
 
+        # Strip tracking query params before downloading; they cause 429s on upload.wikimedia.org.
+        download_url = url.split("?")[0]
+
+        time.sleep(delay)
         try:
-            r = requests.get(url, headers=headers, timeout=30)
+            r = requests.get(download_url, headers=headers, timeout=30)
             r.raise_for_status()
             with open(local_path, "wb") as f:
                 f.write(r.content)
