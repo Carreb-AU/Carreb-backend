@@ -13,6 +13,7 @@ from apps.mygarage.models import (
 )
 from apps.vehicles.models import Vehicle, VehicleIdentity
 from apps.vehicles.services.gvg_import import build_vehicle_like_from_gvg
+from apps.vehicles.services.image_lookup import get_vehicle_image_url
 from apps.users.models import SubscriptionTier
 from apps.users.permissions import IsPaidMember
 from apps.mygarage.serializers import (
@@ -254,8 +255,22 @@ class CurrentVehicleSearchView(views.APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    def _image_url_for(self, obj, source):
+        """Return a usable image URL, looking it up on-demand if missing."""
+        if source == 'carreb':
+            stored = getattr(obj, 'image_url', None)
+            make, model, year = obj.brand, obj.model, obj.year
+        else:
+            stored = getattr(obj, 'image_url', None)
+            make, model, year = obj.make, obj.model, obj.year
+
+        if stored:
+            return stored
+        return get_vehicle_image_url(make, model, year=year, delay=0.05)
+
     def _normalize_result(self, obj, source):
         """Return a consistent shape for catalogue and GVG records."""
+        image_url = self._image_url_for(obj, source)
         if source == 'carreb':
             return {
                 "id": str(obj.id),
@@ -269,7 +284,7 @@ class CurrentVehicleSearchView(views.APIView):
                 "fuel_consumption_per_100km": obj.fuel_consumption_per_100km,
                 "electricity_consumption_per_100km": obj.electricity_consumption_per_100km,
                 "tailpipe_co2_g_per_km": obj.tailpipe_co2_g_per_km,
-                "image_url": obj.image_url,
+                "image_url": image_url,
                 "name": str(obj),
             }
         return {
@@ -287,7 +302,7 @@ class CurrentVehicleSearchView(views.APIView):
                 if obj.electricity_consumption_wh_per_km else None
             ),
             "tailpipe_co2_g_per_km": obj.tailpipe_co2_g_per_km,
-            "image_url": obj.image_url,
+            "image_url": image_url,
             "name": f"{obj.year} {obj.make} {obj.model} {obj.variant}".strip(),
         }
 
@@ -499,6 +514,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
         }
 
     def _normalize_vehicle(self, v: Vehicle) -> dict:
+        image_url = v.image_url or get_vehicle_image_url(v.brand, v.model, year=v.year, delay=0.05)
         return {
             "id": str(v.id),
             "source": "carreb",
@@ -508,10 +524,12 @@ class CurrentVehicleSuggestionsView(views.APIView):
             "variant": v.variant,
             "body_style": v.body_style,
             "powertrain_type": v.powertrain_type,
+            "image_url": image_url,
             "name": str(v),
         }
 
     def _normalize_gvg(self, r: VehicleIdentity) -> dict:
+        image_url = r.image_url or get_vehicle_image_url(r.make, r.model, year=r.year, delay=0.05)
         return {
             "id": str(r.id),
             "source": "gvg",
@@ -521,7 +539,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
             "variant": r.variant,
             "body_style": r.body_style,
             "powertrain_type": r.powertrain_type,
-            "image_url": r.image_url,
+            "image_url": image_url,
             "name": f"{r.year} {r.make} {r.model} {r.variant}".strip(),
         }
 

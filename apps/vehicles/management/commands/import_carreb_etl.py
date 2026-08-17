@@ -37,6 +37,39 @@ class Command(BaseCommand):
             return False
         return bool(val)
 
+    # Workbook header / metadata rows that were previously imported as junk
+    # vehicles.  Real vehicle makes are short names (e.g. "Toyota", "Land Rover");
+    # they never contain underscores or worksheet metadata keywords.
+    _JUNK_MAKE_KEYWORDS = (
+        "_",
+        "section",
+        "computed",
+        "internal",
+        "primary_source_table",
+        "insurancedefaults",
+        "energytypecostmodifiers",
+        "registrationdefaults",
+        "scaling_factor",
+    )
+
+    def _is_junk_make(self, make):
+        if pd.isna(make):
+            return True
+        text = str(make).strip().lower()
+        if not text:
+            return True
+        return any(kw in text for kw in self._JUNK_MAKE_KEYWORDS)
+
+    def _filter_vehicle_rows(self, df):
+        """Drop rows that are clearly workbook metadata rather than vehicles."""
+        if df is None or df.empty:
+            return df
+        mask = df["Make"].apply(lambda m: not self._is_junk_make(m))
+        dropped = len(df) - mask.sum()
+        if dropped:
+            self.stdout.write(self.style.WARNING(f"Dropped {dropped} non-vehicle rows"))
+        return df[mask].copy()
+
     def _dollars_to_cents(self, val):
         """Convert a dollar value to whole cents for storage."""
         f = self._safe_float(val)
@@ -72,6 +105,9 @@ class Command(BaseCommand):
         except Exception as e:
             self.stderr.write(f"Error reading Excel file: {e}")
             return
+
+        df_data = self._filter_vehicle_rows(df_data)
+        df_coo = self._filter_vehicle_rows(df_coo)
 
         self.stdout.write("Processing COO Breakdown...")
         # Group by vehicle signature
