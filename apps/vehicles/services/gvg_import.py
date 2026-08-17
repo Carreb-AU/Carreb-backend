@@ -137,7 +137,7 @@ class VehicleLike:
         self.num_seats = record.num_seats or 5
         self.ancap_safety_rating = None
         self.annual_km_default = 13300
-        self.image_url = ''
+        self.image_url = record.image_url or ''
         self.driveaway_price_by_state = {}
         self.servicing_5yr_estimate = record.servicing_5yr_estimate
         self.tyre_replacement_estimate = record.tyre_replacement_estimate

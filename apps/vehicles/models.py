@@ -138,6 +138,9 @@ class VehicleIdentity(models.Model):
     #   "test_cycle": "ADR"
     # }
 
+    # Media
+    image_url = models.URLField(max_length=2000, blank=True, null=True)
+
     # Fuzzy type-ahead support (trigram GIN index). Maintained automatically by save().
     search_text = models.TextField(blank=True, default='')
 

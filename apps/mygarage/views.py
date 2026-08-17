@@ -287,7 +287,7 @@ class CurrentVehicleSearchView(views.APIView):
                 if obj.electricity_consumption_wh_per_km else None
             ),
             "tailpipe_co2_g_per_km": obj.tailpipe_co2_g_per_km,
-            "image_url": None,
+            "image_url": obj.image_url,
             "name": f"{obj.year} {obj.make} {obj.model} {obj.variant}".strip(),
         }
 
@@ -521,6 +521,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
             "variant": r.variant,
             "body_style": r.body_style,
             "powertrain_type": r.powertrain_type,
+            "image_url": r.image_url,
             "name": f"{r.year} {r.make} {r.model} {r.variant}".strip(),
         }
 

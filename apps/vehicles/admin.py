@@ -88,7 +88,7 @@ class ManualVehicleEnrichmentInline(admin.StackedInline):
 
 @admin.register(VehicleIdentity)
 class VehicleIdentityAdmin(admin.ModelAdmin):
-    list_display = ["make", "model", "year", "variant", "body_style", "powertrain_type", "fcai_category", "tailpipe_co2_g_per_km", "source_dataset", "imported_at"]
+    list_display = ["make", "model", "year", "variant", "body_style", "powertrain_type", "fcai_category", "image_url", "tailpipe_co2_g_per_km", "source_dataset", "imported_at"]
     list_filter = ["source_dataset", "powertrain_type", "fcai_category", "year", "make"]
     search_fields = ["make", "model", "variant", "year"]
     readonly_fields = ["id", "imported_at", "updated_at"]
