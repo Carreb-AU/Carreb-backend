@@ -3,14 +3,20 @@
 Used by search/type-ahead views so images are fetched only when a vehicle is
 actually returned to a user, instead of pre-downloading tens of thousands of
 images to local storage.
+
+When Commons has no match, we fall back to an FCAI vehicle silhouette
+appropriate for the vehicle's category and body style.
 """
 import logging
 import time
 from functools import lru_cache
+from typing import Optional
 
 import requests
 from django.conf import settings
 from django.core.cache import cache
+
+from apps.vehicles.services.silhouette_lookup import get_silhouette_url
 
 logger = logging.getLogger(__name__)
 
@@ -71,21 +77,37 @@ def _find_commons_image(query: str, delay: float = 0.25) -> str:
     return ""
 
 
-def get_vehicle_image_url(make: str, model: str, year: int | None = None, delay: float = 0.25) -> str:
+def get_vehicle_image_url(
+    make: str,
+    model: str,
+    year: int | None = None,
+    fcai_category: Optional[str] = None,
+    body_style: Optional[str] = None,
+    drive: Optional[str] = None,
+    delay: float = 0.25,
+) -> str:
     """Return an image URL for a vehicle, fetching from Commons on cache miss.
 
-    The result is cached for 30 days.  If no image is found, a configured
-    fallback URL is returned and that negative result is also cached for 24
-    hours so we don't keep hitting the API for the same missing vehicle.
+    The result is cached for 30 days.  If no Commons image is found, we fall
+    back to an FCAI silhouette matched on ``fcai_category`` and
+    ``body_style``.  The negative result is also cached for 24 hours so we
+    don't keep hitting the API for the same missing vehicle.
     """
     make = (make or "").strip()
     model = (model or "").strip()
     if not make and not model:
-        return _fallback_url()
+        return get_silhouette_url(fcai_category, body_style, drive)
 
     key = _cache_key(make, model)
     cached = cache.get(key)
     if cached is not None:
+        # If the cached value is the old generic fallback, replace it with a
+        # silhouette when we now have category/body-style info.
+        if cached == _fallback_url():
+            silhouette = get_silhouette_url(fcai_category, body_style, drive)
+            if silhouette != cached:
+                cache.set(key, silhouette, CACHE_TTL_SECONDS)
+                return silhouette
         return cached
 
     query = f"{make} {model}".strip()
@@ -97,8 +119,8 @@ def get_vehicle_image_url(make: str, model: str, year: int | None = None, delay:
         cache.set(key, url, CACHE_TTL_SECONDS)
         return url
 
-    # Cache negative result for a shorter period to avoid hammering the API.
-    fallback = _fallback_url()
+    # Cache the silhouette fallback for 24 hours.
+    fallback = get_silhouette_url(fcai_category, body_style, drive)
     cache.set(key, fallback, 60 * 60 * 24)
     return fallback
 

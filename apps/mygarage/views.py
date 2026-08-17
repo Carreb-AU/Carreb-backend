@@ -260,13 +260,27 @@ class CurrentVehicleSearchView(views.APIView):
         if source == 'carreb':
             stored = getattr(obj, 'image_url', None)
             make, model, year = obj.brand, obj.model, obj.year
+            fcai_category = getattr(obj, 'fcai_category', None)
+            body_style = getattr(obj, 'body_style', None)
+            drive = getattr(obj, 'drive', None)
         else:
             stored = getattr(obj, 'image_url', None)
             make, model, year = obj.make, obj.model, obj.year
+            fcai_category = getattr(obj, 'fcai_category', None)
+            body_style = getattr(obj, 'body_style', None)
+            drive = getattr(obj, 'drive', None)
 
         if stored:
             return stored
-        return get_vehicle_image_url(make, model, year=year, delay=0.05)
+        return get_vehicle_image_url(
+            make,
+            model,
+            year=year,
+            fcai_category=fcai_category,
+            body_style=body_style,
+            drive=drive,
+            delay=0.05,
+        )
 
     def _normalize_result(self, obj, source):
         """Return a consistent shape for catalogue and GVG records."""
@@ -514,7 +528,15 @@ class CurrentVehicleSuggestionsView(views.APIView):
         }
 
     def _normalize_vehicle(self, v: Vehicle) -> dict:
-        image_url = v.image_url or get_vehicle_image_url(v.brand, v.model, year=v.year, delay=0.05)
+        image_url = v.image_url or get_vehicle_image_url(
+            v.brand,
+            v.model,
+            year=v.year,
+            fcai_category=v.fcai_category,
+            body_style=v.body_style,
+            drive=v.drive,
+            delay=0.05,
+        )
         return {
             "id": str(v.id),
             "source": "carreb",
@@ -529,7 +551,14 @@ class CurrentVehicleSuggestionsView(views.APIView):
         }
 
     def _normalize_gvg(self, r: VehicleIdentity) -> dict:
-        image_url = r.image_url or get_vehicle_image_url(r.make, r.model, year=r.year, delay=0.05)
+        image_url = r.image_url or get_vehicle_image_url(
+            r.make,
+            r.model,
+            year=r.year,
+            fcai_category=r.fcai_category,
+            body_style=r.body_style,
+            delay=0.05,
+        )
         return {
             "id": str(r.id),
             "source": "gvg",
