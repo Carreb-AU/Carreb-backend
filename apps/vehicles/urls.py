@@ -13,6 +13,7 @@ from apps.vehicles.views import (
     VehicleDataUploadView
 )
 from apps.vehicles.calculator_lookup_api import VehicleCalculatorLookupAPIView
+from apps.vehicles.cost_estimator_api import VehicleCostEstimatorAPIView
 
 urlpatterns = [
     path('api/vehicles/', VehicleListView.as_view(), name='vehicle-list'),
@@ -33,4 +34,9 @@ urlpatterns = [
     # Read-Only Vehicle Name Lookup & Auto-Fill API for Calculator UI
     path('api/v1/vehicles/lookup/', VehicleCalculatorLookupAPIView.as_view(), name='vehicle-calculator-lookup-v1'),
     path('api/vehicles/lookup/', VehicleCalculatorLookupAPIView.as_view(), name='vehicle-calculator-lookup'),
+
+    # Interactive Vehicle Cost Estimator API ("What Could Your Car Be Costing You to Run?")
+    path('api/v1/vehicles/estimate-cost/', VehicleCostEstimatorAPIView.as_view(), name='vehicle-cost-estimator-v1'),
+    path('api/vehicles/estimate-cost/', VehicleCostEstimatorAPIView.as_view(), name='vehicle-cost-estimator'),
 ]
+
