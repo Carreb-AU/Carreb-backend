@@ -42,7 +42,7 @@ class GVGNoCoreScoreTest(TestCase):
         self.assertEqual(result['band_name'], '')
         self.assertEqual(result['band_slug'], '')
         self.assertIn(
-            'only available for Carreb catalogue vehicles',
+            'only available for carreb catalogue vehicles',
             result.get('message', '').lower(),
         )
         self.assertTrue(result['is_estimate'])
