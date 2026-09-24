@@ -1,0 +1,57 @@
+# =============================================================================
+# Carreb Excel Synchronization Crontab Schedule
+# =============================================================================
+# Project Directory: /home/ali/Carreb-backend
+# Python Virtualenv: /home/ali/Carreb-backend/venv/bin/python
+# Logs: /home/ali/Carreb-backend/logs/cron_sync/
+#
+# Option A: Single Master Sync (Executes all 29 sheets in topological order)
+# Runs every Sunday at 02:00 AM AEST (Server Local Time)
+# -----------------------------------------------------------------------------
+0 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh all
+
+# -----------------------------------------------------------------------------
+# Option B: Staggered Sync Schedule (5-Minute Intervals to Prevent Load Spikes)
+# Ideal for periodic refreshes of dynamic reference tables (energy, taxes, policies)
+# -----------------------------------------------------------------------------
+
+# --- 1. Policy & Governance Defaults (02:00 - 02:20 AM) ---
+00 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 08
+05 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 09
+10 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 10
+15 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 11
+20 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 12
+
+# --- 2. Summary, Compliance & Taxonomy (02:25 - 02:40 AM) ---
+25 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 13
+30 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 14
+35 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 15
+40 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 16
+
+# --- 3. Component Running Cost Benchmarks (02:45 - 03:20 AM) ---
+45 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 17
+50 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 18
+55 2 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 19
+00 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 20
+05 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 21
+10 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 22
+15 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 23
+
+# --- 4. Substantiation, NGA Factors & Statutory Taxes (03:25 - 03:45 AM) ---
+25 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 25
+30 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 26
+35 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 27
+40 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 28
+45 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 29
+
+# --- 5. Vehicle Catalogue Ingestion & Granular Breakdown (03:50 - 04:30 AM) ---
+50 3 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 05
+05 4 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 06
+15 4 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 01
+20 4 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 07
+25 4 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 24
+
+# --- 6. Operational Templates & Meta Trackers (04:35 - 04:45 AM) ---
+35 4 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 02
+40 4 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 03
+45 4 * * 0 /home/ali/Carreb-backend/carreb_crontab.sh sheet 04
