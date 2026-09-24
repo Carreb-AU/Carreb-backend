@@ -131,7 +131,7 @@ class VehicleLike:
         self.fcai_category = record.fcai_category
         self.fcai_broad = record.fcai_broad
         self.energy_norm = ''
-        self.drive = ''
+        self.drive = getattr(record, 'drive', '') or ''
         self.engine_l = record.engine_l
         self.battery_kwh = record.battery_kwh
         self.num_seats = record.num_seats or 5

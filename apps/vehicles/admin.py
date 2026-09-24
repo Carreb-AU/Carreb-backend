@@ -7,9 +7,29 @@ from apps.vehicles.models import (
     DataSource,
     VehicleIdentity,
     CategoryCostDefault,
+    CategoryScoringBounds,
+    FinanceDefault,
     ManualVehicleEnrichment,
     EnergyTypeModifier,
     DepreciationBrandModifier,
+    DepreciationLookup,
+    FCAICategoryRegistry,
+    StateEnergyPrice,
+    CTPStateDefault,
+    InsuranceCategoryBenchmark,
+    InsuranceStateModifier,
+    RegistrationCategoryBenchmark,
+    RegistrationFeeByState,
+    RegistrationStateFormula,
+    MaintenanceCategoryDefault,
+    TyreCategoryDefault,
+    EnergyTypeCostModifier,
+    CategoryAnnualKMBenchmark,
+    StateAnnualKMBenchmark,
+    COOBenchmarkAudit,
+    VehicleCOOComponentBreakdown,
+    NGAEmissionFactor,
+    DriveawayTaxParameter,
 )
 from apps.vehicles.services.gvg_import import import_all
 
@@ -55,6 +75,21 @@ class CategoryCostDefaultAdmin(admin.ModelAdmin):
     readonly_fields = ["id", "created_at", "updated_at"]
 
 
+@admin.register(CategoryScoringBounds)
+class CategoryScoringBoundsAdmin(admin.ModelAdmin):
+    list_display = ["fcai_category", "core_mode", "vehicle_count", "cat_min_coo", "cat_max_coo", "cat_min_co2", "cat_max_co2", "scoring_version"]
+    list_filter = ["core_mode", "scoring_version", "fcai_category"]
+    search_fields = ["fcai_category"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(FinanceDefault)
+class FinanceDefaultAdmin(admin.ModelAdmin):
+    list_display = ["fcai_category_broad", "deposit_pct", "base_rate_pct", "alt_fuel_modifier_pct", "term_months", "effective_from", "updated_at"]
+    search_fields = ["fcai_category_broad"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
 @admin.register(EnergyTypeModifier)
 class EnergyTypeModifierAdmin(admin.ModelAdmin):
     list_display = [
@@ -78,6 +113,214 @@ class DepreciationBrandModifierAdmin(admin.ModelAdmin):
     list_display = ["brand", "retention_multiplier", "resale_value_multiplier", "updated_at"]
     search_fields = ["brand"]
     readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(DepreciationLookup)
+class DepreciationLookupAdmin(admin.ModelAdmin):
+    list_display = ["layer_num", "layer", "key", "powertrain_type", "modifier", "source", "updated_at"]
+    list_filter = ["layer_num", "layer", "powertrain_type"]
+    search_fields = ["layer", "key", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(FCAICategoryRegistry)
+class FCAICategoryRegistryAdmin(admin.ModelAdmin):
+    list_display = ["segment_id", "fcai_segment", "carreb_db_label", "vehicle_class", "source", "updated_at"]
+    list_filter = ["vehicle_class"]
+    search_fields = ["fcai_segment", "carreb_db_label", "representative_vehicles", "criteria_notes"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(StateEnergyPrice)
+class StateEnergyPriceAdmin(admin.ModelAdmin):
+    list_display = ["state", "petrol_ulp95_cents_per_litre", "diesel_cents_per_litre", "electricity_cents_per_kwh", "data_period", "source", "updated_at"]
+    search_fields = ["state", "data_period", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(CTPStateDefault)
+class CTPStateDefaultAdmin(admin.ModelAdmin):
+    list_display = ["state", "annual_ctp_cents", "bundled_in_rego", "source", "updated_at"]
+    search_fields = ["state", "bundled_in_rego", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(InsuranceCategoryBenchmark)
+class InsuranceCategoryBenchmarkAdmin(admin.ModelAdmin):
+    list_display = ["fcai_category", "national_avg_cents_pa", "estimated_monthly_cents", "source", "updated_at"]
+    search_fields = ["fcai_category", "representative_basis", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(InsuranceStateModifier)
+class InsuranceStateModifierAdmin(admin.ModelAdmin):
+    list_display = ["state", "state_modifier", "relative_to_national", "avg_comprehensive_cents", "national_avg_cents", "source", "updated_at"]
+    search_fields = ["state", "explanation", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(RegistrationCategoryBenchmark)
+class RegistrationCategoryBenchmarkAdmin(admin.ModelAdmin):
+    list_display = ["fcai_category", "representative_vehicle", "kerb_weight_kg", "cylinders", "engine_l", "energy_type", "total_avg_cents_pa", "updated_at"]
+    search_fields = ["fcai_category", "representative_vehicle"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(RegistrationFeeByState)
+class RegistrationFeeByStateAdmin(admin.ModelAdmin):
+    list_display = ["fcai_category", "state", "annual_fee_cents", "updated_at"]
+    search_fields = ["fcai_category", "state"]
+    list_filter = ["state", "fcai_category"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(RegistrationStateFormula)
+class RegistrationStateFormulaAdmin(admin.ModelAdmin):
+    list_display = ["state", "basis_notes", "updated_at"]
+    search_fields = ["state", "basis_notes"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(MaintenanceCategoryDefault)
+class MaintenanceCategoryDefaultAdmin(admin.ModelAdmin):
+    list_display = ["fcai_category", "representative_vehicle", "service_interval", "five_year_total_cents", "annual_avg_cents", "source", "updated_at"]
+    search_fields = ["fcai_category", "representative_vehicle", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(TyreCategoryDefault)
+class TyreCategoryDefaultAdmin(admin.ModelAdmin):
+    list_display = ["fcai_category", "typical_tyre_size", "cost_per_set_4_cents", "replacement_interval_km", "annualised_cost_cents", "source", "updated_at"]
+    search_fields = ["fcai_category", "typical_tyre_size", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(EnergyTypeCostModifier)
+class EnergyTypeCostModifierAdmin(admin.ModelAdmin):
+    list_display = [
+        "cost_component",
+        "ice_petrol_str",
+        "ice_diesel_str",
+        "hev_hybrid_str",
+        "bev_str",
+        "phev_str",
+        "confidence",
+        "source",
+        "updated_at",
+    ]
+    search_fields = ["cost_component", "rationale", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(CategoryAnnualKMBenchmark)
+class CategoryAnnualKMBenchmarkAdmin(admin.ModelAdmin):
+    list_display = [
+        "fcai_category",
+        "est_annual_km",
+        "abs_anchor",
+        "vs_flat_17k",
+        "confidence",
+        "source",
+        "updated_at",
+    ]
+    search_fields = ["fcai_category", "basis_pattern", "impact_on_coo", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(StateAnnualKMBenchmark)
+class StateAnnualKMBenchmarkAdmin(admin.ModelAdmin):
+    list_display = [
+        "state",
+        "avg_km_per_vehicle",
+        "vs_national",
+        "source",
+        "updated_at",
+    ]
+    search_fields = ["state", "source"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(COOBenchmarkAudit)
+class COOBenchmarkAuditAdmin(admin.ModelAdmin):
+    list_display = [
+        "fcai_category",
+        "usage_profile",
+        "km_per_year_used",
+        "nsw_coo_cents",
+        "vic_coo_cents",
+        "qld_coo_cents",
+        "sa_coo_cents",
+        "wa_coo_cents",
+        "tas_coo_cents",
+        "nt_coo_cents",
+        "act_coo_cents",
+        "updated_at",
+    ]
+    search_fields = ["fcai_category", "usage_profile", "notes"]
+    list_filter = ["usage_profile"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(VehicleCOOComponentBreakdown)
+class VehicleCOOComponentBreakdownAdmin(admin.ModelAdmin):
+    list_display = [
+        "make",
+        "model",
+        "variant",
+        "year",
+        "state",
+        "fcai_category",
+        "energy_norm",
+        "km_pa_used",
+        "components_sum_pa_cents",
+        "base_coo_pa_canonical_cents",
+        "updated_at",
+    ]
+    search_fields = ["make", "model", "variant", "fcai_category"]
+    list_filter = ["state", "fcai_category", "energy_norm", "year"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(NGAEmissionFactor)
+class NGAEmissionFactorAdmin(admin.ModelAdmin):
+    list_display = [
+        "grid",
+        "states_covered",
+        "scope2_factor_kgco2e_per_kwh",
+        "edition",
+        "effective_period",
+        "devspec_ref",
+        "updated_at",
+    ]
+    search_fields = ["grid", "states_covered", "edition", "note"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(DriveawayTaxParameter)
+class DriveawayTaxParameterAdmin(admin.ModelAdmin):
+    list_display = [
+        "parameter",
+        "value",
+        "effective_from",
+        "applies_to",
+        "source",
+        "devspec_ref",
+        "updated_at",
+    ]
+    search_fields = ["parameter", "value", "applies_to", "source", "note"]
+    readonly_fields = ["id", "created_at", "updated_at"]
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class ManualVehicleEnrichmentInline(admin.StackedInline):
