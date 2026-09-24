@@ -38,5 +38,7 @@ urlpatterns = [
     # Interactive Vehicle Cost Estimator API ("What Could Your Car Be Costing You to Run?")
     path('api/v1/vehicles/estimate-cost/', VehicleCostEstimatorAPIView.as_view(), name='vehicle-cost-estimator-v1'),
     path('api/vehicles/estimate-cost/', VehicleCostEstimatorAPIView.as_view(), name='vehicle-cost-estimator'),
+    path('api/v1/estimate-cost/', VehicleCostEstimatorAPIView.as_view(), name='cost-estimator-v1-alias'),
+    path('api/estimate-cost/', VehicleCostEstimatorAPIView.as_view(), name='cost-estimator-alias'),
 ]
 
