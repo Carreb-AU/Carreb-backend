@@ -203,6 +203,12 @@ class CoreRatingBatchView(views.APIView):
         vehicles = Vehicle.objects.filter(id__in=vehicle_ids)
         vehicle_map = {v.id: v for v in vehicles}
         
+        # Strip vehicle-specific overrides so batch vehicles use their own catalog pricing
+        batch_user_inputs = {
+            k: v for k, v in user_inputs.items()
+            if k not in ('driveaway_override', 'loan_amount', 'insurance_override')
+        }
+
         results = []
         category_metrics_cache = {}
         for vid in vehicle_ids:
@@ -210,13 +216,17 @@ class CoreRatingBatchView(views.APIView):
             if not vehicle:
                 continue
             res = calculate_core_rating(
-                vehicle, state, priority_slider, core_mode, user_inputs,
+                vehicle, state, priority_slider, core_mode, batch_user_inputs,
                 budget_min=budget_min, budget_max=budget_max,
                 current_vehicle_annual_cost=current_cost,
                 category_metrics_cache=category_metrics_cache
             )
             res['vehicle_id'] = str(vid)
             res['image_url'] = vehicle.image_url
+            br = res.get('annual_cost_breakdown', {})
+            driveaway = br.get('driveaway_price', 0)
+            res['driveaway_price'] = driveaway
+            res['driveaway_price_display'] = f"${driveaway // 100:,}" if driveaway else None
             results.append(res)
             
         return Response({
@@ -317,11 +327,17 @@ class CoreSearchView(views.APIView):
         # Extract the optimized unique vehicles
         vehicles = [v for _, v in cheapest_variants.values()]
         
+        # Strip vehicle-specific overrides so candidate vehicles use their own catalog pricing
+        candidate_user_inputs = {
+            k: v for k, v in user_inputs.items()
+            if k not in ('driveaway_override', 'loan_amount', 'insurance_override')
+        }
+
         results = []
         category_metrics_cache = {}
         for vehicle in vehicles:
             res = calculate_core_rating(
-                vehicle, state, priority_slider, core_mode, user_inputs,
+                vehicle, state, priority_slider, core_mode, candidate_user_inputs,
                 budget_min=budget_min, budget_max=budget_max,
                 current_vehicle_annual_cost=current_cost,
                 category_metrics_cache=category_metrics_cache
@@ -346,6 +362,8 @@ class CoreSearchView(views.APIView):
             res['year'] = vehicle.year
             res['variant'] = vehicle.variant
             res['image_url'] = vehicle.image_url
+            res['driveaway_price'] = driveaway
+            res['driveaway_price_display'] = f"${driveaway // 100:,}" if driveaway else None
             
             results.append(res)
             

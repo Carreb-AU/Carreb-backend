@@ -172,8 +172,16 @@ def _normalize_driveaway_for_loan(driveaway) -> float:
 
 
 def _get_state_value(json_field: dict, state: str, default_val=0) -> int:
-    if not json_field: return default_val
-    return json_field.get(state, default_val)
+    if not json_field or not isinstance(json_field, dict):
+        return default_val
+    val = json_field.get(state)
+    if val is None and state:
+        val = json_field.get(state.upper())
+    if val is None:
+        val = json_field.get('NSW')
+    if val is None and json_field:
+        val = next(iter(json_field.values()), default_val)
+    return val if val is not None else default_val
 
 
 def _to_cents(value) -> int:
@@ -235,7 +243,7 @@ def calculate_vehicle_cost_breakdown(
 
     driveaway = user_inputs.get('driveaway_override')
     if not driveaway:
-        driveaway = _get_state_value(getattr(vehicle, 'driveaway_price_by_state', None), state, 0)
+        driveaway = _get_state_cents(getattr(vehicle, 'driveaway_price_by_state', None), state, 0)
 
     stored_mode = _get_stored_mode_data(vehicle, state, core_mode)
 
@@ -359,8 +367,13 @@ def calculate_core_rating(
     peer_breakdowns = []
     peer_stored = []
 
+    peer_user_inputs = {
+        k: v for k, v in user_inputs.items()
+        if k not in ('driveaway_override', 'loan_amount', 'insurance_override')
+    }
+
     for peer in peers:
-        peer_br = calculate_vehicle_cost_breakdown(peer, state, core_mode, user_inputs)
+        peer_br = calculate_vehicle_cost_breakdown(peer, state, core_mode, peer_user_inputs)
         peer_breakdowns.append(peer_br)
         peer_costs.append(peer_br['total_annual'])
         peer_co2.append(peer.tailpipe_co2_g_per_km or 0)
