@@ -12,6 +12,7 @@ from apps.vehicles.views import (
     CoreSearchView,
     VehicleDataUploadView
 )
+from apps.vehicles.calculator_lookup_api import VehicleCalculatorLookupAPIView
 
 urlpatterns = [
     path('api/vehicles/', VehicleListView.as_view(), name='vehicle-list'),
@@ -28,4 +29,8 @@ urlpatterns = [
     path('api/core-rating/search/', CoreSearchView.as_view(), name='core-rating-search'),
     
     path('api/vehicles/upload/', VehicleDataUploadView.as_view(), name='vehicle-upload'),
+    
+    # Read-Only Vehicle Name Lookup & Auto-Fill API for Calculator UI
+    path('api/v1/vehicles/lookup/', VehicleCalculatorLookupAPIView.as_view(), name='vehicle-calculator-lookup-v1'),
+    path('api/vehicles/lookup/', VehicleCalculatorLookupAPIView.as_view(), name='vehicle-calculator-lookup'),
 ]
