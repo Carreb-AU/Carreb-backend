@@ -67,7 +67,8 @@ def _get_stored_mode_data(vehicle, state: str, core_mode: str) -> Optional[Dict[
     if not mode_data or not isinstance(mode_data, dict):
         return None
 
-    state_data = mode_data.get(state.upper())
+    clean_state = (state or 'NSW').upper()
+    state_data = mode_data.get(clean_state)
     if not isinstance(state_data, dict):
         return None
 
@@ -229,7 +230,7 @@ def calculate_vehicle_cost_breakdown(
     user_inputs: Dict[str, Any]
 ) -> Dict[str, Any]:
 
-    state = state.upper()
+    state = (state or 'NSW').upper()
     annual_km = user_inputs.get('annual_km', vehicle.annual_km_default or 13300)
 
     driveaway = user_inputs.get('driveaway_override')
@@ -336,7 +337,7 @@ def calculate_core_rating(
     # (GVG / legacy / manual entry) do not receive a CORE score per spec §4.
     _ = priority_slider
 
-    state = state.upper()
+    state = (state or 'NSW').upper()
     fcai_category = vehicle.fcai_category
 
     # Target vehicle breakdown and stored workbook data.

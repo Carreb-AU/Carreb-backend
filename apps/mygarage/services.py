@@ -43,7 +43,7 @@ def _get_ordinal(n):
         suffix = ['th', 'st', 'nd', 'rd', 'th'][min(n % 10, 4)]
     return str(n) + suffix
 
-def calculate_spotlights(active_garage_vehicles, user_priority_state, state, current_cost):
+def calculate_spotlights(active_garage_vehicles, user_priority_state, state='NSW', current_cost=None):
     if not active_garage_vehicles:
         return {}
         
@@ -54,6 +54,7 @@ def calculate_spotlights(active_garage_vehicles, user_priority_state, state, cur
         return {}
         
     results = {str(gv.id): {} for gv in active_garage_vehicles}
+    state = (state or 'NSW').upper()
     
     # Pre-group active vehicles by category
     by_category = {}
@@ -63,9 +64,9 @@ def calculate_spotlights(active_garage_vehicles, user_priority_state, state, cur
             by_category.setdefault(cat, []).append(gv)
             
     # Calculate category badges
-    priority = user_priority_state.priority_slider_position
-    mode = user_priority_state.active_core_mode
-    budget = user_priority_state.budget_max
+    priority = user_priority_state.priority_slider_position if user_priority_state else 3
+    mode = user_priority_state.active_core_mode if user_priority_state else 'pure_cost'
+    budget = user_priority_state.budget_max if user_priority_state else None
     
     for cat, gvs in by_category.items():
         peers = list(Vehicle.objects.filter(fcai_category=cat))

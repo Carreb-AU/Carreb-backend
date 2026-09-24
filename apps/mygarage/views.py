@@ -1113,7 +1113,7 @@ class SpotlightsView(views.APIView):
         user_state = getattr(request.user, 'priority_state', None)
         
         cv = getattr(request.user, 'current_vehicle', None)
-        s = getattr(cv, 'state', 'NSW') if cv else 'NSW'
+        s = cv.state if cv and cv.state else 'NSW'
         
         # Calculate cv_cost once to pass along
         cv_cost = None
