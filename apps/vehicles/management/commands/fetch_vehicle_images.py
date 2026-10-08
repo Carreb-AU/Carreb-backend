@@ -16,7 +16,8 @@ USER_AGENT = "CarrebBot/1.0 (carreb.com.au; dev@carreb.com.au)"
 class Command(BaseCommand):
     help = (
         "Fetch vehicle images from Wikimedia Commons for vehicles missing image_url. "
-        "Freely licensed images are downloaded to MEDIA_ROOT/vehicle_images. "
+        "By default, freely licensed images are downloaded to MEDIA_ROOT/vehicle_images. "
+        "Use --no-download to store the Commons URL directly instead (no disk usage). "
         "Vehicles with no match keep their current image_url (use set_vehicle_fallback_images "
         "afterwards if you want a placeholder for the rest)."
     )
@@ -41,6 +42,11 @@ class Command(BaseCommand):
             help="If no Commons image is found, set this URL",
         )
         parser.add_argument(
+            "--no-download",
+            action="store_true",
+            help="Store the Wikimedia Commons URL directly in image_url without downloading the file (no disk usage)",
+        )
+        parser.add_argument(
             "--base-url",
             type=str,
             default="",
@@ -59,6 +65,7 @@ class Command(BaseCommand):
         fallback_url = options["fallback_url"]
         base_url = options["base_url"].rstrip("/")
         replace_existing = options["replace_existing"]
+        no_download = options["no_download"]
 
         qs = Vehicle.objects.filter(image_url__isnull=True) | Vehicle.objects.filter(
             image_url=""
@@ -85,6 +92,12 @@ class Command(BaseCommand):
             image_url = self._find_commons_image(query, headers, delay)
 
             if image_url:
+                if no_download:
+                    vehicle.image_url = image_url
+                    vehicle.save(update_fields=["image_url"])
+                    found += 1
+                    self.stdout.write(self.style.SUCCESS("OK (link only)"))
+                    continue
                 local_path = self._download_image(image_url, out_dir, headers, delay)
                 if local_path:
                     relative_url = settings.MEDIA_URL + "vehicle_images/" + os.path.basename(local_path)
