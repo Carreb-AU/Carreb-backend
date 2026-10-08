@@ -41,8 +41,11 @@ _JUNK_MAKE_KEYWORDS = (
 NOT_IN_SOURCE = "not in source"
 
 # Every field the importer owns; used for bulk_update on re-import.
+# NOTE: image_url is deliberately excluded — the consolidated sheet carries no
+# image column, so updating it here would wipe URLs fetched by other pipelines
+# (fetch_vehicle_images / set_vehicle_fallback_images). Existing values are kept.
 VEHICLE_UPDATE_FIELDS = [
-    "body_style", "image_url", "num_seats", "powertrain_type",
+    "body_style", "num_seats", "powertrain_type",
     "fcai_category", "fcai_broad", "energy_norm", "drive", "engine_l",
     "battery_kwh", "driveaway_price_by_state", "fuel_consumption_per_100km",
     "electricity_consumption_per_100km", "tailpipe_co2_g_per_km",
