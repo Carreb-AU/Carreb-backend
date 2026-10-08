@@ -113,6 +113,19 @@ def _get_manual_source() -> Optional[DataSource]:
     return source
 
 
+def _get_ai_source() -> Optional[DataSource]:
+    """Return the registered S-CARREB-AI-EST source, creating it if absent."""
+    source, _ = DataSource.objects.get_or_create(
+        code='S-CARREB-AI-EST',
+        defaults={
+            'name': 'Carreb AI Estimate',
+            'url': '',
+            'dataset_type': 'ai-estimate',
+        },
+    )
+    return source
+
+
 class VehicleLike:
     """
     Duck-typed stand-in for Vehicle used when a GVG record is selected as the
@@ -135,7 +148,7 @@ class VehicleLike:
         self.engine_l = record.engine_l
         self.battery_kwh = record.battery_kwh
         self.num_seats = record.num_seats or 5
-        self.ancap_safety_rating = None
+        self.ancap_safety_rating = getattr(record, 'ancap_safety_rating', None)
         self.annual_km_default = 13300
         self.image_url = record.image_url or ''
         self.driveaway_price_by_state = {}
@@ -152,6 +165,12 @@ class VehicleLike:
 
         # Apply admin-level manual enrichment if present.
         self._apply_manual_enrichment()
+
+        # Apply AI estimates for fields with no authoritative source.
+        self._apply_ai_estimates()
+
+        # Apply retention-based resale estimate if no source value exists.
+        self._apply_resale_estimate()
 
         # Consumption / emissions
         self.fuel_consumption_per_100km = record.fuel_consumption_combined_l_100km
@@ -219,6 +238,113 @@ class VehicleLike:
         if enrichment.resale_value_5yr_estimate is not None and self.resale_value_5yr_estimate is None:
             self.resale_value_5yr_estimate = enrichment.resale_value_5yr_estimate
             self.provenance.setdefault('resale_value_5yr_estimate', manual_badge)
+
+    def _apply_ai_estimates(self):
+        """Estimate engine displacement and ANCAP rating when no source exists.
+
+        Results are cached for 30 days so the OpenAI API is not hit on every
+        CORE rating calculation.
+        """
+        from django.core.cache import cache
+        from apps.mygarage.ai_service import (
+            estimate_engine_displacement,
+            estimate_ancap_rating,
+        )
+
+        ai_source = _get_ai_source()
+        ai_badge = {
+            'source_code': 'S-CARREB-AI-EST',
+            'source_name': 'Carreb AI Estimate',
+            'source_id': str(ai_source.id) if ai_source else None,
+        }
+
+        def _cache_key(field: str) -> str:
+            parts = [
+                self.brand or '',
+                self.model or '',
+                self.variant or '',
+                str(self.year or ''),
+            ]
+            safe = '_'.join(p.lower().replace(' ', '_') for p in parts)
+            return f"vehicle:ai_estimate:{field}:{safe}"[:250]
+
+        # Engine displacement.
+        if self.engine_l is None:
+            key = _cache_key('engine_l')
+            cached = cache.get(key)
+            if cached is not None:
+                if cached:
+                    self.engine_l = cached
+                    self.provenance.setdefault('engine_l', ai_badge)
+            else:
+                estimated = estimate_engine_displacement(
+                    make=self.brand,
+                    model=self.model,
+                    variant=self.variant,
+                    year=self.year,
+                )
+                if estimated:
+                    self.engine_l = estimated
+                    self.provenance.setdefault('engine_l', ai_badge)
+                    cache.set(key, estimated, 60 * 60 * 24 * 30)
+                else:
+                    cache.set(key, '', 60 * 60 * 24)
+
+        # ANCAP safety rating.
+        if self.ancap_safety_rating is None:
+            key = _cache_key('ancap_safety_rating')
+            cached = cache.get(key)
+            if cached is not None:
+                if cached:
+                    self.ancap_safety_rating = cached
+                    self.provenance.setdefault('ancap_safety_rating', ai_badge)
+            else:
+                estimated = estimate_ancap_rating(
+                    make=self.brand,
+                    model=self.model,
+                    year=self.year,
+                )
+                if estimated:
+                    self.ancap_safety_rating = estimated
+                    self.provenance.setdefault('ancap_safety_rating', ai_badge)
+                    cache.set(key, estimated, 60 * 60 * 24 * 30)
+                else:
+                    cache.set(key, '', 60 * 60 * 24)
+
+    def _apply_resale_estimate(self):
+        """Estimate resale value from retention × modifiers when no source exists.
+
+        Requires a driveaway price.  We prefer a manually-enriched driveaway,
+        otherwise fall back to the GVG record's own driveaway estimate.
+        """
+        from apps.mygarage.ai_service import estimate_resale_value
+
+        if self.resale_value_5yr_estimate is not None:
+            return
+
+        driveaway_cents = self.driveaway_price_by_state.get(self._state)
+        if not driveaway_cents and self._record.driveaway_price_estimate:
+            driveaway_cents = self._record.driveaway_price_estimate
+            self.provenance.setdefault('driveaway_price', {
+                'source_code': 'S-GVG-DRIVEAWAY-EST',
+                'source_name': 'Green Vehicle Guide Driveaway Estimate',
+            })
+
+        if not driveaway_cents:
+            return
+
+        estimated = estimate_resale_value(
+            driveaway_cents=driveaway_cents,
+            year=self.year,
+            powertrain_type=self.powertrain_type,
+            brand=self.brand,
+        )
+        if estimated:
+            self.resale_value_5yr_estimate = estimated
+            self.provenance.setdefault('resale_value_5yr_estimate', {
+                'source_code': 'S-CARREB-RETENTION',
+                'source_name': 'Carreb Retention-Based Estimate',
+            })
 
     def _apply_defaults_if_missing(self):
         """Pull category defaults for the chosen state if cost fields are empty.
@@ -558,6 +684,64 @@ def apply_cost_defaults(record: VehicleIdentity, state: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Identity upsert (dedup on natural key)
+# ---------------------------------------------------------------------------
+
+# Fields the importers own. Anything outside this list (e.g. cost fields that
+# other processes may write onto identity rows) is left untouched on update.
+IDENTITY_UPDATE_FIELDS = [
+    'source', 'body_style', 'fcai_category', 'fcai_broad', 'powertrain_type',
+    'fuel_type_raw', 'engine_l', 'num_seats', 'transmission',
+    'fuel_consumption_combined_l_100km', 'fuel_consumption_urban_l_100km',
+    'fuel_consumption_extra_urban_l_100km', 'electricity_consumption_wh_per_km',
+    'electric_range_km', 'tailpipe_co2_g_per_km', 'annual_fuel_cost',
+    'is_current_model', 'model_end_year', 'test_cycle',
+    'raw_data', 'provenance', 'search_text',
+]
+
+
+def _upsert_identities(records: list, dataset: str) -> Dict[str, int]:
+    """Insert new rows and update existing ones matched on the natural key
+    (source_dataset, make, model, year, variant).
+
+    Stable UUIDs are preserved across re-imports so FKs (e.g. users' current
+    vehicles) are never broken by a quarterly refresh.
+
+    Returns {'created': n, 'updated': n}.
+    """
+    # De-dupe within the incoming batch (last row for a key wins) so a source
+    # file containing repeated natural keys cannot insert duplicates either.
+    unique = {}
+    for rec in records:
+        unique[(rec.source_dataset, rec.make, rec.model, rec.year, rec.variant)] = rec
+    records = list(unique.values())
+
+    existing = {
+        (r.source_dataset, r.make, r.model, r.year, r.variant): r.id
+        for r in VehicleIdentity.objects.filter(source_dataset=dataset)
+        .only('id', 'source_dataset', 'make', 'model', 'year', 'variant')
+    }
+
+    to_create, to_update = [], []
+    for rec in records:
+        pk = existing.get((rec.source_dataset, rec.make, rec.model, rec.year, rec.variant))
+        if pk is None:
+            to_create.append(rec)
+        else:
+            rec.id = pk
+            to_update.append(rec)
+
+    for i in range(0, len(to_create), 1000):
+        VehicleIdentity.objects.bulk_create(to_create[i:i + 1000])
+    for i in range(0, len(to_update), 1000):
+        VehicleIdentity.objects.bulk_update(
+            to_update[i:i + 1000], IDENTITY_UPDATE_FIELDS, batch_size=1000
+        )
+
+    return {'created': len(to_create), 'updated': len(to_update)}
+
+
+# ---------------------------------------------------------------------------
 # XLSX import (2004-2025)
 # ---------------------------------------------------------------------------
 
@@ -576,6 +760,7 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
         VehicleIdentity.objects.filter(source_dataset='GVG-CURRENT').delete()
 
     created = 0
+    updated = 0
     skipped = 0
     records = []
 
@@ -631,16 +816,9 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
         )
 
         records.append(record)
-        if len(records) >= 1000:
-            VehicleIdentity.objects.bulk_create(records, batch_size=1000)
-            created += len(records)
-            records = []
 
-    if records:
-        VehicleIdentity.objects.bulk_create(records, batch_size=1000)
-        created += len(records)
-
-    return {'created': created, 'skipped': skipped}
+    res = _upsert_identities(records, 'GVG-CURRENT')
+    return {'created': res['created'], 'updated': res['updated'], 'skipped': skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -654,6 +832,7 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
         VehicleIdentity.objects.filter(source_dataset='GVG-OLDER-8603').delete()
 
     created = 0
+    updated = 0
     skipped = 0
     records = []
 
@@ -712,16 +891,9 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
         )
 
         records.append(record)
-        if len(records) >= 1000:
-            VehicleIdentity.objects.bulk_create(records, batch_size=1000)
-            created += len(records)
-            records = []
 
-    if records:
-        VehicleIdentity.objects.bulk_create(records, batch_size=1000)
-        created += len(records)
-
-    return {'created': created, 'skipped': skipped}
+    res = _upsert_identities(records, 'GVG-OLDER-8603')
+    return {'created': res['created'], 'updated': res['updated'], 'skipped': skipped}
 
 
 # ---------------------------------------------------------------------------

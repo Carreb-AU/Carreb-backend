@@ -213,8 +213,8 @@ def quarterly_gvg_import_task():
         logger.info(
             f"Quarterly GVG import complete. "
             f"Category defaults: {results['category_defaults']}, "
-            f"GVG current: {results['gvg_current']['created']} created / {results['gvg_current']['skipped']} skipped, "
-            f"GVG older: {results['gvg_older']['created']} created / {results['gvg_older']['skipped']} skipped."
+            f"GVG current: {results['gvg_current']['created']} created / {results['gvg_current']['updated']} updated / {results['gvg_current']['skipped']} skipped, "
+            f"GVG older: {results['gvg_older']['created']} created / {results['gvg_older']['updated']} updated / {results['gvg_older']['skipped']} skipped."
         )
     except Exception as e:
         logger.error(f"Quarterly GVG import failed: {e}")

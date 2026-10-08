@@ -64,8 +64,8 @@ class Command(BaseCommand):
                 clear=clear,
             )
             self.stdout.write('Category defaults created/updated: {}'.format(results['category_defaults']))
-            self.stdout.write('GVG current: created={created}, skipped={skipped}'.format(**results['gvg_current']))
-            self.stdout.write('GVG older: created={created}, skipped={skipped}'.format(**results['gvg_older']))
+            self.stdout.write('GVG current: created={created}, updated={updated}, skipped={skipped}'.format(**results['gvg_current']))
+            self.stdout.write('GVG older: created={created}, updated={updated}, skipped={skipped}'.format(**results['gvg_older']))
 
         elif mode == 'defaults':
             count = import_category_cost_defaults(workbook, clear=clear)
@@ -74,13 +74,13 @@ class Command(BaseCommand):
         elif mode == 'current':
             result = import_gvg_xlsx(gvg_xlsx, clear=clear)
             self.stdout.write(self.style.SUCCESS(
-                f'GVG current: created={result["created"]}, skipped={result["skipped"]}'
+                f'GVG current: created={result["created"]}, updated={result["updated"]}, skipped={result["skipped"]}'
             ))
 
         elif mode == 'older':
             result = import_old_fuel_consumption_csv(old_csv, clear=clear)
             self.stdout.write(self.style.SUCCESS(
-                f'GVG older: created={result["created"]}, skipped={result["skipped"]}'
+                f'GVG older: created={result["created"]}, updated={result["updated"]}, skipped={result["skipped"]}'
             ))
 
         self.stdout.write(self.style.SUCCESS('Import complete.'))
