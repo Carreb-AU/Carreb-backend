@@ -284,7 +284,39 @@ class Vehicle(models.Model):
     
     mode_data_by_state = models.JSONField(default=dict)
     is_scoring_outlier = models.BooleanField(default=False)
-    scoring_version = models.CharField(max_length=50, blank=True)
+    scoring_version = models.CharField(max_length=100, blank=True)
+
+    # Consolidated Vehicles v6.4 sheet — lineage & research fields
+    au_launch = models.CharField(max_length=50, blank=True)
+    price_type = models.CharField(max_length=100, blank=True)
+    research_status = models.CharField(max_length=50, blank=True, db_index=True)
+    source_name = models.TextField(blank=True)
+    internal_notes = models.TextField(blank=True)
+    source_tab = models.CharField(max_length=50, blank=True)
+
+    # Consolidated Vehicles v6.4 sheet — cost & range provenance fields
+    cost_category = models.CharField(max_length=100, blank=True)
+    energy_type = models.CharField(max_length=50, blank=True)
+    finance_apr_pct = models.FloatField(null=True, blank=True)
+    total_interest_5yr = models.IntegerField(null=True, blank=True)  # cents
+    finance_fees_5yr = models.IntegerField(null=True, blank=True)  # cents
+    finance_cost_5yr = models.IntegerField(null=True, blank=True)  # cents
+    retention_factor = models.FloatField(null=True, blank=True)
+    drivetrain = models.CharField(max_length=50, blank=True)
+    fuel_tank_l = models.FloatField(null=True, blank=True)
+    range_battery_km = models.FloatField(null=True, blank=True)
+    range_petrol_km = models.FloatField(null=True, blank=True)
+    range_total_km = models.FloatField(null=True, blank=True)
+    range_basis = models.TextField(blank=True)
+    range_ladder_step = models.IntegerField(null=True, blank=True)
+    range_estimated_badge = models.BooleanField(default=False)
+    range_prior_value = models.FloatField(null=True, blank=True)
+    price_basis = models.CharField(max_length=255, blank=True)
+    fe_basis = models.CharField(max_length=255, blank=True)
+    co2_basis = models.CharField(max_length=255, blank=True)
+    assumption_fills = models.TextField(blank=True)
+    data_flags = models.TextField(blank=True)
+    range_research_note = models.TextField(blank=True)
     
     provenance = models.JSONField(default=dict) 
     # Example:

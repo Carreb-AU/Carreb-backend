@@ -21,7 +21,22 @@ def process_vehicle_excel_upload(file_path):
     try:
         xls = pd.ExcelFile(file_path)
         sheet_names = xls.sheet_names
-        
+
+        # New-format workbook (07-Oct-26 onwards): single consolidated sheet
+        # with full state×mode data. Hand off to the consolidated importer.
+        from apps.vehicles.services.consolidated_import import (
+            SHEET_NAME as CONSOLIDATED_SHEET,
+            import_consolidated_vehicles,
+        )
+        if CONSOLIDATED_SHEET in sheet_names:
+            result = import_consolidated_vehicles(file_path)
+            logger.info(
+                f"Consolidated import from {file_path}: "
+                f"{result['created']} created / {result['updated']} updated / "
+                f"{result['skipped']} skipped."
+            )
+            return
+
         dfs_to_process = []
         if 'v6.3.4 Data' in sheet_names or 'New Vehicles FY26' in sheet_names:
             if 'v6.3.4 Data' in sheet_names:
