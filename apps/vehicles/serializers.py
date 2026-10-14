@@ -10,6 +10,7 @@ class VehicleListSerializer(serializers.ModelSerializer):
             'ancap_safety_rating', 'energy_norm', 'drive', 'engine_l',
             'battery_kwh', 'is_scoring_outlier', 'scoring_version', 'image_url',
             'research_status', 'energy_type', 'cost_category', 'au_launch',
+            'co2_energy_cycle_g_per_km', 'spotlight_data',
         ]
 
 class VehicleDetailSerializer(serializers.ModelSerializer):

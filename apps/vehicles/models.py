@@ -317,8 +317,20 @@ class Vehicle(models.Model):
     assumption_fills = models.TextField(blank=True)
     data_flags = models.TextField(blank=True)
     range_research_note = models.TextField(blank=True)
-    
-    provenance = models.JSONField(default=dict) 
+
+    # 13-Oct-26 workbook additions
+    co2_energy_cycle_g_per_km = models.FloatField(null=True, blank=True)
+    spotlight_data = models.JSONField(default=dict, blank=True)
+    # spotlight_data example (one row per vehicle in the "Spotlights" sheet,
+    # computed on a NSW / Mode B basis):
+    # {
+    #   "range_kings": True, "green_lean": True, "unicorn_match": True,
+    #   "category_sweep": True, "core_allstars": True, "count": 5,
+    #   "badges": "Range Kings™, Green & Lean™, …",
+    #   "version": "v6.4-derived-percentile (Mode B, category-aware)"
+    # }
+
+    provenance = models.JSONField(default=dict)
     # Example:
     # {
     #   "brand": {"source_category": "Manufacturer", "retrieved_at": "2026-01-01T00:00:00Z"},

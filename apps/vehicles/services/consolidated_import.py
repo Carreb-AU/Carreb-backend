@@ -23,6 +23,7 @@ import pandas as pd
 from apps.vehicles.models import PowertrainType, TestCycle, Vehicle
 
 SHEET_NAME = "Consolidated Vehicles v6.4"
+SPOTLIGHT_SHEET_NAME = "Spotlights"  # added in the 13-Oct-26 workbook
 
 # Workbook metadata keywords that are never real vehicle makes (defensive;
 # the consolidated sheet is expected to be clean).
@@ -64,6 +65,7 @@ VEHICLE_UPDATE_FIELDS = [
     "range_ladder_step", "range_estimated_badge", "range_prior_value",
     "price_basis", "fe_basis", "co2_basis", "assumption_fills",
     "data_flags", "range_research_note",
+    "co2_energy_cycle_g_per_km", "spotlight_data",
 ]
 
 
@@ -154,6 +156,41 @@ def _is_junk_make(make) -> bool:
     return any(kw in text for kw in _JUNK_MAKE_KEYWORDS)
 
 
+def _load_spotlights(filepath: str) -> Dict[tuple, dict]:
+    """Read the "Spotlights" sheet into {(make, model, variant, year): data}.
+
+    Returns an empty dict when the sheet is absent (pre-13-Oct workbooks) so
+    older files keep importing cleanly.
+    """
+    try:
+        df = pd.read_excel(filepath, sheet_name=SPOTLIGHT_SHEET_NAME)
+    except ValueError:
+        return {}
+
+    out: Dict[tuple, dict] = {}
+    for _, row in df.iterrows():
+        make = _safe_str(row.get("Make"))
+        if not make or _is_junk_make(make):
+            continue
+        key = (
+            make,
+            _safe_str(row.get("Model")),
+            _safe_str(row.get("Variant")),
+            str(_safe_int(row.get("Year")) or ""),
+        )
+        out[key] = {
+            "range_kings": _safe_bool(row.get("spotlight_range_kings")),
+            "green_lean": _safe_bool(row.get("spotlight_green_lean")),
+            "unicorn_match": _safe_bool(row.get("spotlight_unicorn_match")),
+            "category_sweep": _safe_bool(row.get("spotlight_category_sweep")),
+            "core_allstars": _safe_bool(row.get("spotlight_core_allstars")),
+            "count": _safe_int(row.get("spotlight_count")) or 0,
+            "badges": _safe_str(row.get("spotlight_badges")),
+            "version": _safe_str(row.get("spotlight_version")),
+        }
+    return out
+
+
 def parse_consolidated_sheet(filepath: str):
     """Parse the sheet into (vehicles, skipped).
 
@@ -161,6 +198,7 @@ def parse_consolidated_sheet(filepath: str):
     skipped: number of non-vehicle rows dropped.
     """
     df = pd.read_excel(filepath, sheet_name=SHEET_NAME)
+    spotlights = _load_spotlights(filepath)
     skipped = 0
     vehicles = []
 
@@ -172,6 +210,12 @@ def parse_consolidated_sheet(filepath: str):
             continue
 
         base = group.iloc[0]
+        spotlight_key = (
+            _safe_str(make),
+            _safe_str(model),
+            _safe_str(variant),
+            str(_safe_int(year) or ""),
+        )
 
         # ---- per-state + per-mode structures --------------------------------
         driveaway_by_state: Dict[str, int] = {}
@@ -314,6 +358,8 @@ def parse_consolidated_sheet(filepath: str):
             assumption_fills=_safe_str(base.get("assumption_fills")),
             data_flags=_safe_str(base.get("data_flags")),
             range_research_note=_safe_str(base.get("range_research_note")),
+            co2_energy_cycle_g_per_km=_safe_float(base.get("co2_energy_cycle_g_km")),
+            spotlight_data=spotlights.get(spotlight_key, {}),
         )
         vehicles.append(vehicle)
 
