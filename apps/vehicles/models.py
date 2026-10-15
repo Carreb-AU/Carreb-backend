@@ -1161,3 +1161,99 @@ class DriveawayTaxParameter(models.Model):
 
 
 
+
+
+class AustralianState(models.TextChoices):
+    ACT = 'ACT', 'ACT'
+    NSW = 'NSW', 'NSW'
+    NT = 'NT', 'NT'
+    QLD = 'QLD', 'QLD'
+    SA = 'SA', 'SA'
+    TAS = 'TAS', 'TAS'
+    VIC = 'VIC', 'VIC'
+    WA = 'WA', 'WA'
+
+
+class CoreDialBatch(models.Model):
+    """One scoring batch of CORE Dial rows, built from a workbook re-batch.
+
+    The dataset and matches endpoints always serve the current batch; a
+    scoring_version mismatch between client and server is a 409 dataset_stale.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    scoring_version = models.CharField(max_length=100, unique=True)
+    as_at = models.DateField(null=True, blank=True, help_text="Date of the assumption files")
+    is_current = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.scoring_version} ({'current' if self.is_current else 'stale'})"
+
+
+class CoreDialRow(models.Model):
+    """One on-sale listing in one state, cut to its Mode B (Pure Cost) row.
+
+    Money is integer cents (rule 5). price_score / emissions_score are the
+    NATIONAL medians of the listing's per-state Mode B scores, 6 dp — the same
+    value is copied onto every state row (D30). Names live here for the
+    paid-only matches endpoint; the dataset payload never exposes them.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    batch = models.ForeignKey(CoreDialBatch, on_delete=models.CASCADE, related_name='rows')
+    version_id = models.PositiveIntegerField(help_text="Catalogue order, 1..N — the last tie-breaker everywhere")
+    model_id = models.CharField(max_length=12, help_text='First 12 hex of SHA-256("year|make|model"), UTF-8')
+    vehicle = models.ForeignKey(Vehicle, on_delete=models.SET_NULL, null=True, blank=True,
+                                related_name='core_dial_rows')
+
+    state = models.CharField(max_length=3, choices=AustralianState.choices)
+    make = models.CharField(max_length=255)
+    model = models.CharField(max_length=255)
+    variant = models.CharField(max_length=255)
+    year = models.IntegerField()
+    fcai_category = models.CharField(max_length=100, blank=True)
+
+    driveaway_cents = models.BigIntegerField()
+    coo_pa_cents = models.BigIntegerField(help_text="Pure Cost COO p.a.; equals the sum of the eight parts")
+    annual_co2_kg = models.FloatField(help_text="Tailpipe CO2 p.a., not rounded")
+    co2_g_per_km = models.FloatField(null=True, blank=True)
+    price_score = models.FloatField(help_text="National, 6 dp")
+    emissions_score = models.FloatField(help_text="National, 6 dp")
+    co2_cap = models.FloatField(null=True, blank=True, help_text="null = no cap")
+
+    fuel_cents = models.BigIntegerField(default=0)
+    electricity_cents = models.BigIntegerField(default=0)
+    ctp_cents = models.BigIntegerField(default=0)
+    comprehensive_cents = models.BigIntegerField(default=0)
+    registration_cents = models.BigIntegerField(default=0)
+    servicing_cents = models.BigIntegerField(default=0)
+    tyres_cents = models.BigIntegerField(default=0)
+    road_user_charge_cents = models.BigIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['batch', 'state', 'version_id'], name='unique_dial_row_per_state_version'),
+        ]
+        indexes = [
+            models.Index(fields=['batch', 'state']),
+            models.Index(fields=['batch', 'fcai_category', 'state']),
+        ]
+        ordering = ['version_id']
+
+    def __str__(self):
+        return f"{self.year} {self.make} {self.model} {self.variant} — {self.state} (v{self.version_id})"
+
+    @property
+    def parts_cents(self):
+        return {
+            'fuel': self.fuel_cents,
+            'electricity': self.electricity_cents,
+            'ctp': self.ctp_cents,
+            'comprehensive': self.comprehensive_cents,
+            'registration': self.registration_cents,
+            'servicing': self.servicing_cents,
+            'tyres': self.tyres_cents,
+            'road_user_charge': self.road_user_charge_cents,
+        }

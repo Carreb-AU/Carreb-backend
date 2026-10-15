@@ -6,7 +6,6 @@ from django.core.cache import cache
 from django.db import models, connection
 from django.contrib.postgres.search import TrigramSimilarity
 from django.shortcuts import get_object_or_404
-import statistics
 from apps.mygarage.models import (
     CurrentVehicle, GarageVehicle, GarageVehicleStatus, GarageVehicleSource,
     VehicleOverride, UserPriorityState, CoreMode, AISmartMatchRequest
@@ -31,6 +30,7 @@ from apps.mygarage.ai_service import (
     estimate_resale_value,
 )
 from apps.vehicles.services.rating_engine import calculate_core_rating, _get_state_cents
+from apps.vehicles.services.core_dial import AU_STATES, cost_gvg_current_vehicle
 from apps.vehicles.tasks import emit_analytics_event
 
 def _get_overrides(user, current_vehicle=None, garage_vehicle=None):
@@ -50,8 +50,16 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         overrides_qs = VehicleOverride.objects.filter(user=user, current_vehicle=vehicle_instance)
         # Current vehicle ALWAYS uses pure cost
         mode = CoreMode.PURE_COST
-        priority = 3
-        state = vehicle_instance.state or 'NSW'
+        priority = 1
+        # State chain (spec section 8): saved priority state, else the current
+        # car's state. If neither is set, no figure is produced at all — the
+        # frontend asks once (eight-state picker) before any figure shows.
+        state = None
+        if priority_state:
+            state = priority_state.state
+        if not state:
+            state = vehicle_instance.state
+        state = (state or '').upper() or None
         catalogue = vehicle_instance.vehicle_catalogue
         gvg_record = vehicle_instance.green_vehicle_guide_record
     else:
@@ -93,15 +101,20 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
 
     engine_data = None
-    if rating_vehicle:
-        engine_data = calculate_core_rating(
-            rating_vehicle,
-            state,
-            priority,
-            mode,
-            user_inputs,
-            current_vehicle_annual_cost=current_cost
-        )
+    if rating_vehicle and state:
+        if is_current_vehicle and gvg_record and not catalogue:
+            # GVG current car: fixed class medians from the Mode B rows plus
+            # the car's own consumption (spec section 8).
+            engine_data = cost_gvg_current_vehicle(gvg_record, state)
+        else:
+            engine_data = calculate_core_rating(
+                rating_vehicle,
+                state,
+                priority,
+                mode,
+                user_inputs,
+                current_vehicle_annual_cost=current_cost
+            )
 
     return {
         "vehicle_data": base_data,
@@ -114,75 +127,6 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         }
     }
 
-
-def _median_or_none(values):
-    return int(statistics.median(values)) if values else None
-
-
-def _build_dial_bands(user, priority_state):
-    """
-    Build the band-level numbers the CORE Dial expects.
-
-    Returns a list of band dicts (one per star band) containing:
-      - slug: band identifier matching frontend DIAL_MODES ids
-      - vehicle_count: number of active garage vehicles in this band
-      - coo: median total annual cost ($/year) for vehicles in this band
-      - co2: median annual CO2 (kg/year) for vehicles in this band
-      - cost_diff: median estimated cost difference vs the current vehicle (cents)
-    """
-    band_slugs = [
-        'captain-carbon',
-        'the-detour',
-        'steady-cruiser',
-        'smart-move',
-        'net-zero-ninja',
-    ]
-    band_stats = {
-        slug: {'costs': [], 'co2s': [], 'diffs': [], 'count': 0}
-        for slug in band_slugs
-    }
-
-    cv = getattr(user, 'current_vehicle', None)
-    cv_cost = None
-    if cv:
-        cv_resp = _build_calculated_vehicle_response(user, cv, priority_state, is_current_vehicle=True)
-        cv_cost = cv_resp.get('engine_data', {}).get('total_annual_cost')
-
-    active_qs = GarageVehicle.objects.filter(user=user, status=GarageVehicleStatus.ACTIVE)
-    for gv in active_qs:
-        resp = _build_calculated_vehicle_response(user, gv, priority_state)
-        engine_data = resp.get('engine_data')
-        if not engine_data:
-            continue
-        slug = engine_data.get('band_slug')
-        if slug not in band_stats:
-            continue
-
-        band_stats[slug]['count'] += 1
-        total = engine_data.get('total_annual_cost')
-        co2 = engine_data.get('annual_co2_kg')
-        if total is not None:
-            band_stats[slug]['costs'].append(total)
-        if co2 is not None:
-            band_stats[slug]['co2s'].append(co2)
-
-        diff_obj = engine_data.get('est_cost_difference')
-        diff_cents = None
-        if isinstance(diff_obj, dict):
-            diff_cents = diff_obj.get('value_cents')
-        if diff_cents is not None and cv_cost is not None:
-            band_stats[slug]['diffs'].append(diff_cents)
-
-    return [
-        {
-            'slug': slug,
-            'vehicle_count': band_stats[slug]['count'],
-            'coo': _median_or_none(band_stats[slug]['costs']),
-            'co2': _median_or_none(band_stats[slug]['co2s']),
-            'cost_diff': _median_or_none(band_stats[slug]['diffs']),
-        }
-        for slug in band_slugs
-    ]
 
 
 class CurrentVehicleView(views.APIView):
@@ -974,69 +918,35 @@ class ArchiveListView(views.APIView):
 
 class PriorityStateView(views.APIView):
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
         state, _ = UserPriorityState.objects.get_or_create(user=request.user)
-        return Response({
-            "state": UserPriorityStateSerializer(state).data,
-            "band_counts": {},
-            "bands": _build_dial_bands(request.user, state),
-        })
+        return Response({"state": UserPriorityStateSerializer(state).data})
 
     def patch(self, request):
         state, _ = UserPriorityState.objects.get_or_create(user=request.user)
-        
+
         mode = request.data.get('active_core_mode')
         if mode in ['cool_choice', 'true_value', 'full_picture'] and request.user.subscription_tier == SubscriptionTier.FREE:
             if getattr(request.user, 'analytics_consent', False):
                 emit_analytics_event.delay(str(request.user.id), 'core_mode_upgrade_prompt_shown', {})
             return Response({"detail": "Premium mode requested on free tier"}, status=status.HTTP_403_FORBIDDEN)
-            
+
         serializer = UserPriorityStateSerializer(state, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        
+
         if getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(str(request.user.id), 'core_dial_adjusted', {
                 'priority_slider_position': serializer.validated_data.get('priority_slider_position'),
                 'active_core_mode': serializer.validated_data.get('active_core_mode')
             })
-            
+
         cache.delete(f"spotlights_{request.user.id}")
 
-        # Build the band-level numbers the CORE Dial needs.
-        dial_bands = _build_dial_bands(request.user, serializer.instance)
-        band_counts = {b['slug'].replace('-', '_'): b['vehicle_count'] for b in dial_bands}
-
-        response = {
-            "state": serializer.data,
-            "band_counts": band_counts,
-            "bands": dial_bands,
-        }
-        cv = getattr(request.user, 'current_vehicle', None)
-        if cv:
-            cv_state = getattr(request.user, 'priority_state', serializer.instance)
-            cv_resp = _build_calculated_vehicle_response(
-                request.user, cv, cv_state, is_current_vehicle=True
-            )
-            response["current_vehicle"] = cv_resp
-
-        return Response(response)
-
-class CoreDialBandBreakdownView(views.APIView):
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request, band_slug):
-        qs = GarageVehicle.objects.filter(user=request.user, status=GarageVehicleStatus.ACTIVE)
-        state = getattr(request.user, 'priority_state', None)
-        
-        results = []
-        for gv in qs:
-            resp = _build_calculated_vehicle_response(request.user, gv, state)
-            if resp['engine_data'] and resp['engine_data'].get('band_slug') == band_slug:
-                results.append(resp)
-                
-        return Response(results)
+        # Response is { state: {...} } only — the browser computes band counts
+        # from the Dial dataset; the server never re-scores on a slider move.
+        return Response({"state": serializer.data})
 
 class SavingsSummaryView(views.APIView):
     permission_classes = [IsAuthenticated]

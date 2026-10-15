@@ -12,6 +12,7 @@ from apps.vehicles.views import (
     CoreSearchView,
     VehicleDataUploadView
 )
+from apps.vehicles.views_core_dial import CoreDialDatasetView, CoreDialMatchesView
 from apps.vehicles.calculator_lookup_api import VehicleCalculatorLookupAPIView
 from apps.vehicles.cost_estimator_api import VehicleCostEstimatorAPIView
 
@@ -28,6 +29,10 @@ urlpatterns = [
     path('api/core-rating/calculate/', CoreRatingCalculateView.as_view(), name='core-rating-calculate'),
     path('api/core-rating/batch/', CoreRatingBatchView.as_view(), name='core-rating-batch'),
     path('api/core-rating/search/', CoreSearchView.as_view(), name='core-rating-search'),
+
+    # CORE Dial (v6.4) — Pure Cost only
+    path('api/core-dial/dataset/', CoreDialDatasetView.as_view(), name='core-dial-dataset'),
+    path('api/core-dial-matches/', CoreDialMatchesView.as_view(), name='core-dial-matches'),
     
     path('api/vehicles/upload/', VehicleDataUploadView.as_view(), name='vehicle-upload'),
     

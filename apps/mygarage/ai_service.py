@@ -120,11 +120,11 @@ ENGINE_DISPLACEMENT_PROMPT = """You are a vehicle database assistant. Estimate t
 Vehicle: {year} {make} {model} {variant}
 
 Return ONLY a valid JSON object with this exact schema:
-{
+{{
   "engine_l": float or null,  // engine displacement in litres, e.g. 2.0
   "confidence": "high" | "medium" | "low",
   "reasoning": "one short sentence"
-}
+}}
 
 If the vehicle is electric (BEV) or hydrogen (FCEV), return null for engine_l. If you are uncertain, use your best estimate and set confidence to low. Do not return any text outside the JSON object."""
 
@@ -133,11 +133,11 @@ ANCAP_RATING_PROMPT = """You are a vehicle safety database assistant. Estimate t
 Vehicle: {year} {make} {model}
 
 Return ONLY a valid JSON object with this exact schema:
-{
+{{
   "ancap_rating": integer or null,  // 1 to 5 stars
   "confidence": "high" | "medium" | "low",
   "reasoning": "one short sentence"
-}
+}}
 
 ANCAP ratings did not exist before 1993, so for older vehicles return null. If the exact model-year rating is unknown, use your best estimate and set confidence to low. Do not return any text outside the JSON object."""
 

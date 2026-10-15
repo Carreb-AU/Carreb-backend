@@ -1,6 +1,12 @@
 from rest_framework import serializers
 from apps.mygarage.models import CurrentVehicle, GarageVehicle, VehicleOverride, UserPriorityState, GarageVehicleSource
-from apps.vehicles.models import Vehicle
+from apps.vehicles.models import Vehicle, AustralianState
+from apps.vehicles.services.core_dial import (
+    BUDGET_MAX_DOLLARS,
+    BUDGET_MIN_DOLLARS,
+    BUDGET_STEP_DOLLARS,
+    PRIORITY_STOPS,
+)
 
 class CurrentVehicleSerializer(serializers.ModelSerializer):
     class Meta:
@@ -17,11 +23,37 @@ class VehicleOverrideSerializer(serializers.ModelSerializer):
         model = VehicleOverride
         fields = ['id', 'field_name', 'override_value', 'overridden_at']
 
+class StateChoiceField(serializers.ChoiceField):
+    """Choice field for the eight state codes; accepts any case."""
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            data = data.upper()
+        return super().to_internal_value(data)
+
+
 class UserPriorityStateSerializer(serializers.ModelSerializer):
+    state = StateChoiceField(choices=AustralianState.values, allow_null=True, required=False)
+
     class Meta:
         model = UserPriorityState
-        fields = ['budget_min', 'budget_max', 'priority_slider_position', 'active_core_mode', 'updated_at']
+        fields = ['state', 'budget_min', 'budget_max', 'priority_slider_position', 'active_core_mode', 'updated_at']
         read_only_fields = ['updated_at']
+
+    def validate_priority_slider_position(self, value):
+        if value is None:
+            return value
+        if value not in PRIORITY_STOPS:
+            raise serializers.ValidationError("invalid_stop")
+        return value
+
+    def validate_budget_max(self, value):
+        # Whole dollars, multiple of 5,000, in 20,000–200,000; null = state default.
+        if value is None:
+            return None
+        if (value < BUDGET_MIN_DOLLARS or value > BUDGET_MAX_DOLLARS
+                or value % BUDGET_STEP_DOLLARS != 0):
+            raise serializers.ValidationError("invalid_budget")
+        return value
 
 class CurrentVehicleCreateSerializer(serializers.Serializer):
     vehicle_catalogue_id = serializers.UUIDField(required=False, allow_null=True)
@@ -31,6 +63,14 @@ class CurrentVehicleCreateSerializer(serializers.Serializer):
     licence_plate = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     odometer_reading = serializers.IntegerField(required=False, allow_null=True)
     state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+    def validate_state(self, value):
+        if value in (None, ''):
+            return None
+        value = str(value).upper()
+        if value not in AustralianState.values:
+            raise serializers.ValidationError("invalid_state")
+        return value
 
     def validate_vehicle_catalogue_id(self, value):
         if value and not Vehicle.objects.filter(id=value).exists():

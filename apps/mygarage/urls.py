@@ -14,7 +14,6 @@ from apps.mygarage.views import (
     GarageVehicleDeleteView,
     ArchiveListView,
     PriorityStateView,
-    CoreDialBandBreakdownView,
     SavingsSummaryView,
     SpotlightsView,
     AISmartMatchView,
@@ -57,7 +56,6 @@ urlpatterns = [
     
     # Priority State & Dial
     path('api/my-garage/priority-state/', PriorityStateView.as_view(), name='priority-state'),
-    path('api/my-garage/core-dial/band-breakdown/<slug:band_slug>/', CoreDialBandBreakdownView.as_view(), name='core-dial-band-breakdown'),
     
     # Savings & Spotlights
     path('api/my-garage/savings-summary/', SavingsSummaryView.as_view(), name='savings-summary'),

@@ -129,7 +129,8 @@ def login(email: str, password: str, ip_address: str, user_agent: str):
     if hasattr(user, 'two_factor_auth') and user.two_factor_auth.is_enabled:
         expires_at = timezone.now() + timedelta(minutes=CHALLENGE_EXPIRY_MINUTES)
         challenge = TwoFactorChallenge.objects.create(user=user, expires_at=expires_at)
-        return {"type": "challenge", "challenge_token": challenge.challenge_token}
+        return {"type": "challenge", "challenge_token": challenge.challenge_token,
+                "is_2fa_enabled": True}
         
     session = _create_auth_session(user, ip_address, user_agent)
     tokens = _get_tokens_for_user(user)
@@ -186,7 +187,8 @@ def social_login(provider: str, provider_id: str, email: str, first_name: str, l
         from datetime import timedelta
         expires_at = timezone.now() + timedelta(minutes=CHALLENGE_EXPIRY_MINUTES)
         challenge = TwoFactorChallenge.objects.create(user=user, expires_at=expires_at)
-        return {"type": "challenge", "challenge_token": challenge.challenge_token}
+        return {"type": "challenge", "challenge_token": challenge.challenge_token,
+                "is_2fa_enabled": True}
         
     session = _create_auth_session(user, ip_address, user_agent)
     tokens = _get_tokens_for_user(user)

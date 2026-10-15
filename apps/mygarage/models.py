@@ -2,7 +2,7 @@ import uuid
 from django.db import models
 from django.utils import timezone
 from apps.users.models import User
-from apps.vehicles.models import Vehicle
+from apps.vehicles.models import Vehicle, AustralianState
 
 class CurrentVehicle(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -91,9 +91,10 @@ class CoreMode(models.TextChoices):
 class UserPriorityState(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='priority_state')
+    state = models.CharField(max_length=3, choices=AustralianState.choices, null=True, blank=True)
     budget_min = models.IntegerField(null=True, blank=True)
     budget_max = models.IntegerField(null=True, blank=True)
-    priority_slider_position = models.IntegerField(default=3) # 1-5
+    priority_slider_position = models.IntegerField(default=1) # 1-5, default Mostly cost (D28)
     active_core_mode = models.CharField(max_length=50, choices=CoreMode.choices, default=CoreMode.PURE_COST)
     updated_at = models.DateTimeField(auto_now=True)
     

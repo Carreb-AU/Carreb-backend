@@ -314,6 +314,19 @@ def convert_session_to_garage(session: FreeMatchSession, user) -> GarageVehicle:
         vehicle_catalogue=session.matched_vehicle,
         source=GarageVehicleSource.FREE_MATCH_WIZARD,
     )
+    # Free-match answers fill the user's priority state at sign-up (spec §8):
+    # the wizard's state, priority stop, and budget become the Dial's saved state.
+    from apps.mygarage.models import UserPriorityState
+    slider = PRIORITY_TO_SLIDER.get(session.priority, 1)
+    UserPriorityState.objects.update_or_create(
+        user=user,
+        defaults={
+            'state': (session.state or '').upper() or None,
+            'priority_slider_position': slider,
+            'budget_min': session.budget_min,
+            'budget_max': session.budget_max,
+        },
+    )
     session.converted_user = user
     session.save(update_fields=["converted_user"])
     return garage_vehicle

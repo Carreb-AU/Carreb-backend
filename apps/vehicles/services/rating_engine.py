@@ -5,6 +5,7 @@ import statistics
 from django.utils import timezone
 from apps.vehicles.models import Vehicle, PowertrainType
 from apps.vehicles.selectors import get_vehicles_by_fcai_category
+from apps.vehicles.services.core_dial import round_half_up
 
 # Trademarked Band Names
 BAND_NAMES = {
@@ -163,7 +164,7 @@ def _normalize_driveaway_for_loan(driveaway) -> float:
 
     # Float means dollars in the old import; convert to cents.
     if isinstance(driveaway, float):
-        driveaway = int(round(driveaway * 100))
+        driveaway = int(round_half_up(driveaway * 100, 0))
 
     # $10,000 = 1,000,000 cents. Anything larger than that is almost certainly cents.
     if driveaway > 1_000_000:
@@ -200,11 +201,11 @@ def _to_cents(value) -> int:
     if isinstance(value, Decimal):
         value = float(value)
     if isinstance(value, float):
-        return int(round(value * 100))
+        return int(round_half_up(value * 100, 0))
     if isinstance(value, int):
         return value
     try:
-        return int(round(float(value) * 100))
+        return int(round_half_up(float(value) * 100, 0))
     except (TypeError, ValueError):
         return 0
 
@@ -218,7 +219,7 @@ def _estimate_to_cents(value, field_name: str) -> int:
     if value is None or value == '':
         return 0
     if isinstance(value, float):
-        return int(round(value * 100))
+        return int(round_half_up(value * 100, 0))
     if isinstance(value, int):
         # The old Carreb ETL stored these as int dollars; anything under $10k
         # for 5 years of servicing/tyres is almost certainly dollars.
@@ -226,7 +227,7 @@ def _estimate_to_cents(value, field_name: str) -> int:
             return value * 100
         return value
     try:
-        return int(round(float(value) * 100))
+        return int(round_half_up(float(value) * 100, 0))
     except (TypeError, ValueError):
         return 0
 
@@ -282,7 +283,7 @@ def calculate_vehicle_cost_breakdown(
     finance_annual = 0
     if core_mode in ['cool_choice', 'full_picture']:
         if stored_mode and stored_mode.get('finance_cost_pa') is not None:
-            finance_annual = int(round(float(stored_mode['finance_cost_pa']) * 100))
+            finance_annual = int(round_half_up(float(stored_mode['finance_cost_pa']) * 100, 0))
         else:
             driveaway_dollars = _normalize_driveaway_for_loan(driveaway)
             loan_amount = user_inputs.get('loan_amount', driveaway_dollars * 0.8)  # 20% deposit
@@ -294,9 +295,10 @@ def calculate_vehicle_cost_breakdown(
     resale_annual = 0
     if core_mode in ['true_value', 'full_picture']:
         if stored_mode and stored_mode.get('resale_credit_pa') is not None:
-            resale_annual = int(round(float(stored_mode['resale_credit_pa']) * 100))
+            resale_annual = int(round_half_up(float(stored_mode['resale_credit_pa']) * 100, 0))
         else:
-            resale_annual = int((getattr(vehicle, 'resale_value_5yr_estimate', 0) or 0) / 5)
+            depreciation = max(0, driveaway - (getattr(vehicle, 'resale_value_5yr_estimate', 0) or 0))
+            resale_annual = int(round_half_up(depreciation / 5, 0))
 
     base_total = fuel_or_energy_annual + insurance + ctp + rego + servicing_annual + tyres_annual + ev_levy + other_annual
     total = base_total
@@ -304,6 +306,7 @@ def calculate_vehicle_cost_breakdown(
         total += finance_annual
     if core_mode in ['true_value', 'full_picture']:
         total -= resale_annual
+    total = max(0, total)
 
     return {
         "fuel_or_energy_annual": fuel_or_energy_annual,
@@ -388,8 +391,8 @@ def calculate_core_rating(
             vehicle.tailpipe_co2_g_per_km
         )
         core_rating = float(core_rating)
-        total_annual_cost = int(round(stored_target['mode_coo_pa'] * 100))
-        annual_co2_kg = int(round(stored_target['annual_co2_kg']))
+        total_annual_cost = int(round_half_up(stored_target['mode_coo_pa'] * 100, 0))
+        annual_co2_kg = int(round_half_up(stored_target['annual_co2_kg'], 0))
 
     else:
         # ----- NON-CATALOGUE PATH (GVG / legacy / manual entry) -----
@@ -480,8 +483,8 @@ def calculate_core_rating(
             p_pt,
             p_co2
         )
-        p_total = int(round(p_stored['mode_coo_pa'] * 100))
-        p_annual_co2 = int(round(p_stored['annual_co2_kg']))
+        p_total = int(round_half_up(p_stored['mode_coo_pa'] * 100, 0))
+        p_annual_co2 = int(round_half_up(p_stored['annual_co2_kg'], 0))
 
         p_rating = max(1.0, min(5.0, float(p_rating)))
         band_slug = get_band_slug(p_rating)

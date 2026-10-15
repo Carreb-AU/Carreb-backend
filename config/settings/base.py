@@ -221,6 +221,7 @@ REST_FRAMEWORK = {
         'user': '100/minute',        # Authenticated users
         'password_reset': '5/hour',  # Custom scope
         'find_a_dealer': '100/day',  # Custom scope for Dealer Search
+        'search': '20/minute',       # Custom scope for CORE Dial matches (green button)
     }
 }
 
