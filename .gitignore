@@ -219,3 +219,6 @@ __marimo__/
 .DS_Store
 .ai/
 carreb_backend/.env.prod
+
+# Product spec docs (local only)
+CORE Dial — Build Prompt (v6.4, Pure Cost).md
