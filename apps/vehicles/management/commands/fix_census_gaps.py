@@ -1,11 +1,11 @@
 """One-off census gap-filler.
 
-Fills the two remaining census gaps that no source sheet provides:
+Fills the two remaining census gaps:
 
-1. BEVs whose source sheet battery size is "Not in source" (unreleased/TBC
-   models) get electricity_consumption_per_100km set to the fleet average of
-   BEVs that do have data (16.1 kWh/100km at import time), clearly marked as
-   an estimate in fe_basis / data_flags.
+1. BEVs with no electricity_consumption_per_100km get the client's flat
+   180 Wh/km convention (Forensic #28, flagged in every BEV row's data_flags)
+   = 18.0 kWh/100km — the same rate the sheet's electricity costs are computed
+   on. Marked as an estimate in fe_basis / data_flags.
 2. Vehicles with no image_url get an FCAI silhouette URL matched on their
    fcai_category / body_style / drive (the same fallback the API uses at
    request time).
@@ -17,9 +17,10 @@ from django.core.management.base import BaseCommand
 from apps.vehicles.models import Vehicle, PowertrainType
 from apps.vehicles.services.silhouette_lookup import get_silhouette_url
 
-FLEET_AVG_BEV_KWH_PER_100KM = 16.1
+BEV_FLAT_KWH_PER_100KM = 18.0  # 180 Wh/km, client convention (Forensic #28)
 ESTIMATE_NOTE = (
-    "ESTIMATED: fleet average 16.1 kWh/100km - battery TBC in source sheet"
+    "ESTIMATED: flat 180 Wh/km client convention (Forensic #28) - "
+    "battery TBC in source sheet"
 )
 
 
@@ -32,7 +33,7 @@ class Command(BaseCommand):
             electricity_consumption_per_100km__isnull=True,
         )
         n = bevs.update(
-            electricity_consumption_per_100km=FLEET_AVG_BEV_KWH_PER_100KM,
+            electricity_consumption_per_100km=BEV_FLAT_KWH_PER_100KM,
             fe_basis=ESTIMATE_NOTE,
             data_flags="consumption_estimated",
         )

@@ -41,6 +41,13 @@ _JUNK_MAKE_KEYWORDS = (
 
 NOT_IN_SOURCE = "not in source"
 
+# Client convention (Forensic #28, flagged in every BEV row's data_flags):
+# BEV energy use is a flat 180 Wh/km = 18.0 kWh/100km for ALL BEVs — the
+# sheet's electricity_cost_pa figures are computed on this flat rate (verified:
+# every battery-known BEV's cost implies ~17.8 kWh/100km). The sheet provides
+# no per-vehicle BEV FE (fe_basis = "n/a (BEV) — 0 per v6.3.4 convention").
+BEV_FLAT_KWH_PER_100KM = 18.0
+
 # Every field the importer owns; used for bulk_update on re-import.
 # NOTE: image_url is deliberately excluded — the consolidated sheet carries no
 # image column, so updating it here would wipe URLs fetched by other pipelines
@@ -286,6 +293,7 @@ def parse_consolidated_sheet(filepath: str):
         range_km = _safe_float(base.get("Range (km)"))
         maintenance_pa = _dollars_to_cents(base.get("maintenance_pa"))
         tyre_pa = _dollars_to_cents(base.get("tyre_cost_pa"))
+        powertrain = map_powertrain(base.get("Fuel Type"))
 
         vehicle = Vehicle(
             brand=_safe_str(make),
@@ -294,7 +302,7 @@ def parse_consolidated_sheet(filepath: str):
             variant=_safe_str(variant),
             body_style=map_body_style(base.get("Body Type")),
             num_seats=5,  # sheet carries no seating data; gap-fill will bring it
-            powertrain_type=map_powertrain(base.get("Fuel Type")),
+            powertrain_type=powertrain,
             fcai_category=_safe_str(base.get("fcai_category")),
             fcai_broad=_safe_str(base.get("fcai_broad")),
             energy_norm=_safe_str(base.get("Energy (norm)")),
@@ -304,7 +312,7 @@ def parse_consolidated_sheet(filepath: str):
             driveaway_price_by_state=driveaway_by_state,
             fuel_consumption_per_100km=_safe_float(base.get("Fuel Eff (L/100km)")),
             electricity_consumption_per_100km=(
-                battery / (range_km / 100) if battery and range_km else None
+                BEV_FLAT_KWH_PER_100KM if powertrain == PowertrainType.BEV else None
             ),
             tailpipe_co2_g_per_km=_safe_float(base.get("CO2 Tailpipe (g/km)")),
             wltp_range_km=range_km,
