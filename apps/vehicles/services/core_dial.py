@@ -19,7 +19,7 @@ BAND_NAMES = {
     2: 'The Detour™',
     3: 'Steady Cruiser™',
     4: 'Smart Move™',
-    5: 'Net Zero Ninja™',
+    5: 'Every Day Legend™',
 }
 
 # --- My Priority: five fixed stops (section 3, D28) ------------------------

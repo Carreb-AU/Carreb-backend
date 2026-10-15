@@ -9,7 +9,7 @@ from apps.vehicles.services.core_dial import round_half_up
 
 # Trademarked Band Names
 BAND_NAMES = {
-    (4.5, 5.0): "Net Zero Ninja™",
+    (4.5, 5.0): "Every Day Legend™",
     (3.5, 4.4): "Smart Move™",
     (2.5, 3.4): "Steady Cruiser™",
     (1.5, 2.4): "The Detour™",
@@ -29,7 +29,7 @@ def get_band_slug(rating) -> str:
     if rating is None:
         return ""
     rating = float(rating)
-    if rating >= 4.5: return "net-zero-ninja"
+    if rating >= 4.5: return "every-day-legend"
     if rating >= 3.5: return "smart-move"
     if rating >= 2.5: return "steady-cruiser"
     if rating >= 1.5: return "the-detour"
@@ -453,7 +453,7 @@ def calculate_core_rating(
 
     # Calculate peer distribution and medians
     peer_band_stats = {
-        "net-zero-ninja": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
+        "every-day-legend": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
         "smart-move": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
         "steady-cruiser": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
         "the-detour": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
