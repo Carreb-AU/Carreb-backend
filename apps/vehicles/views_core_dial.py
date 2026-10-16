@@ -62,7 +62,10 @@ class CoreDialDatasetView(views.APIView):
             return Response({'error': 'no_dataset'}, status=status.HTTP_404_NOT_FOUND)
 
         etag = f'"{batch.scoring_version}:{state}"'
-        if request.META.get('HTTP_IF_NONE_MATCH') == etag:
+        # GZipMiddleware (and nginx/Cloudflare) weaken strong ETags to
+        # W/"..." — accept both forms on the way back in.
+        if_none_match = (request.META.get('HTTP_IF_NONE_MATCH') or '').strip()
+        if if_none_match.removeprefix('W/') == etag:
             return HttpResponseNotModified()
 
         rows = (

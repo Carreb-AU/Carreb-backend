@@ -312,6 +312,17 @@ class CoreDialApiTests(TestCase):
                                 HTTP_IF_NONE_MATCH=etag)
         self.assertEqual(resp2.status_code, 304)
 
+    def test_dataset_etag_304_weak_form(self):
+        # GZipMiddleware weakens the ETag to W/"..." — If-None-Match comes
+        # back in that form from real clients behind nginx/Cloudflare.
+        self._auth()
+        resp = self.client.get('/api/core-dial/dataset/', {'state': 'NSW'})
+        etag = resp.headers['ETag']
+        weak = etag if etag.startswith('W/') else 'W/' + etag
+        resp2 = self.client.get('/api/core-dial/dataset/', {'state': 'NSW'},
+                                HTTP_IF_NONE_MATCH=weak)
+        self.assertEqual(resp2.status_code, 304)
+
     def test_dataset_free_user_ok(self):
         self._auth(self.free_user)
         resp = self.client.get('/api/core-dial/dataset/', {'state': 'NSW'})
