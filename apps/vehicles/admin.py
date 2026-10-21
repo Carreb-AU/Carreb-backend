@@ -30,6 +30,8 @@ from apps.vehicles.models import (
     VehicleCOOComponentBreakdown,
     NGAEmissionFactor,
     DriveawayTaxParameter,
+    CoreDialBatch,
+    CoreDialRow,
 )
 from apps.vehicles.services.gvg_import import import_all
 
@@ -429,3 +431,29 @@ class VehicleAdmin(admin.ModelAdmin):
             "fields": ("created_at", "updated_at"),
         }),
     )
+
+
+@admin.register(CoreDialBatch)
+class CoreDialBatchAdmin(admin.ModelAdmin):
+    list_display = ("scoring_version", "as_at", "is_current", "created_at", "row_count")
+    list_filter = ("is_current",)
+    search_fields = ("scoring_version",)
+    ordering = ("-created_at",)
+
+    @admin.display(description="Rows")
+    def row_count(self, obj):
+        return obj.rows.count()
+
+
+@admin.register(CoreDialRow)
+class CoreDialRowAdmin(admin.ModelAdmin):
+    list_display = (
+        "state", "version_id", "year", "make", "model", "variant",
+        "driveaway_cents", "coo_pa_cents", "annual_co2_kg",
+        "price_score", "emissions_score", "co2_cap", "batch",
+    )
+    list_filter = ("state", "batch__scoring_version")
+    search_fields = ("make", "model", "variant", "model_id")
+    ordering = ("state", "version_id")
+    list_per_page = 50
+    autocomplete_fields = ("vehicle",)
