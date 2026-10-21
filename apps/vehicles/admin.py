@@ -450,10 +450,21 @@ class CoreDialRowAdmin(admin.ModelAdmin):
     list_display = (
         "state", "version_id", "year", "make", "model", "variant",
         "driveaway_cents", "coo_pa_cents", "annual_co2_kg",
-        "price_score", "emissions_score", "co2_cap", "batch",
+        "price_score", "emissions_score", "co2_cap", "bands_by_stop",
     )
     list_filter = ("state", "batch__scoring_version")
     search_fields = ("make", "model", "variant", "model_id")
     ordering = ("state", "version_id")
     list_per_page = 50
     autocomplete_fields = ("vehicle",)
+    readonly_fields = ("bands_by_stop",)
+
+    @admin.display(description="Band at stop 1→5")
+    def bands_by_stop(self, obj):
+        # Band is not stored — it is derived from the scores at query time.
+        # Budget only filters the window; the stop weights decide the band.
+        from apps.vehicles.services.core_dial import rate_version
+        return " · ".join(
+            str(rate_version(obj.price_score, obj.emissions_score, obj.co2_cap, stop)[1])
+            for stop in range(1, 6)
+        )
