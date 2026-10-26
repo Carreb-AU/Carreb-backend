@@ -15,12 +15,19 @@ Upserts on the natural key (brand, model, variant, year) so UUIDs — and the
 GarageVehicle FKs that point at them — stay stable across re-imports.
 """
 
+import datetime
+import math
 import os
 from typing import Dict, Optional
 
 import pandas as pd
 
-from apps.vehicles.models import PowertrainType, TestCycle, Vehicle
+from apps.vehicles.models import (
+    ConsolidatedVehicleRow,
+    PowertrainType,
+    TestCycle,
+    Vehicle,
+)
 
 SHEET_NAME = "Consolidated Vehicles v6.4"
 SPOTLIGHT_SHEET_NAME = "Spotlights"  # added in the 13-Oct-26 workbook
@@ -73,6 +80,9 @@ VEHICLE_UPDATE_FIELDS = [
     "price_basis", "fe_basis", "co2_basis", "assumption_fills",
     "data_flags", "range_research_note",
     "co2_energy_cycle_g_per_km", "spotlight_data",
+    "transmission", "doors", "base_fuel", "phev_fuel_consumption_l100",
+    "energy_consumption_wh_km", "co2_energy_cycle_basis",
+    "maintenance_5yr_detail", "is_suppressed",
 ]
 
 
@@ -111,6 +121,54 @@ def _dollars_to_cents(val) -> Optional[int]:
     if f is None:
         return None
     return int(round(f * 100))
+
+
+def _json_safe(val):
+    """Convert a sheet cell to a JSON-safe value (None/NaN -> None, numpy
+    scalars -> python, dates -> ISO strings, anything else -> str)."""
+    if val is None:
+        return None
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    try:
+        import numpy as np
+        if isinstance(val, np.generic):
+            val = val.item()
+    except ImportError:  # pragma: no cover - pandas pulls numpy in always
+        np = None
+    if val is None:
+        return None
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    if isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
+        return val.isoformat()
+    if isinstance(val, (bool, int, float, str)):
+        return val
+    try:
+        if pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return str(val)
+
+
+def _maintenance_5yr_detail(base) -> Optional[dict]:
+    """Per-year servicing detail (cents) from the 21-Oct maintenance columns."""
+    detail = {}
+    for i in range(1, 6):
+        cents = _dollars_to_cents(base.get(f"maintenance_yr{i}"))
+        if cents is not None:
+            detail[f"yr{i}_cents"] = cents
+    total = _dollars_to_cents(base.get("maintenance_5yr_total"))
+    if total is not None:
+        detail["total_cents"] = total
+    tier = _safe_str(base.get("maintenance_source_tier"))
+    if tier:
+        detail["source_tier"] = tier
+    basis = _safe_str(base.get("maintenance_basis"))
+    if basis:
+        detail["basis"] = basis
+    return detail or None
 
 
 def _not_in_source(val) -> Optional[str]:
@@ -199,15 +257,21 @@ def _load_spotlights(filepath: str) -> Dict[tuple, dict]:
 
 
 def parse_consolidated_sheet(filepath: str):
-    """Parse the sheet into (vehicles, skipped).
+    """Parse the sheet into (vehicles, skipped, source_rows).
 
     vehicles: list of unsaved Vehicle instances (one per natural key).
     skipped: number of non-vehicle rows dropped.
+    source_rows: list of dicts for ConsolidatedVehicleRow creation (one per
+    source data row of a non-junk group); empty when the workbook has no
+    listing_id column (pre-21-Oct layouts).
     """
     df = pd.read_excel(filepath, sheet_name=SHEET_NAME)
     spotlights = _load_spotlights(filepath)
+    has_listing_id = "listing_id" in df.columns
+    has_suppression = "is_suppressed" in df.columns
     skipped = 0
     vehicles = []
+    source_rows = []
 
     for (make, model, variant, year), group in df.groupby(
         ["Make", "Model", "Variant", "Year"], dropna=False, sort=False
@@ -223,6 +287,10 @@ def parse_consolidated_sheet(filepath: str):
             _safe_str(variant),
             str(_safe_int(year) or ""),
         )
+        natkey = (
+            _safe_str(make), _safe_str(model), _safe_str(variant),
+            _safe_int(year) or 0,
+        )
 
         # ---- per-state + per-mode structures --------------------------------
         driveaway_by_state: Dict[str, int] = {}
@@ -237,11 +305,22 @@ def parse_consolidated_sheet(filepath: str):
         coo_5yr_by_state: Dict[str, int] = {}
         mode_data_by_state: Dict[str, dict] = {}
 
-        for _, row in group.iterrows():
+        for row_idx, row in group.iterrows():
             state = _safe_str(row.get("State")).upper()
             mode = _safe_str(row.get("CORE Mode")).upper()
             if not state:
                 continue
+
+            if has_listing_id:
+                source_rows.append({
+                    "natkey": natkey,
+                    "listing_id": str(row.get("listing_id")),
+                    "state": state[:3],
+                    "core_mode": mode[:1],
+                    "is_suppressed": _safe_bool(row.get("is_suppressed")),
+                    "source_row": int(row_idx) + 2,  # header is sheet row 1
+                    "data": {col: _json_safe(val) for col, val in row.items()},
+                })
 
             driveaway_by_state[state] = _dollars_to_cents(row.get("Driveaway Price ($)"))
             base_coo_by_state[state] = _dollars_to_cents(row.get("Base COO p.a. ($)"))
@@ -271,7 +350,7 @@ def parse_consolidated_sheet(filepath: str):
 
             mode_data_by_state.setdefault(state, {})
             if mode:
-                mode_data_by_state[state][mode] = {
+                mode_data = {
                     "finance_cost_pa": _safe_float(row.get("Finance Cost p.a. ($)")),
                     "resale_credit_pa": _safe_float(row.get("Resale Credit p.a. ($)")),
                     "mode_coo_pa": _safe_float(row.get("Mode COO p.a. ($)")),
@@ -287,6 +366,17 @@ def parse_consolidated_sheet(filepath: str):
                     "co2_cap_tier": _safe_str(row.get("co2_cap_tier")),
                     "band_name": _safe_str(row.get("band_name")),
                 }
+                # CO2/energy detail (21-Oct columns; constant per vehicle but
+                # may vary by state — stored per state+mode, keys omitted
+                # when the sheet value is missing).
+                for key in (
+                    "electric_share", "offgrid_share", "fuel_l100_used",
+                    "co2_fuel_g_km", "co2_grid_g_km", "co2_tailpipe_pa_kg",
+                ):
+                    val = _safe_float(row.get(key))
+                    if val is not None:
+                        mode_data[key] = val
+                mode_data_by_state[state][mode] = mode_data
 
         # ---- scalar fields from the first row --------------------------------
         battery = _safe_float(base.get("Battery (kWh)"))
@@ -294,6 +384,13 @@ def parse_consolidated_sheet(filepath: str):
         maintenance_pa = _dollars_to_cents(base.get("maintenance_pa"))
         tyre_pa = _dollars_to_cents(base.get("tyre_cost_pa"))
         powertrain = map_powertrain(base.get("Fuel Type"))
+        # is_suppressed is per listing; a name group can hold several listings
+        # (up to 4 distinct listing_ids). The Vehicle is flagged only when
+        # EVERY listing in the group is suppressed.
+        group_is_suppressed = (
+            all(_safe_bool(v) for v in group["is_suppressed"])
+            if has_suppression else False
+        )
 
         vehicle = Vehicle(
             brand=_safe_str(make),
@@ -301,7 +398,9 @@ def parse_consolidated_sheet(filepath: str):
             year=_safe_int(year) or 0,
             variant=_safe_str(variant),
             body_style=map_body_style(base.get("Body Type")),
-            num_seats=5,  # sheet carries no seating data; gap-fill will bring it
+            # Seats can differ between listings in one name group; the first
+            # listing's value wins (pre-21-Oct sheets have no Seats column).
+            num_seats=_safe_int(base.get("Seats")) or 5,
             powertrain_type=powertrain,
             fcai_category=_safe_str(base.get("fcai_category")),
             fcai_broad=_safe_str(base.get("fcai_broad")),
@@ -368,10 +467,22 @@ def parse_consolidated_sheet(filepath: str):
             range_research_note=_safe_str(base.get("range_research_note")),
             co2_energy_cycle_g_per_km=_safe_float(base.get("co2_energy_cycle_g_km")),
             spotlight_data=spotlights.get(spotlight_key, {}),
+            transmission=_safe_str(base.get("transmission")),
+            doors=_safe_int(base.get("Doors")),
+            base_fuel=_safe_str(base.get("base_fuel")),
+            phev_fuel_consumption_l100=_safe_float(
+                base.get("phev_fuel_consumption_l100")
+            ),
+            energy_consumption_wh_km=_safe_float(
+                base.get("energy_consumption_wh_km")
+            ),
+            co2_energy_cycle_basis=_safe_str(base.get("co2_energy_cycle_basis")),
+            maintenance_5yr_detail=_maintenance_5yr_detail(base),
+            is_suppressed=group_is_suppressed,
         )
         vehicles.append(vehicle)
 
-    return vehicles, skipped
+    return vehicles, skipped, source_rows
 
 
 def _upsert_vehicles(vehicles) -> Dict[str, int]:
@@ -406,10 +517,11 @@ def import_consolidated_vehicles(
 ) -> Dict[str, int]:
     """Import the Consolidated Vehicles v6.4 sheet into the Vehicle table.
 
-    Returns {'vehicles_seen', 'created', 'updated', 'skipped', 'states', 'modes'}.
-    With dry_run=True no database writes happen.
+    Returns {'vehicles_seen', 'created', 'updated', 'skipped', 'states',
+    'modes', 'source_rows_written'}. With dry_run=True no database writes
+    happen.
     """
-    vehicles, skipped = parse_consolidated_sheet(filepath)
+    vehicles, skipped, source_rows = parse_consolidated_sheet(filepath)
 
     states = set()
     modes = set()
@@ -425,6 +537,7 @@ def import_consolidated_vehicles(
         "skipped": skipped,
         "states": len(states),
         "modes": len(modes),
+        "source_rows_written": 0,
     }
 
     if dry_run:
@@ -432,8 +545,45 @@ def import_consolidated_vehicles(
 
     if clear:
         Vehicle.objects.all().delete()
+        ConsolidatedVehicleRow.objects.all().delete()
 
     res = _upsert_vehicles(vehicles)
     result["created"] = res["created"]
     result["updated"] = res["updated"]
+
+    if source_rows:
+        result["source_rows_written"] = _write_source_rows(source_rows)
     return result
+
+
+def _write_source_rows(source_rows) -> int:
+    """Replace ConsolidatedVehicleRows for the imported listings.
+
+    Rows for any listing_id in the imported set are deleted first, then
+    re-created in batches of 2000 — so re-imports stay idempotent per
+    listing while unrelated listings keep their rows.
+    """
+    vehicle_ids = {
+        (v.brand, v.model, v.variant, v.year): v.id
+        for v in Vehicle.objects.values_list(
+            "id", "brand", "model", "variant", "year", named=True
+        )
+    }
+    listing_ids = {r["listing_id"] for r in source_rows}
+    ConsolidatedVehicleRow.objects.filter(listing_id__in=listing_ids).delete()
+
+    records = [
+        ConsolidatedVehicleRow(
+            vehicle_id=vehicle_ids.get(r["natkey"]),
+            listing_id=r["listing_id"],
+            state=r["state"],
+            core_mode=r["core_mode"],
+            is_suppressed=r["is_suppressed"],
+            source_row=r["source_row"],
+            data=r["data"],
+        )
+        for r in source_rows
+    ]
+    for i in range(0, len(records), 2000):
+        ConsolidatedVehicleRow.objects.bulk_create(records[i:i + 2000])
+    return len(records)

@@ -1,7 +1,8 @@
 """Parser that turns the "Consolidated Vehicles v6.4" workbook sheet into
 CORE Dial rows (Mode B / Pure Cost only).
 
-Sheet layout (verified against the 07-Oct-26 and 13-Oct-26 workbooks):
+Sheet layout (verified against the 07-Oct-26, 13-Oct-26 and 21-Oct-26
+workbooks):
   * rows sorted by (Make, Model, Variant, Year) — a "name group";
   * a name group holds one or more listings; each listing has exactly
     8 states × 4 modes = 32 rows;
@@ -13,6 +14,12 @@ So: split each state run into quads at every 'B' row; quad k of every state
 belongs to listing k. version_id is the catalogue order (first appearance,
 1..N). model_id is the first 12 hex of SHA-256("year|make|model").
 
+Columns are located by header NAME, not position: the 21-Oct-26 workbook
+inserted new leading columns (listing_id at 0, Make at 1, ...), so any
+positional mapping breaks silently on newer files. Columns that are absent
+from a given workbook (e.g. price_basis in early files, is_suppressed
+pre-21-Oct) resolve to None and are treated as empty / not suppressed.
+
 National scores (D30): price_score / emissions_score are the medians of the
 listing's per-state Mode B scores, rounded half-up to 6 dp, and are copied
 onto every state row.
@@ -21,7 +28,7 @@ import hashlib
 import logging
 import statistics
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import openpyxl
 
@@ -34,35 +41,65 @@ SHEET_NAME = 'Consolidated Vehicles v6.4'
 # Research Status values that count as "on sale" (section 2)
 ON_SALE_STATUSES = ('v6.3.4 seed', 'Confirmed')
 
-# 0-based column indexes (col letters per spec: Q=16, W=22, Y=24, Z=25, AA=26,
-# AO..AV = 40..47; A..D = 0..3, M = 12, N = 13, O = 14, U = 20, AE = 30,
-# AH = 33)
-COL_MAKE, COL_MODEL, COL_VARIANT, COL_YEAR = 0, 1, 2, 3
-COL_FUEL = 4
-COL_CO2_GKM = 12
-COL_STATE = 13
-COL_FCAI = 14
-COL_DRIVEAWAY = 16
-COL_MODE = 20
-COL_MODE_COO = 22
-COL_CO2_KG = 24
-COL_PRICE_SCORE = 25
-COL_EMISSIONS_SCORE = 26
-COL_SCORING_VERSION = 30
-COL_RESEARCH_STATUS = 33
-COL_PRICE_BASIS = 67  # BP 'price_basis' in the 13-Oct layout; optional
+# Header names for the scalar columns the parser needs.
+COL_MAKE = 'Make'
+COL_MODEL = 'Model'
+COL_VARIANT = 'Variant'
+COL_YEAR = 'Year'
+COL_FUEL = 'Fuel Type'
+COL_CO2_GKM = 'CO2 Tailpipe (g/km)'
+COL_STATE = 'State'
+COL_FCAI = 'fcai_category'
+COL_DRIVEAWAY = 'Driveaway Price ($)'
+COL_MODE = 'CORE Mode'
+COL_MODE_COO = 'Mode COO p.a. ($)'
+COL_CO2_KG = 'Annual CO2 (kg)'
+COL_PRICE_SCORE = 'price_score'
+COL_EMISSIONS_SCORE = 'emissions_score'
+COL_SCORING_VERSION = 'scoring_version'
+COL_RESEARCH_STATUS = 'Research Status'
+COL_PRICE_BASIS = 'price_basis'  # optional — absent from early workbooks
+COL_IS_SUPPRESSED = 'is_suppressed'  # optional — added in the 21-Oct-26 file
+
+# Mode B parts of the COO: part key -> sheet column name.
 PART_COLS = {
-    'fuel': 40,
-    'electricity': 41,
-    'ctp': 42,
-    'comprehensive': 43,
-    'registration': 44,
-    'servicing': 45,
-    'tyres': 46,
-    'road_user_charge': 47,
+    'fuel': 'fuel_cost_pa',
+    'electricity': 'electricity_cost_pa',
+    'ctp': 'ctp_pa',
+    'comprehensive': 'comprehensive_pa',
+    'registration': 'registration_pa',
+    'servicing': 'maintenance_pa',
+    'tyres': 'tyre_cost_pa',
+    'road_user_charge': 'ruc_pa',
 }
 
 PART_KEYS = tuple(PART_COLS.keys())
+
+
+def _build_column_map(header) -> Dict[str, int]:
+    """header row (tuple) -> {column name: 0-based index}. First wins."""
+    columns: Dict[str, int] = {}
+    for i, name in enumerate(header):
+        if name is None:
+            continue
+        name = str(name).strip()
+        if name and name not in columns:
+            columns[name] = i
+    return columns
+
+
+def _cell(row, columns: Dict[str, int], name: str):
+    """Row tuple value for a header name; None when the column is absent."""
+    idx = columns.get(name)
+    if idx is None or idx >= len(row):
+        return None
+    return row[idx]
+
+
+def _truthy(value) -> bool:
+    if value is None or value is True or value is False:
+        return bool(value)
+    return str(value).strip().lower() in ('true', 'yes', '1')
 
 
 @dataclass
@@ -74,6 +111,7 @@ class ParsedListing:
     year: int
     research_status: str
     states: Dict[str, dict]  # state -> {'B': row, 'E': row, 'C': row, 'F': row}
+    is_suppressed: bool = False
 
 
 @dataclass
@@ -102,11 +140,13 @@ class DialRowData:
 class ParsedWorkbook:
     scoring_version: str
     as_at: Optional[str]
+    columns: Dict[str, int] = field(default_factory=dict)
     listings: List[ParsedListing] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
+    skipped_suppressed: int = 0
 
     def dial_rows(self):
-        """Flatten to dial row data for on-sale listings, all states."""
+        """Flatten to dial row data for on-sale, unsuppressed listings."""
         from apps.vehicles.services.core_dial import (
             co2_cap_for, dollars_to_cents, round_half_up,
         )
@@ -115,14 +155,19 @@ class ParsedWorkbook:
         for version_id, listing in enumerate(self.listings, start=1):
             if listing.research_status not in ON_SALE_STATUSES:
                 continue
+            if listing.is_suppressed:
+                self.skipped_suppressed += 1
+                continue
             # National scores: median of per-state Mode B scores, 6 dp (D30)
             price_scores, emissions_scores = [], []
             for st in AU_STATES:
                 b = listing.states[st]['B']
-                if isinstance(b[COL_PRICE_SCORE], (int, float)):
-                    price_scores.append(b[COL_PRICE_SCORE])
-                if isinstance(b[COL_EMISSIONS_SCORE], (int, float)):
-                    emissions_scores.append(b[COL_EMISSIONS_SCORE])
+                score = _cell(b, self.columns, COL_PRICE_SCORE)
+                if isinstance(score, (int, float)):
+                    price_scores.append(score)
+                score = _cell(b, self.columns, COL_EMISSIONS_SCORE)
+                if isinstance(score, (int, float)):
+                    emissions_scores.append(score)
             if not price_scores or not emissions_scores:
                 self.problems.append(
                     f"{listing.make} {listing.model} {listing.variant} {listing.year}: "
@@ -133,8 +178,10 @@ class ParsedWorkbook:
             nat_emissions = round_half_up(statistics.median(emissions_scores), 6)
 
             act_b = listing.states['ACT']['B']
-            co2_g_per_km = float(act_b[COL_CO2_GKM] or 0)
-            co2_cap = co2_cap_for(str(act_b[COL_FUEL]).lower(), co2_g_per_km)
+            co2_g_per_km = float(_cell(act_b, self.columns, COL_CO2_GKM) or 0)
+            co2_cap = co2_cap_for(
+                str(_cell(act_b, self.columns, COL_FUEL) or '').lower(), co2_g_per_km
+            )
             model_id = hashlib.sha256(
                 f"{listing.year}|{listing.make}|{listing.model}".encode('utf-8')
             ).hexdigest()[:12]
@@ -142,10 +189,10 @@ class ParsedWorkbook:
             for st in AU_STATES:
                 b = listing.states[st]['B']
                 parts_cents = {}
-                for key, idx in PART_COLS.items():
-                    raw = b[idx]
+                for key, colname in PART_COLS.items():
+                    raw = _cell(b, self.columns, colname)
                     parts_cents[key] = dollars_to_cents(raw) if isinstance(raw, (int, float)) else 0
-                coo_cents = dollars_to_cents(b[COL_MODE_COO])
+                coo_cents = dollars_to_cents(_cell(b, self.columns, COL_MODE_COO))
                 parts_sum = sum(parts_cents.values())
                 if parts_sum != coo_cents:
                     self.problems.append(
@@ -160,30 +207,30 @@ class ParsedWorkbook:
                     model=listing.model,
                     variant=listing.variant,
                     year=listing.year,
-                    fcai_category=str(b[COL_FCAI] or ''),
+                    fcai_category=str(_cell(b, self.columns, COL_FCAI) or ''),
                     state=st,
-                    driveaway_cents=dollars_to_cents(b[COL_DRIVEAWAY]),
+                    driveaway_cents=dollars_to_cents(_cell(b, self.columns, COL_DRIVEAWAY)),
                     coo_pa_cents=coo_cents,
-                    annual_co2_kg=float(b[COL_CO2_KG] or 0),
+                    annual_co2_kg=float(_cell(b, self.columns, COL_CO2_KG) or 0),
                     co2_g_per_km=co2_g_per_km,
                     price_score=nat_price,
                     emissions_score=nat_emissions,
                     co2_cap=co2_cap,
                     parts_cents=parts_cents,
-                    price_basis=str(b[COL_PRICE_BASIS] or '') if len(b) > COL_PRICE_BASIS else '',
+                    price_basis=str(_cell(b, self.columns, COL_PRICE_BASIS) or ''),
                 ))
         return rows
 
 
-def parse_name_group(name, group_rows, problems) -> List[ParsedListing]:
+def parse_name_group(name, group_rows, problems, columns) -> List[ParsedListing]:
     """Split one name group's rows into listings (see module docstring)."""
     make, model, variant, year = name
     # Split into state runs; each run holds N quads (B,E,C,F), one per listing.
     per_state: Dict[str, list] = {}
     order: List[str] = []
     for i, row in enumerate(group_rows):
-        if row[COL_MODE] == 'B':
-            state = row[COL_STATE]
+        if _cell(row, columns, COL_MODE) == 'B':
+            state = _cell(row, columns, COL_STATE)
             if state not in per_state:
                 order.append(state)
             per_state.setdefault(state, []).append(group_rows[i:i + 4])
@@ -205,24 +252,32 @@ def parse_name_group(name, group_rows, problems) -> List[ParsedListing]:
         ok = True
         for st in AU_STATES:
             quad = per_state[st][k]
-            if len(quad) != 4 or [r[COL_MODE] for r in quad] != ['B', 'E', 'C', 'F']:
+            if len(quad) != 4 or [
+                _cell(r, columns, COL_MODE) for r in quad
+            ] != ['B', 'E', 'C', 'F']:
                 problems.append(
                     f"{make} {model} {variant} {year} {st} listing {k + 1}: "
                     "malformed mode quad"
                 )
                 ok = False
                 break
-            states[st] = {r[COL_MODE]: r for r in quad}
+            states[st] = {_cell(r, columns, COL_MODE): r for r in quad}
         if not ok:
             continue
-        research = {states[st]['B'][COL_RESEARCH_STATUS] for st in AU_STATES}
+        research = {
+            _cell(states[st]['B'], columns, COL_RESEARCH_STATUS) for st in AU_STATES
+        }
         if len(research) != 1:
             problems.append(f"{make} {model} {variant} {year}: mixed research status")
             continue
+        # is_suppressed is uniform across a listing's rows; the ACT Mode B
+        # row is the canonical read (absent column => not suppressed).
+        suppressed = _truthy(_cell(states['ACT']['B'], columns, COL_IS_SUPPRESSED))
         listings.append(ParsedListing(
             make=make, model=model, variant=variant, year=year,
             research_status=research.pop(),
             states=states,
+            is_suppressed=suppressed,
         ))
     return listings
 
@@ -232,18 +287,26 @@ def parse_workbook(path, as_at: Optional[str] = None) -> ParsedWorkbook:
     wb = openpyxl.load_workbook(path, read_only=True)
     try:
         ws = wb[SHEET_NAME]
+        rows_iter = ws.iter_rows(values_only=True)
+        header = next(rows_iter, ())
+        columns = _build_column_map(header)
         name_groups: Dict[tuple, list] = {}
         group_order: List[tuple] = []
         scoring_versions = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[COL_MAKE] is None:
+        for row in rows_iter:
+            if _cell(row, columns, COL_MAKE) is None:
                 continue
-            name = (row[COL_MAKE], row[COL_MODEL], row[COL_VARIANT], row[COL_YEAR])
+            name = (
+                _cell(row, columns, COL_MAKE),
+                _cell(row, columns, COL_MODEL),
+                _cell(row, columns, COL_VARIANT),
+                _cell(row, columns, COL_YEAR),
+            )
             if name not in name_groups:
                 name_groups[name] = []
                 group_order.append(name)
             name_groups[name].append(row)
-            sv = row[COL_SCORING_VERSION]
+            sv = _cell(row, columns, COL_SCORING_VERSION)
             if sv and sv not in scoring_versions:
                 scoring_versions.append(sv)
     finally:
@@ -252,7 +315,7 @@ def parse_workbook(path, as_at: Optional[str] = None) -> ParsedWorkbook:
     problems: List[str] = []
     listings: List[ParsedListing] = []
     for name in group_order:
-        listings.extend(parse_name_group(name, name_groups[name], problems))
+        listings.extend(parse_name_group(name, name_groups[name], problems, columns))
 
     if not scoring_versions:
         problems.append('No scoring_version found in sheet')
@@ -268,6 +331,7 @@ def parse_workbook(path, as_at: Optional[str] = None) -> ParsedWorkbook:
     return ParsedWorkbook(
         scoring_version=scoring_version,
         as_at=as_at,
+        columns=columns,
         listings=listings,
         problems=problems,
     )

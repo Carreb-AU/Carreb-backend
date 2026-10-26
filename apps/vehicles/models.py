@@ -330,6 +330,18 @@ class Vehicle(models.Model):
     #   "version": "v6.4-derived-percentile (Mode B, category-aware)"
     # }
 
+    # 21-Oct-26 workbook additions
+    transmission = models.CharField(max_length=50, blank=True)
+    doors = models.IntegerField(null=True, blank=True)
+    base_fuel = models.CharField(max_length=50, blank=True)
+    phev_fuel_consumption_l100 = models.FloatField(null=True, blank=True)
+    energy_consumption_wh_km = models.FloatField(null=True, blank=True)
+    co2_energy_cycle_basis = models.CharField(max_length=255, blank=True)
+    maintenance_5yr_detail = models.JSONField(null=True, blank=True)
+    # True only when EVERY listing in the name group is suppressed (the sheet's
+    # is_suppressed flag is per listing; a group can hold up to 4 listings).
+    is_suppressed = models.BooleanField(default=False)
+
     provenance = models.JSONField(default=dict)
     # Example:
     # {
@@ -1257,3 +1269,35 @@ class CoreDialRow(models.Model):
             'tyres': self.tyres_cents,
             'road_user_charge': self.road_user_charge_cents,
         }
+
+
+class ConsolidatedVehicleRow(models.Model):
+    """One verbatim row of the "Consolidated Vehicles v6.4" sheet (21-Oct-26
+    and later layouts, which carry listing_id / is_suppressed).
+
+    One record per source row (vehicle × state × CORE mode); `data` keeps
+    every column of that row so later pipelines can re-derive fields that
+    were not mapped on the first import. Re-imports replace the rows of the
+    affected listings.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    vehicle = models.ForeignKey(
+        Vehicle,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='consolidated_rows',
+    )
+    listing_id = models.CharField(max_length=50, db_index=True)
+    state = models.CharField(max_length=3, choices=AustralianState.choices)
+    core_mode = models.CharField(max_length=1, blank=True)
+    is_suppressed = models.BooleanField(default=False)
+    source_row = models.PositiveIntegerField(help_text='1-based row number in the sheet')
+    data = models.JSONField(help_text='Every column of the source row, verbatim')
+
+    class Meta:
+        unique_together = ('listing_id', 'state', 'core_mode')
+        ordering = ('listing_id', 'state', 'core_mode')
+
+    def __str__(self):
+        return f"{self.listing_id} — {self.state} mode {self.core_mode or '?'}"

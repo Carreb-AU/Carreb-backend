@@ -37,7 +37,8 @@ class Command(BaseCommand):
             f"skipped rows: {result['skipped']}"
         )
         self.stdout.write(
-            f"created: {result['created']}, updated: {result['updated']}"
+            f"created: {result['created']}, updated: {result['updated']}, "
+            f"source rows stored: {result['source_rows_written']}"
         )
 
         if options['dry_run']:

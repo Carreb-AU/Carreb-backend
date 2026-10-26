@@ -6,7 +6,9 @@ Usage:
     python manage.py build_core_dial --path <workbook> --dry-run
 
 Creates a new CoreDialBatch (marked current; all other batches are demoted)
-and one CoreDialRow per on-sale listing per state, cut to the Mode B row.
+and one CoreDialRow per on-sale, unsuppressed listing per state, cut to the
+Mode B row. Suppressed listings (is_suppressed in 21-Oct+ workbooks) are
+counted and skipped.
 """
 import logging
 import os
@@ -63,6 +65,11 @@ class Command(BaseCommand):
         on_sale_listings = len({r.version_id for r in rows})
         self.stdout.write(f'On-sale listings: {on_sale_listings} '
                           f'({len(rows)} dial rows across 8 states)')
+        if parsed.skipped_suppressed:
+            self.stdout.write(self.style.WARNING(
+                f'Skipped (suppressed): {parsed.skipped_suppressed} on-sale '
+                f'listings excluded from the dial.'
+            ))
 
         if options['dry_run']:
             self.stdout.write(self.style.SUCCESS('Dry run — nothing written.'))

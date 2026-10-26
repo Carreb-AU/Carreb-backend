@@ -32,6 +32,7 @@ from apps.vehicles.models import (
     DriveawayTaxParameter,
     CoreDialBatch,
     CoreDialRow,
+    ConsolidatedVehicleRow,
 )
 from apps.vehicles.services.gvg_import import import_all
 
@@ -427,6 +428,15 @@ class VehicleAdmin(admin.ModelAdmin):
             "classes": ("collapse",),
             "fields": ("provenance",),
         }),
+        ("Consolidated v6.4 — 21-Oct additions", {
+            "classes": ("collapse",),
+            "fields": (
+                "transmission", "doors", "base_fuel",
+                "phev_fuel_consumption_l100", "energy_consumption_wh_km",
+                "co2_energy_cycle_basis", "maintenance_5yr_detail",
+                "is_suppressed",
+            ),
+        }),
         ("Timestamps", {
             "fields": ("created_at", "updated_at"),
         }),
@@ -468,3 +478,16 @@ class CoreDialRowAdmin(admin.ModelAdmin):
             str(rate_version(obj.price_score, obj.emissions_score, obj.co2_cap, stop)[1])
             for stop in range(1, 6)
         )
+
+
+@admin.register(ConsolidatedVehicleRow)
+class ConsolidatedVehicleRowAdmin(admin.ModelAdmin):
+    list_display = (
+        "listing_id", "state", "core_mode", "is_suppressed", "vehicle",
+    )
+    list_filter = ("state", "is_suppressed")
+    search_fields = (
+        "listing_id", "vehicle__brand", "vehicle__model", "vehicle__variant",
+    )
+    ordering = ("listing_id", "state", "core_mode")
+    readonly_fields = ("id",)
