@@ -12,20 +12,22 @@ logger = logging.getLogger(__name__)
 # Fallback: assume the key is in env or settings
 OPENAI_API_KEY = getattr(settings, 'OPENAI_API_KEY', os.environ.get('OPENAI_API_KEY'))
 
-SYSTEM_PROMPT = """You are a vehicle search parameter extractor. 
-Extract structured search parameters from the user's natural language vehicle query. 
-Return ONLY a valid JSON object with any applicable fields from this schema: 
-{ budget_min: integer (AUD), 
-  budget_max: integer (AUD), 
-  powertrain_types: array of enum [petrol, diesel, mild_hybrid, hybrid, phev, bev, fcev], 
-  num_seats_min: integer, 
-  body_styles: array of enum [sedan, suv, hatchback, wagon, ute, van, coupe, convertible], 
-  fcai_categories: array of strings, 
-  core_rating_min: float, 
-  annual_km: integer, 
+SYSTEM_PROMPT = """You are a vehicle search parameter extractor.
+Extract structured search parameters from the user's natural language vehicle query.
+Return ONLY a valid JSON object with any applicable fields from this schema:
+{ budget_min: integer (AUD),
+  budget_max: integer (AUD),
+  make: string (manufacturer/brand the user named, if any),
+  model: string (model name the user named, if any, e.g. "CX-5", "EV3"),
+  powertrain_types: array of enum [petrol, diesel, mild_hybrid, hybrid, phev, bev, fcev],
+  num_seats_min: integer,
+  body_styles: array of enum [sedan, suv, hatchback, wagon, ute, van, coupe, convertible],
+  fcai_categories: array of strings,
+  core_rating_min: float,
+  annual_km: integer,
   ancap_rating_min: integer (1-5),
-  primary_use: enum [city_commuter, family_car, mixed_use, long_distance, work_vehicle] }. 
-Only include fields you can extract with reasonable confidence. Do not include fields not mentioned or implied. Do not return vehicle names or recommendations. Return nothing except the JSON object."""
+  primary_use: enum [city_commuter, family_car, mixed_use, long_distance, work_vehicle] }.
+Only include fields you can extract with reasonable confidence. Do not include fields not mentioned or implied. If the user names a specific car (e.g. "Mazda CX-5", "Kia EV3"), you MUST include its make and model. Do not return vehicle recommendations. Return nothing except the JSON object."""
 
 def extract_search_parameters(query: str):
     """
