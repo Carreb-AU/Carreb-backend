@@ -246,6 +246,10 @@ class Vehicle(models.Model):
     variant = models.CharField(max_length=255)
     body_style = models.CharField(max_length=100)
     image_url = models.URLField(max_length=2000, blank=True, null=True)
+    # AI/heuristic image-quality verdict:
+    #   {"verdict": "real_photo"|"silhouette"|"illustration"|"logo"|"placeholder"|"suspect"|"unclassified",
+    #    "source": "grok"|"heuristic", "detail": str, "at": iso8601}
+    image_classification = models.JSONField(null=True, blank=True)
     num_seats = models.IntegerField(default=5)
     powertrain_type = models.CharField(max_length=50, choices=PowertrainType.choices)
     fcai_category = models.CharField(max_length=100)

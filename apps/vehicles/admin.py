@@ -368,7 +368,7 @@ class VehicleAdmin(admin.ModelAdmin):
     ]
     search_fields = ["brand", "model", "variant", "fcai_category"]
     ordering = ["brand", "model", "year", "variant"]
-    readonly_fields = ["id", "created_at", "updated_at"]
+    readonly_fields = ["id", "created_at", "updated_at", "image_classification"]
     date_hierarchy = "created_at"
 
     fieldsets = (
@@ -427,6 +427,10 @@ class VehicleAdmin(admin.ModelAdmin):
         ("Provenance", {
             "classes": ("collapse",),
             "fields": ("provenance",),
+        }),
+        ("Image Classification", {
+            "classes": ("collapse",),
+            "fields": ("image_classification",),
         }),
         ("Consolidated v6.4 — 21-Oct additions", {
             "classes": ("collapse",),

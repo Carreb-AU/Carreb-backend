@@ -1,16 +1,15 @@
 import os
 import time
-import uuid
-from urllib.parse import unquote
 
-import requests
 from django.conf import settings
 from django.core.management.base import BaseCommand
+
 from apps.vehicles.models import Vehicle
-
-
-WIKIMEDIA_API = "https://commons.wikimedia.org/w/api.php"
-USER_AGENT = "CarrebBot/1.0 (carreb.com.au; dev@carreb.com.au)"
+from apps.vehicles.services.image_ai import (
+    USER_AGENT,
+    download_image,
+    find_commons_image,
+)
 
 
 class Command(BaseCommand):
@@ -88,8 +87,7 @@ class Command(BaseCommand):
             query = f"{vehicle.brand} {vehicle.model}"
             self.stdout.write(f"Searching: {query} … ", ending="")
 
-            time.sleep(delay)
-            image_url = self._find_commons_image(query, headers, delay)
+            image_url = find_commons_image(query, headers, delay, log=self)
 
             if image_url:
                 if no_download:
@@ -98,7 +96,7 @@ class Command(BaseCommand):
                     found += 1
                     self.stdout.write(self.style.SUCCESS("OK (link only)"))
                     continue
-                local_path = self._download_image(image_url, out_dir, headers, delay)
+                local_path = download_image(image_url, out_dir, headers, delay, log=self)
                 if local_path:
                     relative_url = settings.MEDIA_URL + "vehicle_images/" + os.path.basename(local_path)
                     vehicle.image_url = (base_url + relative_url) if base_url else relative_url
@@ -131,61 +129,3 @@ class Command(BaseCommand):
                 f"Processed {total} vehicles: {found} images downloaded, {missing} missing"
             )
         )
-
-    def _find_commons_image(self, query: str, headers: dict, delay: float) -> str:
-        """Return the URL of the first Wikimedia Commons image matching the query, or ''."""
-        time.sleep(delay)
-        search_params = {
-            "action": "query",
-            "generator": "search",
-            "gsrnamespace": 6,
-            "gsrsearch": query,
-            "prop": "imageinfo",
-            "iiprop": "url|extmetadata",
-            "format": "json",
-            "origin": "*",
-        }
-        try:
-            r = requests.get(WIKIMEDIA_API, params=search_params, headers=headers, timeout=15)
-            r.raise_for_status()
-            data = r.json()
-        except Exception as e:
-            self.stderr.write(f"Commons search error: {e}")
-            return ""
-
-        pages = data.get("query", {}).get("pages", {})
-        if not pages:
-            return ""
-
-        # Pick the first result that has a URL and is actually an image file.
-        for page in sorted(pages.values(), key=lambda p: p.get("index", 0)):
-            imageinfo = page.get("imageinfo")
-            if not imageinfo:
-                continue
-            url = imageinfo[0].get("url")
-            if url:
-                return url
-        return ""
-
-    def _download_image(self, url: str, out_dir: str, headers: dict, delay: float) -> str:
-        """Download image to out_dir, return local file path or ''."""
-        ext = os.path.splitext(unquote(url).split("?")[0])[1].lower()
-        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
-            ext = ".jpg"
-
-        filename = f"{uuid.uuid4().hex}{ext}"
-        local_path = os.path.join(out_dir, filename)
-
-        # Strip tracking query params before downloading; they cause 429s on upload.wikimedia.org.
-        download_url = url.split("?")[0]
-
-        time.sleep(delay)
-        try:
-            r = requests.get(download_url, headers=headers, timeout=30)
-            r.raise_for_status()
-            with open(local_path, "wb") as f:
-                f.write(r.content)
-            return local_path
-        except Exception as e:
-            self.stderr.write(f"Download error: {e}")
-            return ""
