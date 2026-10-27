@@ -87,7 +87,7 @@ class Command(BaseCommand):
             query = f"{vehicle.brand} {vehicle.model}"
             self.stdout.write(f"Searching: {query} … ", ending="")
 
-            image_url = find_commons_image(query, headers, delay, log=self)
+            image_url = find_commons_image(query, headers, delay)
 
             if image_url:
                 if no_download:
@@ -96,7 +96,7 @@ class Command(BaseCommand):
                     found += 1
                     self.stdout.write(self.style.SUCCESS("OK (link only)"))
                     continue
-                local_path = download_image(image_url, out_dir, headers, delay, log=self)
+                local_path = download_image(image_url, out_dir, headers, delay)
                 if local_path:
                     relative_url = settings.MEDIA_URL + "vehicle_images/" + os.path.basename(local_path)
                     vehicle.image_url = (base_url + relative_url) if base_url else relative_url

@@ -61,7 +61,7 @@ class Command(BaseCommand):
         for vehicle in qs:
             query = f"{vehicle.brand} {vehicle.model}"
             candidate = image_ai.find_commons_image(
-                query, headers, REQUEST_DELAY_SECONDS, log=self
+                query, headers, REQUEST_DELAY_SECONDS
             )
             if not candidate:
                 skip("no candidate")
@@ -78,7 +78,7 @@ class Command(BaseCommand):
                 continue
 
             local_path = image_ai.download_image(
-                candidate, out_dir, headers, REQUEST_DELAY_SECONDS, log=self
+                candidate, out_dir, headers, REQUEST_DELAY_SECONDS
             )
             if not local_path:
                 skip("download failed")
