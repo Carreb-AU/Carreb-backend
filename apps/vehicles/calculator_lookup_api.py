@@ -89,38 +89,67 @@ class VehicleCalculatorLookupResponseSerializer(serializers.Serializer):
 # Database Lookup & Matching Helper
 # ---------------------------------------------------------------------------
 
-def _token_filters(tokens, fields):
-    """Q object requiring EVERY token to appear in at least one of the fields."""
-    q = Q()
-    for t in tokens:
-        tq = Q()
-        for f in fields:
-            tq |= Q(**{f'{f}__icontains': t})
-        q &= tq
-    return q
+def _model_tokens(model: str):
+    return [t for t in re.split(r'[^a-z0-9]+', (model or '').casefold()) if t]
 
 
 def _score_candidate(make, model, variant, year, tokens):
-    """Rank candidates: model-token hits weigh most, then variant, brand, newest year."""
-    make, model = make.casefold(), model.casefold()
+    """
+    Score a candidate against query tokens and report whether the query fully
+    identifies the model.
+
+    Returns (coverage, score). Coverage is 1 when every word of the model name
+    appears in the query tokens — e.g. "mazda 3" fully identifies model "3"
+    but NOT "CX-3" (the model also contains "cx"). This stops near-miss models
+    from outranking an exact model match on a year coincidence: without it,
+    "2015 mazda 3 neo" would rank a 2015 CX-3 (year exact) above the 2014
+    Mazda 3, and "2025 mazda cx-5 maxx" would fall through to a CX-3.
+    """
+    make = (make or '').casefold()
+    model = (model or '').casefold()
     variant = (variant or '').casefold()
+    compact_model = re.sub(r'[^a-z0-9]', '', model)
+
     score = 0
     for t in tokens:
-        if t in model:
+        if t in model or (len(t) >= 3 and compact_model and t in compact_model):
             score += 4
         elif t in variant:
             score += 3
         elif t in make:
             score += 2
-    return (score, year or 0)
+
+    coverage = (
+        all(t in tokens for t in _model_tokens(model))
+        or any(compact_model and compact_model in t for t in tokens)
+    )
+    return (1 if coverage else 0), score
 
 
-def _best_vehicle(candidates, tokens):
-    return max(candidates, key=lambda v: _score_candidate(v.brand, v.model, v.variant, v.year, tokens))
+def _rank_key(make, model, variant, year, tokens, query_year):
+    coverage, score = _score_candidate(make, model, variant, year, tokens)
+    yr = year or 0
+    year_exact = bool(query_year and yr == query_year)
+    year_diff = abs(yr - query_year) if (query_year and yr) else 0
+    return (coverage, score, year_exact, -year_diff, yr)
 
 
-def _best_identity(candidates, tokens):
-    return max(candidates, key=lambda v: _score_candidate(v.make, v.model, v.variant, v.year, tokens))
+def _best_scored(queryset, fields, tokens, query_year):
+    """
+    Iterate DB-prefiltered candidates (any token hits make/brand, model or
+    variant), keep eligible ones (model fully covered by the query AND at
+    least one model token hit), and return the best-ranked instance.
+    `fields` maps (brand_field, model_field, variant_field, year_field).
+    """
+    brand_f, model_f, variant_f, year_f = fields
+    best_obj, best_key = None, None
+    for row in queryset:
+        key = _rank_key(getattr(row, brand_f), getattr(row, model_f),
+                        getattr(row, variant_f), getattr(row, year_f),
+                        tokens, query_year)
+        if key[0] and key[1] >= 4 and (best_key is None or key > best_key):
+            best_obj, best_key = row, key
+    return best_obj
 
 
 def find_vehicle_by_name(query: str) -> Optional[Tuple[str, Any]]:
@@ -129,12 +158,15 @@ def find_vehicle_by_name(query: str) -> Optional[Tuple[str, Any]]:
     Returns tuple of ('vehicle'|'identity', matched_instance) or None.
 
     Matching order:
-      1. Exact token match (all tokens incl. model numbers like "CX-5" -> cx, 5)
-         on Vehicle, year-filtered when a year is given.
-      2. Exact token match on VehicleIdentity when a year is given but the
-         catalogue has no vehicle that year (older/discontinued cars).
-      3. Exact token match without year filter.
-      4. Trigram fuzzy fallback (catches typos like "toytota corola").
+      1. Scored token match on the catalogue: a candidate is eligible only when
+         the query tokens fully cover its model name AND hit the model — then
+         rank by coverage, score, exact year, year proximity, newest year.
+         ("2025 Mazda CX-5 Maxx" resolves to the 2026 CX-5 rather than a 2025
+         CX-3, because "Maxx" only exists on the old CX-3 generation.)
+      2. Same scored match on VehicleIdentity (GVG dataset) — covers older /
+         discontinued cars absent from the catalogue, with nearest-year
+         preference ("2015 Mazda 3 Neo" -> 2014 Mazda 3 when 2015 is missing).
+      3. Trigram fuzzy fallback (catches typos like "toytota corola").
     """
     cleaned_query = query.strip()
     if not cleaned_query:
@@ -149,29 +181,27 @@ def find_vehicle_by_name(query: str) -> Optional[Tuple[str, Any]]:
     tokens = [t for t in re.split(r'[^a-z0-9]+', cleaned_query.casefold())
               if t and not (t.isdigit() and len(t) == 4)]
 
-    # 1-3. Exact token matching
     if tokens:
-        vehicle_matches = Vehicle.objects.filter(
-            _token_filters(tokens, ['brand', 'model', 'variant']))
-        if year:
-            year_matches = vehicle_matches.filter(year=year)
-            if year_matches.exists():
-                return ('vehicle', _best_vehicle(year_matches, tokens))
-            # Catalogue has nothing for that year: the car is likely older —
-            # try the GVG identity dataset for the exact year before falling
-            # back to a different-year catalogue vehicle.
-            identity_matches = VehicleIdentity.objects.filter(
-                _token_filters(tokens, ['make', 'model', 'variant']), year=year)
-            if identity_matches.exists():
-                return ('identity', _best_identity(identity_matches, tokens))
-        if vehicle_matches.exists():
-            return ('vehicle', _best_vehicle(vehicle_matches, tokens))
-        identity_matches = VehicleIdentity.objects.filter(
-            _token_filters(tokens, ['make', 'model', 'variant']))
-        if identity_matches.exists():
-            return ('identity', _best_identity(identity_matches, tokens))
+        # DB prefilter: at least one token must hit brand/make, model or variant.
+        veh_q = Q()
+        id_q = Q()
+        for t in tokens:
+            veh_q |= (Q(brand__icontains=t) | Q(model__icontains=t) | Q(variant__icontains=t))
+            id_q |= (Q(make__icontains=t) | Q(model__icontains=t) | Q(variant__icontains=t))
 
-    # 4. Trigram fuzzy fallback (typo tolerance) — vehicle first, then identity
+        best_v = _best_scored(
+            Vehicle.objects.filter(veh_q).only('brand', 'model', 'variant', 'year'),
+            ('brand', 'model', 'variant', 'year'), tokens, year)
+        if best_v:
+            return ('vehicle', best_v)
+
+        best_i = _best_scored(
+            VehicleIdentity.objects.filter(id_q).only('make', 'model', 'variant', 'year'),
+            ('make', 'model', 'variant', 'year'), tokens, year)
+        if best_i:
+            return ('identity', best_i)
+
+    # 3. Trigram fuzzy fallback (typo tolerance) — vehicle first, then identity
     vehicle_qs = Vehicle.objects.annotate(
         full_title=Concat(
             Cast('year', CharField()), Value(' '),

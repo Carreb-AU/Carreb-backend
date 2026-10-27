@@ -177,9 +177,50 @@ class VehicleCalculatorLookupAPITestCase(TestCase):
         self.assertEqual(vf['year'], 2015)
         self.assertEqual(vf['variant'], 'Neo')
 
+    def test_lookup_prefers_exact_model_over_year_coincidence(self):
+        """Regression (prod data): catalogue has no 2025 CX-5 — only 2026 G25
+        variants — while a 2025 CX-3 Maxx Sport exists. '2025 Mazda CX-5 Maxx'
+        must return the CX-5 (nearest year), not the CX-3 with the year match."""
+        self._make_vehicle('Mazda', 'CX-3', 2025, 'Maxx Sport')
+        self._make_vehicle('Mazda', 'CX-5', 2026, 'G25 Pure')
+
+        url = '/api/v1/vehicles/lookup/?name=2025%20Mazda%20CX-5%20Maxx&state=NSW'
+        response = self.client.get(url, HTTP_HOST='localhost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        vf = response.json()['vehicle_found']
+        self.assertEqual(vf['model'], 'CX-5')
+        self.assertEqual(vf['year'], 2026)
+
+    def test_lookup_identity_nearest_year_when_exact_year_missing(self):
+        """Regression (prod data): GVG identities have Mazda 3 for 2014 but not
+        2015, and a 2015 CX-3 exists in the catalogue. '2015 Mazda 3 Neo' must
+        return the 2014 Mazda 3 — the model fully identified by the query —
+        not the CX-3 whose model only partially matches."""
+        self._make_vehicle('Mazda', 'CX-3', 2015, 'Maxx')
+        VehicleIdentity.objects.create(
+            make='Mazda',
+            model='3',
+            year=2014,
+            variant='Hatch',
+            body_style='hatchback',
+            fcai_category='Small',
+            powertrain_type=PowertrainType.PETROL,
+            fuel_type_raw='petrol',
+            driveaway_price_estimate=1900000,
+        )
+
+        url = '/api/v1/vehicles/lookup/?name=2015%20Mazda%203%20Neo&state=NSW'
+        response = self.client.get(url, HTTP_HOST='localhost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        vf = response.json()['vehicle_found']
+        self.assertEqual(vf['brand'], 'Mazda')
+        self.assertEqual(vf['model'], '3')
+        self.assertEqual(vf['year'], 2014)
+
     def test_lookup_without_year_still_matches_catalogue(self):
-        """Guard against the AND-token filter being too strict: 'LDV V80' with no year
-        must still resolve to the seeded 2025 catalogue vehicle."""
+        """Guard: 'LDV V80' with no year must still resolve to the catalogue vehicle."""
         url = '/api/v1/vehicles/lookup/?name=LDV%20V80&state=NSW'
         response = self.client.get(url, HTTP_HOST='localhost')
 
