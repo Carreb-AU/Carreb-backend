@@ -91,6 +91,46 @@ class CoreSearchDriveawayTest(TestCase):
         self.assertEqual(aston['driveaway_price'], 32500000)
         self.assertEqual(aston['driveaway_price_display'], '$325,000')
 
+    def test_search_returns_one_variant_per_model_cheapest_wins(self):
+        # A dearer variant (v1, $129k) and a different-year variant of the
+        # same model line; the cheapest one must be the only result.
+        v3 = Vehicle.objects.create(
+            brand='Alpina',
+            model='B3',
+            year=2024,
+            variant='B3 Touring',
+            fcai_category='Large',
+            powertrain_type='petrol',
+            tailpipe_co2_g_per_km=225.0,
+            driveaway_price_by_state={'NSW': 9900000, 'QLD': 9800000},
+            mode_data_by_state={
+                'NSW': {
+                    'B': {
+                        'stars': 3.0,
+                        'mode_coo_pa': 20294.47,
+                        'mode_5yr_coo': 101472.35,
+                        'annual_co2_kg': 3188,
+                    }
+                }
+            }
+        )
+
+        payload = {
+            "target_band_slug": "steady-cruiser",
+            "state": "NSW",
+            "priority_slider": 3,
+            "core_mode": "pure_cost",
+            "user_inputs": {"annual_km": 15000}
+        }
+        response = self.client.post('/api/core-rating/search/', data=payload, format='json')
+        self.assertEqual(response.status_code, 200)
+        data = response.json().get('data', [])
+
+        alpina = [item for item in data if item['brand'] == 'Alpina']
+        self.assertEqual(len(alpina), 1)
+        self.assertEqual(alpina[0]['variant'], 'B3 Touring')
+        self.assertEqual(alpina[0]['driveaway_price'], 9900000)
+
     def test_batch_does_not_override_candidate_driveaway_price(self):
         payload = {
             "vehicle_ids": [str(self.v1.id), str(self.v2.id)],

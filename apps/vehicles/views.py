@@ -290,38 +290,21 @@ class CoreSearchView(views.APIView):
             
         all_vehicles = list(queryset)
         
-        # Deduplicate variants: keep only the cheapest variant per (brand, model, year)
-        # for the requested core_mode and state to optimize processing.
-        # Spec §4 mode letters: B=Pure Cost, E=COOL Choice, C=True Value, F=Full Picture
-        mode_map = {
-            'pure_cost': 'B',
-            'cool_choice': 'E',
-            'true_value': 'C',
-            'full_picture': 'F'
-        }
-        mode_letter = mode_map.get(core_mode, 'B')
-        
+        # Deduplicate variants: keep ONE vehicle per (brand, model) — the
+        # cheapest variant for the requested state — so a model line never
+        # appears multiple times with different trims/years.
         cheapest_variants = {}
         for vehicle in all_vehicles:
-            val = float('inf')
-            try:
-                # mode_data_by_state is expected to be a dict. 
-                # Path: state -> mode_letter -> "mode_5yr_coo"
-                state_data = vehicle.mode_data_by_state.get(state, {})
-                if isinstance(state_data, dict):
-                    mode_data = state_data.get(mode_letter, {})
-                    if isinstance(mode_data, dict):
-                        coo = mode_data.get("mode_5yr_coo")
-                        if coo is not None:
-                            val = float(coo)
-            except (AttributeError, ValueError, TypeError):
-                pass
-            
-            key = (vehicle.brand, vehicle.model, vehicle.year)
+            val = vehicle.driveaway_price_by_state.get(state)
+            key = (vehicle.brand, vehicle.model)
             if key not in cheapest_variants:
                 cheapest_variants[key] = (val, vehicle)
             else:
-                if val < cheapest_variants[key][0]:
+                cur_val = cheapest_variants[key][0]
+                # Missing price loses to any priced variant; otherwise lowest price wins
+                if (cur_val is None and val is not None) or (
+                    val is not None and cur_val is not None and val < cur_val
+                ):
                     cheapest_variants[key] = (val, vehicle)
                     
         # Extract the optimized unique vehicles

@@ -1345,7 +1345,7 @@ class AISmartMatchView(views.APIView):
             if not scored_reps:
                 return []
 
-            MAX_VARIANTS_PER_MODEL = 3
+            MAX_VARIANTS_PER_MODEL = 1
             MAX_RESULTS = 10
             scored_reps.sort(key=lambda r: (
                 -r['boost'],
@@ -1439,11 +1439,15 @@ class AISmartMatchView(views.APIView):
                 members = groups.get(key)
                 if not members:
                     continue
-                members.sort(key=lambda e: (
-                    -(e['_rating'] or 0),
+                # One entry per model: the cheapest variant wins. Variants
+                # without a price fall back to lowest annual cost, then rating.
+                best = min(members, key=lambda e: (
+                    e['driveaway_price'] is None,
+                    e['driveaway_price'] if e['driveaway_price'] is not None else float('inf'),
                     e['_cost'] if e['_cost'] is not None else float('inf'),
+                    -(e['_rating'] or 0),
                 ))
-                ordered.extend(members[:MAX_VARIANTS_PER_MODEL])
+                ordered.append(best)
 
             out = []
             for e in ordered[:MAX_RESULTS]:

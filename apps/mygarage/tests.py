@@ -77,22 +77,27 @@ class AISmartMatchViewTests(TestCase):
         self.assertEqual(results[0]["model"], "CX-5")
         self.assertIn("Your searched car", results[0]["recommendation_reason"])
 
-    def test_multiple_variants_of_named_model_are_returned(self, *_mocks):
-        make_vehicle(brand="Mazda", model="CX-5", variant="Maxx Sport", rating=4.0)
-        make_vehicle(brand="Mazda", model="CX-5", variant="GT", rating=4.5)
-        make_vehicle(brand="Mazda", model="CX-5", variant="Akera", rating=5.0)
-        res = self._post()
-        variants = [r["variant"] for r in res.json()["results"]
-                    if r["model"] == "CX-5"]
-        self.assertGreaterEqual(len(variants), 2)
-
-    def test_variant_cap_is_three_per_model(self, *_mocks):
-        for i in range(6):
-            make_vehicle(brand="Mazda", model="CX-5",
-                         variant=f"Variant {i}", rating=4.0 + i * 0.1)
+    def test_one_variant_per_model_cheapest_wins(self, *_mocks):
+        make_vehicle(brand="Mazda", model="CX-5", variant="Maxx Sport",
+                     driveaway_price_by_state={"NSW": 38_000_00}, rating=4.0)
+        make_vehicle(brand="Mazda", model="CX-5", variant="GT",
+                     driveaway_price_by_state={"NSW": 52_000_00}, rating=4.5)
+        make_vehicle(brand="Mazda", model="CX-5", variant="Akera",
+                     driveaway_price_by_state={"NSW": 65_000_00}, rating=5.0)
         res = self._post()
         cx5 = [r for r in res.json()["results"] if r["model"] == "CX-5"]
-        self.assertLessEqual(len(cx5), 3)
+        self.assertEqual(len(cx5), 1)
+        self.assertEqual(cx5[0]["variant"], "Maxx Sport")
+
+    def test_variant_without_price_loses_to_priced_variant(self, *_mocks):
+        make_vehicle(brand="Mazda", model="CX-5", variant="No Price",
+                     driveaway_price_by_state={"NSW": None}, rating=5.0)
+        make_vehicle(brand="Mazda", model="CX-5", variant="Priced",
+                     driveaway_price_by_state={"NSW": 45_000_00}, rating=4.0)
+        res = self._post()
+        cx5 = [r for r in res.json()["results"] if r["model"] == "CX-5"]
+        self.assertEqual(len(cx5), 1)
+        self.assertEqual(cx5[0]["variant"], "Priced")
 
     def test_rating_ties_break_by_cost_not_alphabetical(self, *_mocks):
         make_vehicle(brand="Toyota", model="ZZZ Late Alpha",
