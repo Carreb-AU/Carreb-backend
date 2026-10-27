@@ -33,6 +33,7 @@ from apps.vehicles.models import (
     CoreDialBatch,
     CoreDialRow,
     ConsolidatedVehicleRow,
+    AIVehicleEntry,
 )
 from apps.vehicles.services.gvg_import import import_all
 
@@ -495,3 +496,15 @@ class ConsolidatedVehicleRowAdmin(admin.ModelAdmin):
     )
     ordering = ("listing_id", "state", "core_mode")
     readonly_fields = ("id",)
+
+
+@admin.register(AIVehicleEntry)
+class AIVehicleEntryAdmin(admin.ModelAdmin):
+    list_display = (
+        "year", "make", "model", "variant", "powertrain_type",
+        "search_query", "search_count", "selected_count", "created_at",
+    )
+    list_filter = ("powertrain_type", "body_style")
+    search_fields = ("make", "model", "variant", "search_query")
+    ordering = ("-created_at",)
+    readonly_fields = ("id", "created_at", "raw_response")

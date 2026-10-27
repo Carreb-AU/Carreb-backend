@@ -15,6 +15,14 @@ class CurrentVehicle(models.Model):
         blank=True,
         related_name='current_vehicles'
     )
+    ai_vehicle_entry = models.ForeignKey(
+        'vehicles.AIVehicleEntry',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='current_vehicles',
+        help_text="AI-searched vehicle specs, when the car was missing from the catalogue and GVG"
+    )
     manual_entry_data = models.JSONField(null=True, blank=True)
     purchase_date = models.DateField(null=True, blank=True)
     licence_plate = models.CharField(max_length=255, null=True, blank=True) # Encrypted at service level

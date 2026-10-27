@@ -58,6 +58,7 @@ class UserPriorityStateSerializer(serializers.ModelSerializer):
 class CurrentVehicleCreateSerializer(serializers.Serializer):
     vehicle_catalogue_id = serializers.UUIDField(required=False, allow_null=True)
     green_vehicle_guide_record_id = serializers.UUIDField(required=False, allow_null=True)
+    ai_vehicle_entry_id = serializers.UUIDField(required=False, allow_null=True)
     manual_entry_data = serializers.JSONField(required=False, allow_null=True)
     purchase_date = serializers.DateField(required=False, allow_null=True)
     licence_plate = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -83,10 +84,18 @@ class CurrentVehicleCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Green Vehicle Guide record with this ID does not exist.")
         return value
 
+    def validate_ai_vehicle_entry_id(self, value):
+        from apps.vehicles.models import AIVehicleEntry
+        if value and not AIVehicleEntry.objects.filter(id=value).exists():
+            raise serializers.ValidationError("AI vehicle entry with this ID does not exist.")
+        return value
+
     def validate(self, data):
-        if data.get('vehicle_catalogue_id') and data.get('green_vehicle_guide_record_id'):
+        provided = [k for k in ('vehicle_catalogue_id', 'green_vehicle_guide_record_id',
+                                'ai_vehicle_entry_id') if data.get(k)]
+        if len(provided) > 1:
             raise serializers.ValidationError(
-                "Provide either vehicle_catalogue_id or green_vehicle_guide_record_id, not both."
+                "Provide only one of vehicle_catalogue_id, green_vehicle_guide_record_id or ai_vehicle_entry_id."
             )
         return data
 

@@ -1,4 +1,7 @@
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 from rest_framework import views, status, generics
 from rest_framework.response import Response
@@ -33,6 +36,7 @@ from apps.mygarage.ai_service import (
 )
 from apps.vehicles.services.rating_engine import calculate_core_rating, _get_state_cents
 from apps.vehicles.services.core_dial import AU_STATES, cost_gvg_current_vehicle
+from apps.vehicles.services.ai_vehicle_search import AIVehicleSearchError, search_ai_vehicles
 from apps.vehicles.tasks import emit_analytics_event
 
 def _get_overrides(user, current_vehicle=None, garage_vehicle=None):
@@ -64,6 +68,7 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         state = (state or '').upper() or None
         catalogue = vehicle_instance.vehicle_catalogue
         gvg_record = vehicle_instance.green_vehicle_guide_record
+        ai_entry = getattr(vehicle_instance, 'ai_vehicle_entry', None)
     else:
         base_data = GarageVehicleSerializer(vehicle_instance).data
         overrides_qs = VehicleOverride.objects.filter(user=user, garage_vehicle=vehicle_instance)
@@ -99,15 +104,31 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         base_data['fuel_consumption_per_100km'] = gvg_record.fuel_consumption_combined_l_100km
         base_data['tailpipe_co2_g_per_km'] = gvg_record.tailpipe_co2_g_per_km
         base_data['source'] = 'gvg'
+    elif not rating_vehicle and ai_entry:
+        # AI-searched car (missing from catalogue and GVG): specs from Grok,
+        # costed like a GVG current car (class medians + own consumption).
+        rating_vehicle = ai_entry
+        base_data = base_data or {}
+        base_data['ai_vehicle_entry_id'] = str(ai_entry.id)
+        base_data['year'] = ai_entry.year
+        base_data['make'] = ai_entry.make
+        base_data['model'] = ai_entry.model
+        base_data['variant'] = ai_entry.variant
+        base_data['body_style'] = ai_entry.body_style
+        base_data['powertrain_type'] = ai_entry.powertrain_type
+        base_data['fuel_consumption_per_100km'] = ai_entry.fuel_consumption_combined_l_100km
+        base_data['tailpipe_co2_g_per_km'] = ai_entry.tailpipe_co2_g_per_km
+        base_data['source'] = 'ai'
 
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
 
     engine_data = None
     if rating_vehicle and state:
-        if is_current_vehicle and gvg_record and not catalogue:
-            # GVG current car: fixed class medians from the Mode B rows plus
-            # the car's own consumption (spec section 8).
-            engine_data = cost_gvg_current_vehicle(gvg_record, state)
+        if is_current_vehicle and not catalogue:
+            # Non-catalogue current car (GVG or AI-searched): fixed class
+            # medians from the Mode B rows plus the car's own consumption
+            # (spec section 8).
+            engine_data = cost_gvg_current_vehicle(rating_vehicle, state)
         else:
             engine_data = calculate_core_rating(
                 rating_vehicle,
@@ -172,6 +193,7 @@ class CurrentVehicleView(views.APIView):
             defaults={
                 'vehicle_catalogue_id': data.get('vehicle_catalogue_id'),
                 'green_vehicle_guide_record_id': data.get('green_vehicle_guide_record_id'),
+                'ai_vehicle_entry_id': data.get('ai_vehicle_entry_id'),
                 'manual_entry_data': data.get('manual_entry_data'),
                 'purchase_date': data.get('purchase_date'),
                 'licence_plate': data.get('licence_plate'),
@@ -179,6 +201,12 @@ class CurrentVehicleView(views.APIView):
                 'state': data.get('state'),
             }
         )
+
+        if data.get('ai_vehicle_entry_id'):
+            from django.db.models import F as _F
+            from apps.vehicles.models import AIVehicleEntry
+            AIVehicleEntry.objects.filter(id=data['ai_vehicle_entry_id']).update(
+                selected_count=_F('selected_count') + 1)
         
         if vehicle_catalogue_id and not exists_in_garage:
             GarageVehicle.objects.create(
@@ -196,6 +224,66 @@ class CurrentVehicleView(views.APIView):
         resp = _build_calculated_vehicle_response(request.user, cv, state, is_current_vehicle=True)
         cache.delete(f"spotlights_{request.user.id}")
         return Response(resp)
+
+class AIVehicleSearchView(views.APIView):
+    """
+    POST /api/current-vehicle/ai-search/
+
+    Explicit user action ("search with AI") for a current-vehicle search that
+    found nothing in the catalogue or GVG dataset. Calls Grok once per
+    distinct query; repeat searches are served from the AIVehicleEntry cache.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        query = (request.data.get('query') or '').strip()
+        if len(query) < 3:
+            return Response(
+                {"detail": "Query too short — at least 3 characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            entries, from_cache = search_ai_vehicles(query, user=request.user)
+        except AIVehicleSearchError as exc:
+            logger.info("AI vehicle search failed for %r: %s", query, exc)
+            return Response(
+                {"detail": str(exc), "ai_available": False, "results": []},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({
+            "results": [self._serialize(e) for e in entries],
+            "from_cache": from_cache,
+            "ai_available": True,
+        })
+
+    @staticmethod
+    def _serialize(e):
+        return {
+            "id": str(e.id),
+            "source": "ai",
+            "name": f"{e.year or ''} {e.make} {e.model} {e.variant}".strip(),
+            "make": e.make,
+            "model": e.model,
+            "year": e.year,
+            "variant": e.variant,
+            "body_style": e.body_style,
+            "powertrain_type": e.powertrain_type,
+            "engine_l": e.engine_l,
+            "battery_kwh": e.battery_kwh,
+            "num_seats": e.num_seats,
+            "ancap_safety_rating": e.ancap_safety_rating,
+            "fuel_consumption_combined_l_100km": e.fuel_consumption_combined_l_100km,
+            "electricity_consumption_wh_per_km": e.electricity_consumption_wh_per_km,
+            "electric_range_km": e.electric_range_km,
+            "tailpipe_co2_g_per_km": e.tailpipe_co2_g_per_km,
+            "driveaway_price_estimate": e.driveaway_price_estimate,
+            "driveaway_price_display": (
+                f"${e.driveaway_price_estimate // 100:,}" if e.driveaway_price_estimate else None
+            ),
+            "search_count": e.search_count,
+            "selected_count": e.selected_count,
+        }
+
 
 class CurrentVehicleSearchView(views.APIView):
     authentication_classes = []

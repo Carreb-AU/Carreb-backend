@@ -1305,3 +1305,71 @@ class ConsolidatedVehicleRow(models.Model):
 
     def __str__(self):
         return f"{self.listing_id} — {self.state} mode {self.core_mode or '?'}"
+
+
+class AIVehicleEntry(models.Model):
+    """
+    Vehicle specs sourced from an AI (Grok/xAI) lookup — created when a user
+    explicitly runs an AI vehicle search for a car that is missing from both
+    the Carreb catalogue and the GVG identity dataset (the old "manual entry"
+    flow, which left emissions/consumption empty and broke current-vehicle
+    costing).
+
+    The table doubles as the search cache: repeat queries for the same text
+    are served from here instead of calling the AI API again, so tokens are
+    spent once per distinct query, and only on explicit user action.
+
+    Field names intentionally mirror VehicleIdentity so instances can be
+    wrapped by VehicleLike / cost_gvg_current_vehicle (duck typing) and
+    costed like a GVG current car.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    search_query = models.CharField(max_length=300, db_index=True)
+    # Normalised spec (VehicleIdentity-compatible names)
+    make = models.CharField(max_length=100)
+    model = models.CharField(max_length=100)
+    year = models.IntegerField(null=True, blank=True)
+    variant = models.CharField(max_length=255, blank=True, default='')
+    body_style = models.CharField(max_length=100, blank=True, default='')
+    powertrain_type = models.CharField(
+        max_length=30, choices=PowertrainType.choices, default=PowertrainType.PETROL)
+    fuel_type_raw = models.CharField(max_length=100, blank=True, default='')
+    drive = models.CharField(max_length=50, blank=True, default='')
+    engine_l = models.FloatField(null=True, blank=True)
+    battery_kwh = models.FloatField(null=True, blank=True)
+    num_seats = models.IntegerField(null=True, blank=True)
+    ancap_safety_rating = models.IntegerField(null=True, blank=True)
+    fuel_consumption_combined_l_100km = models.FloatField(null=True, blank=True)
+    electricity_consumption_wh_per_km = models.FloatField(null=True, blank=True)
+    electric_range_km = models.FloatField(null=True, blank=True)
+    tailpipe_co2_g_per_km = models.FloatField(null=True, blank=True)
+    test_cycle = models.CharField(max_length=10, blank=True, default='')
+    driveaway_price_estimate = models.IntegerField(
+        null=True, blank=True, help_text='Driveaway price in cents')
+    fcai_category = models.CharField(max_length=100, blank=True, default='')
+    fcai_broad = models.CharField(max_length=100, blank=True, default='')
+    image_url = models.URLField(max_length=2000, blank=True, null=True)
+    # VehicleIdentity duck-type attributes (unused for AI rows, must exist)
+    ctp_by_state = models.JSONField(null=True, blank=True)
+    insurance_estimate_by_state = models.JSONField(null=True, blank=True)
+    registration_by_state = models.JSONField(null=True, blank=True)
+    total_5yr_cost_of_ownership_by_state = models.JSONField(null=True, blank=True)
+    servicing_5yr_estimate = models.IntegerField(null=True, blank=True)
+    tyre_replacement_estimate = models.IntegerField(null=True, blank=True)
+    resale_value_5yr_estimate = models.IntegerField(null=True, blank=True)
+    provenance = models.JSONField(null=True, blank=True)
+    source_dataset = models.CharField(max_length=100, blank=True, default='ai-grok')
+    # Pipeline metadata
+    raw_response = models.JSONField(null=True, blank=True)
+    search_count = models.PositiveIntegerField(default=1)
+    selected_count = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        'users.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='ai_vehicle_entries')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f"{self.year or '?'} {self.make} {self.model} (AI)"
