@@ -27,7 +27,7 @@ Return ONLY a valid JSON object with any applicable fields from this schema:
   annual_km: integer,
   ancap_rating_min: integer (1-5),
   primary_use: enum [city_commuter, family_car, mixed_use, long_distance, work_vehicle] }.
-Only include fields you can extract with reasonable confidence. Do not include fields not mentioned or implied. If the user names a specific car (e.g. "Mazda CX-5", "Kia EV3"), you MUST include its make and model. Do not return vehicle recommendations. Return nothing except the JSON object."""
+Only include fields you can extract with reasonable confidence. Do not include fields not mentioned or implied. If the user names a specific car (e.g. "Mazda CX-5", "Kia EV3"), you MUST include its make and model. Extraction hints: "7 seater", "third row", "7+ passengers" imply num_seats_min 7; "8 seater" implies num_seats_min 8; "luxury", "premium" or "upmarket" imply budget_min of 60000 (AUD); "cheap", "budget" or "affordable" imply a budget_max around 35000 if no number is given. Do not return vehicle recommendations. Return nothing except the JSON object."""
 
 def extract_search_parameters(query: str):
     """

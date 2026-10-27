@@ -1193,171 +1193,181 @@ class AISmartMatchView(views.APIView):
                 boost += 2
             return boost
 
-        def within_budget(vehicle):
-            driveaway = vehicle.driveaway_price_by_state.get(state)
-            if filters.get('budget_max') and driveaway and \
-                    driveaway > filters['budget_max'] * 100:
-                return False
-            if filters.get('budget_min') and driveaway and \
-                    driveaway < filters['budget_min'] * 100:
-                return False
-            return True
-
-        budget_min = filters.get('budget_min')
-        budget_max = filters.get('budget_max')
-
-        # Phase 1: one cheap representative (lowest 5yr COO variant) per
-        # (brand, model) to order the model groups.
-        reps = {}
-        for vehicle in all_vehicles:
-            if (budget_min or budget_max) and not within_budget(vehicle):
-                continue
-            key = (vehicle.brand, vehicle.model)
-            if key not in reps:
-                reps[key] = vehicle
-            else:
-                if _mode_coo(vehicle) < _mode_coo(reps[key]):
-                    reps[key] = vehicle
-
         category_metrics_cache = {}
-        scored_reps = []
-        for key, vehicle in reps.items():
-            res = calculate_core_rating(
-                vehicle=vehicle,
-                state=state,
-                priority_slider=priority,
-                core_mode=mode,
-                user_inputs={},
-                current_vehicle_annual_cost=cv_cost,
-                category_metrics_cache=category_metrics_cache
-            )
-            rating = res.get('core_rating', 0)
-            if filters.get('core_rating_min') and (not rating or rating < filters['core_rating_min']):
-                continue
-            scored_reps.append({
-                'key': key,
-                'vehicle': vehicle,
-                'rating': rating,
-                'annual_cost': res.get('total_annual_cost'),
-                'boost': name_boost(vehicle),
-            })
 
-        if not scored_reps:
-            return Response({
-                "results": [],
-                "ai_service_available": True,
-                "interpreted_filters": filters,
-                "relaxed_filters": relaxed,
-                "empty_message": "No vehicles matched your search. Try broadening your criteria or use Smart Car Finder.",
-                "match_count_used": used,
-                "match_count_limit": limit
-            }, status=status.HTTP_200_OK)
+        def build_results(effective):
+            """Score and rank vehicles under the given effective filters.
 
-        MAX_VARIANTS_PER_MODEL = 3
-        MAX_RESULTS = 10
-        scored_reps.sort(key=lambda r: (
-            -r['boost'],
-            -(r['rating'] or 0),
-            r['annual_cost'] if r['annual_cost'] is not None else float('inf'),
-        ))
+            Returns the final result list (may be shorter than MIN_RESULTS).
+            """
+            def within_budget(vehicle):
+                driveaway = vehicle.driveaway_price_by_state.get(state)
+                if effective.get('budget_max') and driveaway and \
+                        driveaway > effective['budget_max'] * 100:
+                    return False
+                if effective.get('budget_min') and driveaway and \
+                        driveaway < effective['budget_min'] * 100:
+                    return False
+                return True
 
-        # Phase 2: fully score the variants of the top groups (enough groups to
-        # fill MAX_RESULTS after per-model variant trim; name-matched groups
-        # always included).
-        selected = []
-        filled = 0
-        for rep in scored_reps:
-            group_size = min(MAX_VARIANTS_PER_MODEL, sum(
-                1 for v in all_vehicles
-                if (v.brand, v.model) == rep['key'] and within_budget(v)))
-            if rep['boost'] > 0 or filled < MAX_RESULTS:
-                selected.append((rep, group_size))
-                filled += group_size
-            if filled >= MAX_RESULTS and len(selected) >= 2:
-                break
+            budget_min = effective.get('budget_min')
+            budget_max = effective.get('budget_max')
 
-        selected_keys = {rep['key'] for rep, _ in selected}
-        phase2 = [v for v in all_vehicles
-                  if (v.brand, v.model) in selected_keys and within_budget(v)]
-
-        entries = []
-        for v in phase2:
-            res = calculate_core_rating(
-                vehicle=v,
-                state=state,
-                priority_slider=priority,
-                core_mode=mode,
-                user_inputs={},
-                current_vehicle_annual_cost=cv_cost,
-                category_metrics_cache=category_metrics_cache
-            )
-            rating = res.get('core_rating', 0)
-            if filters.get('core_rating_min') and (not rating or rating < filters['core_rating_min']):
-                continue
-            driveaway = v.driveaway_price_by_state.get(state)
-            boost = name_boost(v)
-            reason = build_recommendation_reason(filters, v)
-            if boost >= 3:
-                reason = f"Your searched car — {v.brand} {v.model}. {reason}"
-
-            diff_obj = res.get('est_cost_difference')
-            if isinstance(diff_obj, dict):
-                diff_val = diff_obj.get('value_cents')
-                if diff_obj.get('direction') == 'more_expensive':
-                    diff_val = -diff_val if diff_val else 0
-                diff_display = diff_obj.get('value_display')
-            else:
-                diff_val = diff_obj
-                if diff_val is not None:
-                    diff_display = f"${abs(diff_val) // 100:,} {'less' if diff_val > 0 else 'more'}"
+            # Phase 1: one cheap representative (lowest 5yr COO variant) per
+            # (brand, model) to order the model groups.
+            reps = {}
+            for vehicle in all_vehicles:
+                if (budget_min or budget_max) and not within_budget(vehicle):
+                    continue
+                key = (vehicle.brand, vehicle.model)
+                if key not in reps:
+                    reps[key] = vehicle
                 else:
-                    diff_display = None
+                    if _mode_coo(vehicle) < _mode_coo(reps[key]):
+                        reps[key] = vehicle
 
-            entries.append({
-                "vehicle_id": str(v.id),
-                "make": v.brand,
-                "model": v.model,
-                "year": v.year,
-                "variant": v.variant,
-                "powertrain_type": v.powertrain_type,
-                "core_rating": round(rating, 1) if rating else None,
-                "band_name": res.get('band_name'),
-                "total_annual_cost": res.get('total_annual_cost'),
-                "total_annual_cost_display": f"${res.get('total_annual_cost', 0) // 100:,}",
-                "est_cost_difference": diff_val,
-                "est_cost_difference_display": diff_display,
-                "co2_g_per_km": v.tailpipe_co2_g_per_km,
-                "driveaway_price": driveaway,
-                "driveaway_price_display": f"${driveaway // 100:,}" if driveaway else None,
-                "recommendation_reason": reason,
-                "is_estimate": True,
-                "model_group": f"{v.brand} {v.model} {v.year}",
-                "_boost": boost,
-                "_cost": res.get('total_annual_cost'),
-                "_rating": rating,
-            })
+            scored_reps = []
+            for key, vehicle in reps.items():
+                res = calculate_core_rating(
+                    vehicle=vehicle,
+                    state=state,
+                    priority_slider=priority,
+                    core_mode=mode,
+                    user_inputs={},
+                    current_vehicle_annual_cost=cv_cost,
+                    category_metrics_cache=category_metrics_cache
+                )
+                rating = res.get('core_rating', 0)
+                if effective.get('core_rating_min') and (not rating or rating < effective['core_rating_min']):
+                    continue
+                scored_reps.append({
+                    'key': key,
+                    'vehicle': vehicle,
+                    'rating': rating,
+                    'annual_cost': res.get('total_annual_cost'),
+                    'boost': name_boost(vehicle),
+                })
 
-        # Group variants: keep the best MAX_VARIANTS_PER_MODEL per model line,
-        # groups ordered by name match, then rating, then cost (never alphabetical).
-        groups = {}
-        for e in entries:
-            groups.setdefault((e['make'], e['model']), []).append(e)
-        ordered = []
-        for key in [rep['key'] for rep, _ in selected]:
-            members = groups.get(key)
-            if not members:
-                continue
-            members.sort(key=lambda e: (
-                -(e['_rating'] or 0),
-                e['_cost'] if e['_cost'] is not None else float('inf'),
+            if not scored_reps:
+                return []
+
+            MAX_VARIANTS_PER_MODEL = 3
+            MAX_RESULTS = 10
+            scored_reps.sort(key=lambda r: (
+                -r['boost'],
+                -(r['rating'] or 0),
+                r['annual_cost'] if r['annual_cost'] is not None else float('inf'),
             ))
-            ordered.extend(members[:MAX_VARIANTS_PER_MODEL])
 
-        scored_vehicles = []
-        for e in ordered[:MAX_RESULTS]:
-            e.pop('_boost'), e.pop('_cost'), e.pop('_rating')
-            scored_vehicles.append(e)
-        
+            # Phase 2: fully score the variants of the top groups (enough groups to
+            # fill MAX_RESULTS after per-model variant trim; name-matched groups
+            # always included).
+            selected = []
+            filled = 0
+            for rep in scored_reps:
+                group_size = min(MAX_VARIANTS_PER_MODEL, sum(
+                    1 for v in all_vehicles
+                    if (v.brand, v.model) == rep['key'] and within_budget(v)))
+                if rep['boost'] > 0 or filled < MAX_RESULTS:
+                    selected.append((rep, group_size))
+                    filled += group_size
+                if filled >= MAX_RESULTS and len(selected) >= 2:
+                    break
+
+            selected_keys = {rep['key'] for rep, _ in selected}
+            phase2 = [v for v in all_vehicles
+                      if (v.brand, v.model) in selected_keys and within_budget(v)]
+
+            entries = []
+            for v in phase2:
+                res = calculate_core_rating(
+                    vehicle=v,
+                    state=state,
+                    priority_slider=priority,
+                    core_mode=mode,
+                    user_inputs={},
+                    current_vehicle_annual_cost=cv_cost,
+                    category_metrics_cache=category_metrics_cache
+                )
+                rating = res.get('core_rating', 0)
+                if effective.get('core_rating_min') and (not rating or rating < effective['core_rating_min']):
+                    continue
+                driveaway = v.driveaway_price_by_state.get(state)
+                boost = name_boost(v)
+                reason = build_recommendation_reason(effective, v)
+                if boost >= 3:
+                    reason = f"Your searched car — {v.brand} {v.model}. {reason}"
+
+                diff_obj = res.get('est_cost_difference')
+                if isinstance(diff_obj, dict):
+                    diff_val = diff_obj.get('value_cents')
+                    if diff_obj.get('direction') == 'more_expensive':
+                        diff_val = -diff_val if diff_val else 0
+                    diff_display = diff_obj.get('value_display')
+                else:
+                    diff_val = diff_obj
+                    if diff_val is not None:
+                        diff_display = f"${abs(diff_val) // 100:,} {'less' if diff_val > 0 else 'more'}"
+                    else:
+                        diff_display = None
+
+                entries.append({
+                    "vehicle_id": str(v.id),
+                    "make": v.brand,
+                    "model": v.model,
+                    "year": v.year,
+                    "variant": v.variant,
+                    "powertrain_type": v.powertrain_type,
+                    "core_rating": round(rating, 1) if rating else None,
+                    "band_name": res.get('band_name'),
+                    "total_annual_cost": res.get('total_annual_cost'),
+                    "total_annual_cost_display": f"${res.get('total_annual_cost', 0) // 100:,}",
+                    "est_cost_difference": diff_val,
+                    "est_cost_difference_display": diff_display,
+                    "co2_g_per_km": v.tailpipe_co2_g_per_km,
+                    "driveaway_price": driveaway,
+                    "driveaway_price_display": f"${driveaway // 100:,}" if driveaway else None,
+                    "recommendation_reason": reason,
+                    "is_estimate": True,
+                    "model_group": f"{v.brand} {v.model} {v.year}",
+                    "_boost": boost,
+                    "_cost": res.get('total_annual_cost'),
+                    "_rating": rating,
+                })
+
+            # Group variants: keep the best MAX_VARIANTS_PER_MODEL per model line,
+            # groups ordered by name match, then rating, then cost (never alphabetical).
+            groups = {}
+            for e in entries:
+                groups.setdefault((e['make'], e['model']), []).append(e)
+            ordered = []
+            for key in [rep['key'] for rep, _ in selected]:
+                members = groups.get(key)
+                if not members:
+                    continue
+                members.sort(key=lambda e: (
+                    -(e['_rating'] or 0),
+                    e['_cost'] if e['_cost'] is not None else float('inf'),
+                ))
+                ordered.extend(members[:MAX_VARIANTS_PER_MODEL])
+
+            out = []
+            for e in ordered[:MAX_RESULTS]:
+                e.pop('_boost'), e.pop('_cost'), e.pop('_rating')
+                out.append(e)
+            return out
+
+        # Step 5 (cont.): build results, relaxing the Python-level filters
+        # (core rating, then budget floor, then budget cap) if under MIN_RESULTS.
+        effective = dict(filters)
+        scored_vehicles = build_results(effective)
+        for relaxed_key in ('core_rating_min', 'budget_min', 'budget_max'):
+            if len(scored_vehicles) >= MIN_RESULTS:
+                break
+            if effective.pop(relaxed_key, None) is not None:
+                relaxed.append(relaxed_key)
+                scored_vehicles = build_results(effective)
+
         if not scored_vehicles:
             return Response({
                 "results": [],

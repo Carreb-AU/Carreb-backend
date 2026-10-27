@@ -143,3 +143,33 @@ class AISmartMatchRelaxationTests(TestCase):
         body = res.json()
         self.assertGreaterEqual(len(body["results"]), 5)
         self.assertIn("ancap_rating_min", body["relaxed_filters"])
+
+
+@mock.patch("apps.mygarage.views.emit_analytics_event")
+@mock.patch("apps.mygarage.views.calculate_core_rating", side_effect=rating_side_effect)
+@mock.patch("apps.mygarage.views.extract_search_parameters",
+            return_value=(True, {"budget_max": 20000, "core_rating_min": 4.5}))
+class AISmartMatchBudgetRelaxTests(TestCase):
+    """Budget + core-rating combos must relax rather than return nothing."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="paid3@example.com", password="x",
+            subscription_tier="core_advantage")
+        self.client.force_authenticate(self.user)
+        self.url = reverse("ai-smart-match")
+
+    def test_impossible_budget_and_rating_relaxes(self, *_mocks):
+        # Only 1 car under $20k; none at 4.5+ rating under $20k.
+        make_vehicle(brand="Cheap", model="Runabout", rating=3.0,
+                     driveaway_price_by_state={"NSW": 18_000_00})
+        for i in range(6):
+            make_vehicle(brand="Other", model=f"Car {i}", rating=4.0,
+                         driveaway_price_by_state={"NSW": 40_000_00})
+        res = self.client.post(self.url,
+                               {"query": "great car under 20000", "state": "NSW"},
+                               format="json")
+        body = res.json()
+        self.assertGreaterEqual(len(body["results"]), 5)
+        self.assertIn("core_rating_min", body["relaxed_filters"])
+        self.assertIn("budget_max", body["relaxed_filters"])
