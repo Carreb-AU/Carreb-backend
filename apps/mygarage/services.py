@@ -354,7 +354,10 @@ def search_dealers_external(brand: str, postcode: str, radius_km: int) -> dict:
         'textQuery': f'{brand} dealer',
         'includedType': 'car_dealer',
         'strictTypeFiltering': False,
-        'locationRestriction': {
+        # locationBias (not locationRestriction, which is rectangle-only in
+        # this API surface) biases results toward the search circle; the
+        # exact radius is then enforced by the haversine filter below.
+        'locationBias': {
             'circle': {
                 'center': {'latitude': lat, 'longitude': lng},
                 'radius': radius_km * 1000,  # meters
