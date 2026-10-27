@@ -173,3 +173,48 @@ class AISmartMatchBudgetRelaxTests(TestCase):
         self.assertGreaterEqual(len(body["results"]), 5)
         self.assertIn("core_rating_min", body["relaxed_filters"])
         self.assertIn("budget_max", body["relaxed_filters"])
+
+
+@mock.patch("apps.mygarage.views.emit_analytics_event")
+@mock.patch("apps.mygarage.views.calculate_core_rating", side_effect=rating_side_effect)
+@mock.patch("apps.mygarage.views.extract_search_parameters",
+            return_value=(True, {"budget_max": 40000}))
+class AISmartMatchUnknownPriceTests(TestCase):
+    """Vehicles with no driveaway price for the state must not leak into
+    budget-constrained results."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="paid4@example.com", password="x",
+            subscription_tier="core_advantage")
+        self.client.force_authenticate(self.user)
+        self.url = reverse("ai-smart-match")
+
+    def test_unknown_price_excluded_from_budget_results(self, *_mocks):
+        make_vehicle(brand="Seed", model="NoPrice",
+                     driveaway_price_by_state={}, rating=5.0)
+        for i in range(6):
+            make_vehicle(brand="Priced", model=f"Right {i}",
+                         driveaway_price_by_state={"NSW": 35_000_00}, rating=4.0)
+        res = self.client.post(self.url,
+                               {"query": "suv under 40000", "state": "NSW"},
+                               format="json")
+        results = res.json()["results"]
+        self.assertGreaterEqual(len(results), 5)
+        self.assertFalse(any(r["make"] == "Seed" for r in results))
+
+    def test_unknown_price_ok_without_budget(self, *_mocks):
+        make_vehicle(brand="Seed", model="NoPrice",
+                     driveaway_price_by_state={}, rating=5.0)
+        res = self.client.post(self.url,
+                               {"query": "any car", "state": "NSW"},
+                               format="json")
+        # No budget in filters for this test's mock... budget_max IS set, so use
+        # a second post without budget by overriding the mock return value.
+        with mock.patch("apps.mygarage.views.extract_search_parameters",
+                        return_value=(True, {})):
+            res = self.client.post(self.url,
+                                   {"query": "any car", "state": "NSW"},
+                                   format="json")
+        results = res.json()["results"]
+        self.assertTrue(any(r["make"] == "Seed" for r in results))

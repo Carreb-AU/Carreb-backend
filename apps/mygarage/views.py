@@ -1202,6 +1202,11 @@ class AISmartMatchView(views.APIView):
             """
             def within_budget(vehicle):
                 driveaway = vehicle.driveaway_price_by_state.get(state)
+                # A budget constraint excludes vehicles with no price data for
+                # this state (a car of unknown price can't satisfy a budget).
+                if (effective.get('budget_min') or effective.get('budget_max')) \
+                        and driveaway is None:
+                    return False
                 if effective.get('budget_max') and driveaway and \
                         driveaway > effective['budget_max'] * 100:
                     return False
