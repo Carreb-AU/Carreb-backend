@@ -276,6 +276,7 @@ class AIVehicleSearchView(views.APIView):
             "electricity_consumption_wh_per_km": e.electricity_consumption_wh_per_km,
             "electric_range_km": e.electric_range_km,
             "tailpipe_co2_g_per_km": e.tailpipe_co2_g_per_km,
+            "fcai_category": e.fcai_category,
             "driveaway_price_estimate": e.driveaway_price_estimate,
             "driveaway_price_display": (
                 f"${e.driveaway_price_estimate // 100:,}" if e.driveaway_price_estimate else None

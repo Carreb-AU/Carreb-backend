@@ -54,6 +54,7 @@ Return ONLY a valid JSON object, no markdown fences, no extra text:
       "electricity_consumption_wh_per_km": float or null,
       "electric_range_km": float or null,
       "tailpipe_co2_g_per_km": float combined or null,
+      "fcai_category": one of Light|Small|Medium|Large|Upper Large|Small SUV|Medium SUV|Large SUV|Upper Large SUV|People Mover|Ute|Van|Light Commercial or "",
       "driveaway_price_aud": integer Australian driveaway/RRP dollars or null
     }}
   ]
@@ -63,7 +64,9 @@ Rules:
 - Return 1 to {max} candidates, most likely match first. If the search text is ambiguous (e.g. a long-running nameplate), return the plausible distinct variants.
 - Only real vehicles sold in Australia. Never invent specifications — use null when unknown.
 - fuel_consumption_l_100km is for petrol/diesel/hybrid/PHEV; electricity_consumption_wh_per_km and electric_range_km for BEV/PHEV.
-- For PHEV provide both fuel consumption and electric range/consumption if known."""
+- For PHEV provide both fuel consumption and electric range/consumption if known.
+- For fuel_consumption_l_100km and tailpipe_co2_g_per_km, provide your best-estimate combined ADR figures even for older or obscure cars — only use null if you have no reasonable estimate at all.
+- fcai_category: pick the closest FCAI size/shape segment for the Australian market (e.g. a Toyota Corolla is "Small", a Mazda CX-5 is "Medium SUV", a Holden Commodore is "Large", a Toyota HiLux is "Ute")."""
 
 
 class AIVehicleSearchError(Exception):
@@ -190,6 +193,7 @@ def _normalize_candidate(v: dict, raw: dict) -> dict:
         'electricity_consumption_wh_per_km': _to_float(v.get('electricity_consumption_wh_per_km')),
         'electric_range_km': _to_float(v.get('electric_range_km')),
         'tailpipe_co2_g_per_km': _to_float(v.get('tailpipe_co2_g_per_km')),
+        'fcai_category': str(v.get('fcai_category') or '').strip()[:100],
         'driveaway_price_estimate': price_aud * 100 if price_aud else None,
         'raw_response': {'candidate': v, 'full_response': raw},
         'provenance': {

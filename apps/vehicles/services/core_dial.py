@@ -259,11 +259,22 @@ def cost_gvg_current_vehicle(record, state):
     parts['fuel'] = 0
     parts['electricity'] = 0
     powertrain = (record.powertrain_type or '').lower()
+
+    def _median_cents(field):
+        # Only rows that actually incur this cost — BEVs have fuel_cents=0 and
+        # petrol cars electricity_cents=0, which would corrupt the median.
+        values = [getattr(r, field) for r in rows if getattr(r, field)]
+        return int(round_half_up(statistics.median(values), 0)) if values else 0
+
     if powertrain == 'bev':
         wh_per_km = getattr(record, 'electricity_consumption_wh_per_km', None)
         rate = getattr(prices, 'electricity_cents_per_kwh', None) if prices else None
         if wh_per_km and rate:
             parts['electricity'] = int(round_half_up(wh_per_km * km / 1000 * rate, 0))
+        if not parts['electricity']:
+            # Consumption unknown (e.g. AI-searched car): fall back to the
+            # class median energy cost from the dial rows.
+            parts['electricity'] = _median_cents('electricity_cents')
     else:
         consumption = getattr(record, 'fuel_consumption_combined_l_100km', None)
         if consumption and prices:
@@ -271,6 +282,10 @@ def cost_gvg_current_vehicle(record, state):
                      else prices.petrol_ulp95_cents_per_litre)
             if price:
                 parts['fuel'] = int(round_half_up(consumption / 100 * km * price, 0))
+        if not parts['fuel']:
+            # Consumption unknown (e.g. AI-searched car): fall back to the
+            # class median fuel cost from the dial rows.
+            parts['fuel'] = _median_cents('fuel_cents')
 
     return {
         'core_rating': None,
