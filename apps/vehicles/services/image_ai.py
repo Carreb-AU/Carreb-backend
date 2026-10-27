@@ -220,8 +220,13 @@ def is_blacklisted(url: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def find_commons_image(query: str, headers: dict | None = None,
-                       delay: float = 0.0, log=logger) -> str:
-    """Return the URL of the first Wikimedia Commons image matching the query, or ''."""
+                       delay: float = 0.0, log=logger,
+                       thumb_width: int = 1200) -> str:
+    """Return the URL of the first Wikimedia Commons image matching the query, or ''.
+
+    Returns a ``Special:FilePath`` thumbnail URL (width=1200) rather than the
+    original — Commons throttles original-resolution downloads per IP (429).
+    """
     headers = headers or {"User-Agent": USER_AGENT}
     if delay:
         time.sleep(delay)
@@ -251,6 +256,11 @@ def find_commons_image(query: str, headers: dict | None = None,
         imageinfo = page.get("imageinfo")
         if not imageinfo:
             continue
+        title = page.get("title", "")            # "File:Name.jpg"
+        if title.lower().startswith("file:"):
+            filename = title[5:]
+            return (f"https://commons.wikimedia.org/wiki/Special:FilePath/"
+                    f"{filename}?width={thumb_width}")
         url = imageinfo[0].get("url")
         if url:
             return url
@@ -258,10 +268,12 @@ def find_commons_image(query: str, headers: dict | None = None,
 
 
 def download_image(url: str, out_dir: str, headers: dict | None = None,
-                   delay: float = 0.0, log=logger) -> str:
+                   delay: float = 0.0, log=logger,
+                   max_retries: int = 2) -> str:
     """Download image to out_dir, return local file path or ''.
 
-    Uses the same uuid-based naming scheme across all commands."""
+    Uses the same uuid-based naming scheme across all commands. On HTTP 429
+    (rate limited) backs off exponentially and retries."""
     headers = headers or {"User-Agent": USER_AGENT}
     ext = os.path.splitext(unquote(url).split("?")[0])[1].lower()
     if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
@@ -271,19 +283,29 @@ def download_image(url: str, out_dir: str, headers: dict | None = None,
     local_path = os.path.join(out_dir, filename)
 
     # Strip tracking query params before downloading; they cause 429s on upload.wikimedia.org.
-    download_url = url.split("?")[0]
+    download_url = url.split("?")[0] if "wikimedia.org" not in url else url
 
     if delay:
         time.sleep(delay)
-    try:
-        r = requests.get(download_url, headers=headers, timeout=30)
-        r.raise_for_status()
-        with open(local_path, "wb") as f:
-            f.write(r.content)
-        return local_path
-    except Exception as e:
-        log.warning("Download error: %s", e)
-        return ""
+    for attempt in range(max_retries + 1):
+        try:
+            r = requests.get(download_url, headers=headers, timeout=30)
+            r.raise_for_status()
+            with open(local_path, "wb") as f:
+                f.write(r.content)
+            return local_path
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429 and attempt < max_retries:
+                wait = 15 * (attempt + 1)
+                log.warning("429 rate-limited; backing off %ss", wait)
+                time.sleep(wait)
+                continue
+            log.warning("Download error: %s", e)
+            return ""
+        except Exception as e:
+            log.warning("Download error: %s", e)
+            return ""
+    return ""
 
 
 BROWSER_HEADERS = {

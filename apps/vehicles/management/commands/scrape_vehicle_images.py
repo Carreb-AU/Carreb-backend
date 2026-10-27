@@ -7,7 +7,7 @@ from django.core.management.base import BaseCommand
 from apps.vehicles.models import Vehicle
 from apps.vehicles.services import image_ai
 
-REQUEST_DELAY_SECONDS = 0.5
+REQUEST_DELAY_SECONDS = 1.0
 
 
 class Command(BaseCommand):
