@@ -30,6 +30,7 @@ from apps.mygarage.find_dealer_views import FindDealerView, DealerLinkClickedAna
 urlpatterns = [
     # Find Dealer
     path('api/my-garage/find-dealer/', FindDealerView.as_view(), name='find-dealer'),
+    path('api/garage/find-a-dealer/', FindDealerView.as_view(), name='find-a-dealer'),
     path('api/analytics/dealer-link-clicked/', DealerLinkClickedAnalyticsView.as_view(), name='dealer-link-clicked'),
 
     # Current Vehicle

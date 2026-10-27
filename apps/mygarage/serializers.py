@@ -189,9 +189,18 @@ def is_valid_australian_postcode(postcode: str) -> bool:
     return False
 
 class FindDealerRequestSerializer(serializers.Serializer):
-    garage_vehicle_id = serializers.UUIDField(required=True)
+    # Either a garage vehicle (brand derived from it) or an explicit brand.
+    garage_vehicle_id = serializers.UUIDField(required=False)
+    brand = serializers.CharField(required=False, max_length=255)
     postcode = serializers.CharField(required=True)
     radius_km = serializers.IntegerField(required=True)
+
+    def validate(self, attrs):
+        if not attrs.get('garage_vehicle_id') and not attrs.get('brand'):
+            raise serializers.ValidationError(
+                {'garage_vehicle_id': 'Either garage_vehicle_id or brand is required.'}
+            )
+        return attrs
 
     def validate_postcode(self, value):
         if not is_valid_australian_postcode(value):
@@ -203,6 +212,15 @@ class FindDealerRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError("invalid_radius")
         return value
 
+    def validate_brand(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("invalid_brand")
+        return value
+
 class DealerLinkClickedSerializer(serializers.Serializer):
     vehicle_brand = serializers.CharField(required=True, max_length=255)
+    dealer_name = serializers.CharField(required=False, max_length=255, allow_blank=True)
+    vehicle_id = serializers.UUIDField(required=False)
+    link_url = serializers.URLField(required=False)
 

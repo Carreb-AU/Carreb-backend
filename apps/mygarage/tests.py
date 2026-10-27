@@ -1,10 +1,12 @@
 from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from rest_framework.test import APITestCase as TestCase
 from django.urls import reverse
 
 from apps.vehicles.models import Vehicle
+from apps.mygarage.models import GarageVehicle, GarageVehicleSource
 
 User = get_user_model()
 
@@ -218,3 +220,160 @@ class AISmartMatchUnknownPriceTests(TestCase):
                                    format="json")
         results = res.json()["results"]
         self.assertTrue(any(r["make"] == "Seed" for r in results))
+
+
+@mock.patch("apps.mygarage.services._places_search_text")
+@mock.patch("apps.mygarage.find_dealer_views.emit_analytics_event")
+@override_settings(GOOGLE_PLACES_API_KEY="test-key")
+class FindDealerTests(TestCase):
+    """Regression tests for the Find-a-Dealer endpoint.
+
+    Covers the diagnosed bugs: geocode failure silently reported as
+    "no dealers found", missing phone/website fields, and the missing
+    spec-compatible GET route.
+    """
+
+    GEOCODE_RESPONSE = ([
+        {"location": {"latitude": -33.8688, "longitude": 151.2093}}
+    ], None)
+
+    DEALERS_RESPONSE = ([
+        {
+            "displayName": {"text": "Nearby Motors"},
+            "nationalPhoneNumber": "02 9000 0001",
+            "websiteUri": "https://nearby.example.com",
+            "googleMapsUri": "https://maps.google.com/?cid=1",
+            "location": {"latitude": -33.87, "longitude": 151.21},
+            "rating": 4.5,
+        },
+        {
+            "displayName": {"text": "Faraway Motors"},
+            "nationalPhoneNumber": "02 9000 0002",
+            "websiteUri": "",
+            "googleMapsUri": "https://maps.google.com/?cid=2",
+            "location": {"latitude": -33.9, "longitude": 151.4},
+            "rating": 4.0,
+        },
+    ], None)
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.user = User.objects.create_user(
+            email="dealer@example.com", password="x")
+        self.client.force_authenticate(self.user)
+        self.vehicle = make_vehicle(brand="TestMake")
+        self.garage_vehicle = GarageVehicle.objects.create(
+            user=self.user, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.VEHICLE_LOOKUP,
+        )
+
+    def _mock_places(self, m_places, responses):
+        m_places.side_effect = list(responses)
+
+    def test_geocode_failure_reports_unavailable_not_empty(self, _m_analytics, m_places):
+        # Regression: geocode failure used to return service_unavailable=False,
+        # which surfaced to users as "No dealers found".
+        m_places.return_value = (None, "billing_or_auth")
+        resp = self.client.post(
+            reverse("find-dealer"),
+            {"garage_vehicle_id": str(self.garage_vehicle.id),
+             "postcode": "2000", "radius_km": 25},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["service_unavailable"])
+        self.assertNotIn("no_results_message", resp.data)
+
+    def test_results_include_phone_website_and_distance(self, _m_analytics, m_places):
+        self._mock_places(m_places, [self.GEOCODE_RESPONSE, self.DEALERS_RESPONSE])
+        resp = self.client.post(
+            reverse("find-dealer"),
+            {"garage_vehicle_id": str(self.garage_vehicle.id),
+             "postcode": "2000", "radius_km": 25},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        results = resp.data["results"]
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0]["dealer_name"], "Nearby Motors")
+        self.assertEqual(results[0]["phone"], "02 9000 0001")
+        self.assertEqual(results[0]["website_url"], "https://nearby.example.com")
+        self.assertEqual(results[0]["link_url"], "https://nearby.example.com")
+        # Dealer without a website falls back to its Maps listing
+        self.assertEqual(results[1]["link_url"], "https://maps.google.com/?cid=2")
+        self.assertLess(results[0]["distance_km"], results[1]["distance_km"])
+
+    def test_out_of_radius_dealers_are_excluded(self, _m_analytics, m_places):
+        dealers = ([
+            {
+                "displayName": {"text": "Distant City Motors"},
+                "location": {"latitude": -37.81, "longitude": 144.96},  # Melbourne
+                "googleMapsUri": "https://maps.google.com/?cid=3",
+            },
+        ], None)
+        self._mock_places(m_places, [self.GEOCODE_RESPONSE, dealers])
+        resp = self.client.post(
+            reverse("find-dealer"),
+            {"garage_vehicle_id": str(self.garage_vehicle.id),
+             "postcode": "2000", "radius_km": 25},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["results"], [])
+        self.assertIn("no_results_message", resp.data)
+        self.assertIn("TestMake", resp.data["no_results_message"])
+
+    def test_spec_get_route_works_with_brand(self, _m_analytics, m_places):
+        # Spec: GET /api/garage/find-a-dealer/?postcode=&radius=&brand=
+        self._mock_places(m_places, [self.GEOCODE_RESPONSE, self.DEALERS_RESPONSE])
+        resp = self.client.get(
+            reverse("find-a-dealer"),
+            {"postcode": "2000", "radius": 25, "brand": "TestMake"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data["results"]), 2)
+
+    def test_spec_get_route_works_with_garage_vehicle(self, _m_analytics, m_places):
+        self._mock_places(m_places, [self.GEOCODE_RESPONSE, self.DEALERS_RESPONSE])
+        resp = self.client.get(
+            reverse("find-a-dealer"),
+            {"postcode": "2000", "radius": "25",
+             "garage_vehicle_id": str(self.garage_vehicle.id)})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["vehicle_brand"], "TestMake")
+
+    def test_get_requires_brand_or_garage_vehicle(self, _m_analytics, m_places):
+        resp = self.client.get(
+            reverse("find-a-dealer"), {"postcode": "2000", "radius": 25})
+        self.assertEqual(resp.status_code, 400)
+        m_places.assert_not_called()
+
+    def test_invalid_postcode_rejected(self, _m_analytics, m_places):
+        resp = self.client.post(
+            reverse("find-dealer"),
+            {"garage_vehicle_id": str(self.garage_vehicle.id),
+             "postcode": "0500", "radius_km": 25},
+            format="json")
+        self.assertEqual(resp.status_code, 422)
+        m_places.assert_not_called()
+
+    def test_foreign_garage_vehicle_is_not_found(self, _m_analytics, m_places):
+        other = User.objects.create_user(email="other@example.com", password="x")
+        gv = GarageVehicle.objects.create(
+            user=other, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.VEHICLE_LOOKUP,
+        )
+        resp = self.client.post(
+            reverse("find-dealer"),
+            {"garage_vehicle_id": str(gv.id),
+             "postcode": "2000", "radius_km": 25},
+            format="json")
+        self.assertEqual(resp.status_code, 404)
+        m_places.assert_not_called()
+
+    def test_analytics_accepts_dealer_and_vehicle_payload(self, _m_analytics, _m_places):
+        resp = self.client.post(
+            reverse("dealer-link-clicked"),
+            {"vehicle_brand": "TestMake",
+             "dealer_name": "Nearby Motors",
+             "vehicle_id": str(self.vehicle.id),
+             "link_url": "https://nearby.example.com"},
+            format="json")
+        self.assertEqual(resp.status_code, 200)

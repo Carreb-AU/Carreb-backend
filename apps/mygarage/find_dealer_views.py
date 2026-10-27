@@ -23,8 +23,23 @@ class FindDealerView(views.APIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [FindDealerThrottle]
 
+    def get(self, request, *args, **kwargs):
+        # Spec-compatible shape: GET /api/garage/find-a-dealer/?postcode=&radius=[&brand=|&garage_vehicle_id=]
+        data = {
+            'postcode': request.query_params.get('postcode', ''),
+            'radius_km': request.query_params.get('radius', request.query_params.get('radius_km', '')),
+        }
+        if request.query_params.get('garage_vehicle_id'):
+            data['garage_vehicle_id'] = request.query_params['garage_vehicle_id']
+        if request.query_params.get('brand'):
+            data['brand'] = request.query_params['brand']
+        return self._handle(request, data)
+
     def post(self, request, *args, **kwargs):
-        serializer = FindDealerRequestSerializer(data=request.data)
+        return self._handle(request, request.data)
+
+    def _handle(self, request, data):
+        serializer = FindDealerRequestSerializer(data=data)
         if not serializer.is_valid():
             errors = serializer.errors
             if 'postcode' in errors:
@@ -39,19 +54,19 @@ class FindDealerView(views.APIView):
                 }, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
             return Response(errors, status=status.HTTP_400_BAD_REQUEST)
 
-        garage_vehicle_id = serializer.validated_data['garage_vehicle_id']
         postcode = serializer.validated_data['postcode']
         radius_km = serializer.validated_data['radius_km']
 
-        try:
-            garage_vehicle = GarageVehicle.objects.select_related('vehicle_catalogue').get(
-                id=garage_vehicle_id, 
-                user=request.user
-            )
-        except GarageVehicle.DoesNotExist:
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        brand = garage_vehicle.vehicle_catalogue.brand
+        brand = serializer.validated_data.get('brand')
+        if serializer.validated_data.get('garage_vehicle_id'):
+            try:
+                garage_vehicle = GarageVehicle.objects.select_related('vehicle_catalogue').get(
+                    id=serializer.validated_data['garage_vehicle_id'],
+                    user=request.user
+                )
+                brand = garage_vehicle.vehicle_catalogue.brand
+            except GarageVehicle.DoesNotExist:
+                return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
         res = get_dealers(brand, postcode, radius_km)
 
@@ -114,12 +129,19 @@ class DealerLinkClickedAnalyticsView(views.APIView):
         serializer = DealerLinkClickedSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         vehicle_brand = serializer.validated_data['vehicle_brand']
+        event_data = {'vehicle_brand': vehicle_brand}
+        if serializer.validated_data.get('dealer_name'):
+            event_data['dealer_name'] = serializer.validated_data['dealer_name']
+        if serializer.validated_data.get('vehicle_id'):
+            event_data['vehicle_id'] = str(serializer.validated_data['vehicle_id'])
+        if serializer.validated_data.get('link_url'):
+            event_data['link_url'] = serializer.validated_data['link_url']
 
         if getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(
                 str(request.user.id),
                 'outbound_dealer_link_clicked',
-                {'vehicle_brand': vehicle_brand}
+                event_data
             )
 
         return Response(status=status.HTTP_200_OK)

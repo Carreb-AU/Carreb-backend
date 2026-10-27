@@ -229,6 +229,11 @@ from django.utils.text import slugify
 logger = logging.getLogger(__name__)
 
 PLACES_TEXT_URL = 'https://maps.googleapis.com/maps/api/place/textsearch/json'
+PLACES_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText'
+PLACES_FIELD_MASK = (
+    'places.displayName,places.nationalPhoneNumber,places.internationalPhoneNumber,'
+    'places.websiteUri,places.googleMapsUri,places.location,places.rating'
+)
 
 BRAND_LOCATORS = {
     'toyota': 'https://www.toyota.com.au/find-dealer',
@@ -272,27 +277,58 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
+def _places_search_text(payload: dict, api_key: str) -> tuple:
+    """Call the New Places API searchText endpoint.
+
+    Returns (places_list, error_message). error_message is None on success,
+    or a short string describing the failure (billing/auth/network).
+    """
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': api_key,
+        'X-Goog-FieldMask': PLACES_FIELD_MASK,
+    }
+    try:
+        resp = requests.post(PLACES_SEARCH_URL, json=payload, headers=headers, timeout=10)
+    except requests.RequestException as e:
+        logger.exception("Google Places API call failed: %s", e)
+        return None, "network"
+
+    if resp.status_code != 200:
+        logger.warning("Google Places searchText returned HTTP %s: %s",
+                       resp.status_code, resp.text[:300])
+        if resp.status_code in (400, 403):
+            return None, "billing_or_auth"
+        return None, "network"
+
+    try:
+        data = resp.json()
+    except ValueError:
+        logger.warning("Google Places searchText returned non-JSON response")
+        return None, "network"
+
+    return data.get('places', []), None
+
+
 def get_postcode_coords(postcode: str, api_key: str) -> tuple:
     cache_key = f"postcode_coords:{postcode}"
     cached = cache.get(cache_key)
     if cached:
         return cached
 
-    params = {
-        'query': f'{postcode}, Australia',
-        'key': api_key,
-    }
-    try:
-        resp = requests.get(PLACES_TEXT_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get('status') == 'OK' and data.get('results'):
-            loc = data['results'][0]['geometry']['location']
-            coords = (loc['lat'], loc['lng'])
+    places, error = _places_search_text(
+        {'textQuery': f'{postcode}, Australia', 'regionCode': 'AU', 'maxResultCount': 1},
+        api_key,
+    )
+    if places:
+        loc = places[0].get('location') or {}
+        lat, lng = loc.get('latitude'), loc.get('longitude')
+        if lat is not None and lng is not None:
+            coords = (lat, lng)
             cache.set(cache_key, coords, 86400 * 30)  # 30 days
             return coords
-    except Exception as e:
-        logger.exception("Failed to geocode postcode %s: %s", postcode, e)
+
+    logger.warning("Failed to geocode postcode %s (places_error=%s)", postcode, error)
     return None, None
 
 def search_dealers_external(brand: str, postcode: str, radius_km: int) -> dict:
@@ -310,66 +346,60 @@ def search_dealers_external(brand: str, postcode: str, radius_km: int) -> dict:
     if lat is None or lng is None:
         return {
             'results': [],
-            'service_unavailable': False,
+            'service_unavailable': True,
+            'message': "Dealer search is temporarily unavailable. Please try again shortly."
         }
 
-    # Query Google Places Text Search
-    query = f'{brand} dealer'
-    params = {
-        'query': f'{query} near {postcode}, Australia',
-        'radius': radius_km * 1000,  # meters
-        'type': 'car_dealer',
-        'region': 'au',
-        'key': api_key,
-    }
+    places, error = _places_search_text({
+        'textQuery': f'{brand} dealer',
+        'includedType': 'car_dealer',
+        'strictTypeFiltering': False,
+        'locationRestriction': {
+            'circle': {
+                'center': {'latitude': lat, 'longitude': lng},
+                'radius': radius_km * 1000,  # meters
+            }
+        },
+        'maxResultCount': 20,
+        'regionCode': 'AU',
+    }, api_key)
 
-    try:
-        resp = requests.get(PLACES_TEXT_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as e:
-        logger.exception("Google Places API call failed: %s", e)
+    if places is None:
         return {
             'results': [],
             'service_unavailable': True,
             'message': "Dealer search is temporarily unavailable. Please try again shortly."
         }
 
-    status = data.get('status')
-    if status not in ('OK', 'ZERO_RESULTS'):
-        logger.warning("Google Places returned unexpected status %s: %s", status, data.get('error_message'))
-        if status in ('OVER_QUERY_LIMIT', 'REQUEST_DENIED', 'INVALID_REQUEST'):
-            return {
-                'results': [],
-                'service_unavailable': True,
-                'message': "Dealer search is temporarily unavailable. Please try again shortly."
-            }
-        return {
-            'results': [],
-            'service_unavailable': False,
-        }
-
-    raw_results = data.get('results', [])
     dealers = []
-    for r in raw_results:
-        location = r.get('geometry', {}).get('location', {})
-        d_lat = location.get('lat')
-        d_lng = location.get('lng')
-        
+    for p in places:
+        loc = p.get('location') or {}
+        d_lat, d_lng = loc.get('latitude'), loc.get('longitude')
         if d_lat is None or d_lng is None:
             continue
-            
+
         dist = haversine_distance(lat, lng, d_lat, d_lng)
-        
-        # Filter by radius manually to be precise
-        if dist <= radius_km:
-            place_id = r.get('place_id')
-            dealers.append({
-                'dealer_name': r.get('name'),
-                'distance_km': round(dist, 1),
-                'website_url': f'https://www.google.com/maps/place/?q=place_id:{place_id}' if place_id else '',
-                'external_link_notice': "You will leave Carreb and the dealer's own terms and privacy policy will apply."
-            })
+
+        # Hard radius check — Google's circle restriction should already enforce this
+        if dist > radius_km:
+            continue
+
+        maps_uri = p.get('googleMapsUri') or ''
+        website = p.get('websiteUri') or ''
+        place_ref = maps_uri or website
+        dealers.append({
+            'dealer_name': (p.get('displayName') or {}).get('text', ''),
+            'distance_km': round(dist, 1),
+            'phone': p.get('nationalPhoneNumber') or '',
+            'website_url': website,
+            'maps_url': maps_uri,
+            # Where the user lands when they click the dealer card: prefer the
+            # dealer's own site, fall back to their Google Maps listing.
+            'link_url': website or maps_uri,
+            'place_ref': place_ref,
+            'rating': p.get('rating'),
+            'external_link_notice': "You will leave Carreb and the dealer's own terms and privacy policy will apply."
+        })
 
     # Sort by distance and return top 5
     dealers.sort(key=lambda x: x['distance_km'])
