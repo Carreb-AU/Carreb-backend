@@ -91,6 +91,8 @@ class FreeMatchCalculateView(views.APIView):
             return Response(
                 {
                     "vehicle": None,
+                    "vehicles": [],
+                    "result_count": 0,
                     "is_suggested": False,
                     "message": str(exc),
                     "detail": "No matching vehicle found for the selected preferences.",

@@ -4,13 +4,11 @@ Free Match Wizard — service layer.
 All vehicle scoring is delegated to the CORE Rating Engine
 (apps.vehicles.services.rating_engine).  No cost or rating
 figures are computed here — this module only filters candidates
-and picks the highest-scoring one.
+and returns the highest-scoring matches.
 State mutations and complex business logic live here.
 """
 
 import logging
-import random
-from typing import Optional
 
 from django.db import transaction
 
@@ -35,6 +33,7 @@ class NoMatchFoundError(Exception):
 
 WIZARD_CORE_MODE = "pure_cost"
 WIZARD_DEFAULT_STATE = "NSW"
+MAX_MATCH_RESULTS = 5
 
 PRIORITY_TO_SLIDER = {
     PriorityPreference.COST_ONLY: 1,
@@ -46,27 +45,24 @@ PRIORITY_TO_SLIDER = {
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _score_and_pick_best(candidates, state: str, priority_slider: int) -> Optional[Vehicle]:
+def _score_and_rank(candidates, state: str, priority_slider: int) -> list[dict]:
     """
-    Score each candidate with the CORE Rating Engine and return
-    a single highest-scoring vehicle. Break ties randomly across models.
+    Score each candidate with the CORE Rating Engine and return the top
+    MAX_MATCH_RESULTS entries, best rating first. One entry per
+    (brand, model, year) so the user sees distinct model lines. Ties break
+    by annual cost, then name, so results are deterministic.
     """
     if not candidates:
-        return None
+        return []
 
-    best_score = -1.0
-    best_vehicles = []
     category_metrics_cache = {}
-
-    unique_candidates = []
+    scored = []
     seen_models = set()
-    for v in candidates:
-        model_key = (v.brand, v.model, v.year)
-        if model_key not in seen_models:
-            seen_models.add(model_key)
-            unique_candidates.append(v)
-
-    for vehicle in unique_candidates:
+    for vehicle in candidates:
+        model_key = (vehicle.brand, vehicle.model, vehicle.year)
+        if model_key in seen_models:
+            continue
+        seen_models.add(model_key)
         try:
             result = calculate_core_rating(
                 vehicle=vehicle,
@@ -80,26 +76,30 @@ def _score_and_pick_best(candidates, state: str, priority_slider: int) -> Option
             rating = result.get("core_rating")
             if rating is None:
                 continue
-            if rating > best_score:
-                best_score = rating
-                best_vehicles = [vehicle]
-            elif rating == best_score:
-                best_vehicles.append(vehicle)
+            scored.append({
+                "vehicle": vehicle,
+                "core_rating": rating,
+                "band_name": result.get("band_name"),
+                "total_annual_cost": result.get("total_annual_cost"),
+            })
         except Exception:
             logger.exception("CORE Rating Engine error for vehicle %s — skipping", vehicle.id)
 
-    if not best_vehicles:
-        return None
-        
-    return random.choice(best_vehicles)
+    scored.sort(key=lambda e: (
+        -(e["core_rating"] or 0),
+        e["total_annual_cost"] if e["total_annual_cost"] is not None else float("inf"),
+        e["vehicle"].brand, e["vehicle"].model, e["vehicle"].variant or "",
+    ))
+    return scored[:MAX_MATCH_RESULTS]
 
 
 # ── Match Logic ──────────────────────────────────────────────────────────────
 
-def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[Optional[Vehicle], bool]:
+def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[list[dict], bool]:
     """
     Run the Free Match Wizard matching algorithm.
-    Returns a tuple of (vehicle, is_suggested).
+    Returns a tuple of (scored_entries, is_suggested) with up to
+    MAX_MATCH_RESULTS entries, best CORE rating first.
     """
     state = session.state or WIZARD_DEFAULT_STATE
     priority_slider = PRIORITY_TO_SLIDER.get(session.priority, 3)
@@ -108,9 +108,9 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[Optional[Vehicl
     candidates = list(get_freematch_candidates(session))
 
     if candidates:
-        vehicle = _score_and_pick_best(candidates, state, priority_slider)
-        if vehicle:
-            return vehicle, False
+        entries = _score_and_rank(candidates, state, priority_slider)
+        if entries:
+            return entries, False
 
     # ── Attempt 2: relax budget and nice-to-have features ───────────────────
     logger.info(
@@ -121,9 +121,9 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[Optional[Vehicl
     candidates = list(get_freematch_candidates_relaxed(session))
 
     if candidates:
-        vehicle = _score_and_pick_best(candidates, state, priority_slider)
-        if vehicle:
-            return vehicle, True
+        entries = _score_and_rank(candidates, state, priority_slider)
+        if entries:
+            return entries, True
 
     # ── No acceptable match ───────────────────────────────────────────────────
     logger.warning(
@@ -138,43 +138,44 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[Optional[Vehicl
 
 # ── Response Builders ────────────────────────────────────────────────────────
 
-def build_match_response(vehicle: Vehicle, session: FreeMatchSession, is_suggested: bool = False) -> dict:
+def _build_match_vehicle_entry(entry: dict) -> dict:
+    vehicle = entry["vehicle"]
+    annual_cost_cents = entry["total_annual_cost"] or 0
+    return {
+        "id": str(vehicle.id),
+        "make": vehicle.brand,
+        "model": vehicle.model,
+        "year": vehicle.year,
+        "variant": vehicle.variant,
+        "powertrain_type": vehicle.powertrain_type,
+        "core_rating": entry["core_rating"],
+        "band_name": entry["band_name"],
+        "annual_running_cost_estimate": annual_cost_cents,
+        "annual_running_cost_display": _format_cents(annual_cost_cents),
+        "co2_g_per_km": vehicle.tailpipe_co2_g_per_km,
+        "is_estimate": True,
+        "resale_value_5yr_estimate": {"locked": True, "value": None},
+        "est_cost_difference": {"locked": True, "value": None},
+        "driveaway_price_estimate": {"locked": True, "value": None},
+    }
+
+
+def build_match_response(entries: list, session: FreeMatchSession, is_suggested: bool = False) -> dict:
     from django.utils import timezone
-    
-    state = session.state or WIZARD_DEFAULT_STATE
-    priority_slider = PRIORITY_TO_SLIDER.get(session.priority, 3)
 
-    engine_data = calculate_core_rating(
-        vehicle=vehicle,
-        state=state,
-        priority_slider=priority_slider,
-        core_mode=WIZARD_CORE_MODE,
-        user_inputs={},
-        current_vehicle_annual_cost=None,
-    )
-
-    annual_cost_cents = engine_data.get("total_annual_cost") or 0
-    co2 = vehicle.tailpipe_co2_g_per_km
+    vehicles = []
+    for entry in entries:
+        v = _build_match_vehicle_entry(entry)
+        if is_suggested:
+            v["is_suggested"] = True
+        vehicles.append(v)
 
     return {
-        "vehicle": {
-            "id": str(vehicle.id),
-            "make": vehicle.brand,
-            "model": vehicle.model,
-            "year": vehicle.year,
-            "variant": vehicle.variant,
-            "powertrain_type": vehicle.powertrain_type,
-            "core_rating": engine_data.get("core_rating"),
-            "band_name": engine_data.get("band_name"),
-            "annual_running_cost_estimate": annual_cost_cents,
-            "annual_running_cost_display": _format_cents(annual_cost_cents),
-            "co2_g_per_km": co2,
-            "is_estimate": True,
-            **({"is_suggested": True} if is_suggested else {}),
-            "resale_value_5yr_estimate": {"locked": True, "value": None},
-            "est_cost_difference": {"locked": True, "value": None},
-            "driveaway_price_estimate": {"locked": True, "value": None},
-        },
+        # Top match kept under "vehicle" for backward compatibility.
+        "vehicle": vehicles[0] if vehicles else None,
+        "vehicles": vehicles,
+        "result_count": len(vehicles),
+        "is_suggested": is_suggested,
         "session_token": session.session_token,
         "meta": {
             "calculated_at": timezone.now().isoformat(),
@@ -297,14 +298,14 @@ def process_free_match(payload: dict) -> dict:
         
     session.save()
     
-    vehicle, is_suggested = match_vehicle_for_wizard(session)
-    if not vehicle:
+    entries, is_suggested = match_vehicle_for_wizard(session)
+    if not entries:
         raise RuntimeError("No match could be found.")
         
-    session.matched_vehicle = vehicle
+    session.matched_vehicle = entries[0]["vehicle"]
     session.save(update_fields=["matched_vehicle"])
     
-    return build_match_response(vehicle, session, is_suggested)
+    return build_match_response(entries, session, is_suggested)
 
 
 @transaction.atomic
