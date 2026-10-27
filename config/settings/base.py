@@ -365,4 +365,4 @@ GOOGLE_PLACES_API_KEY = env('GOOGLE_PLACES_API_KEY', default='')
 # xAI (Grok) vision — vehicle image classification / scraping validation
 GROK_API_KEY = env('GROK_API_KEY', default='')
 XAI_BASE_URL = env('XAI_BASE_URL', default='https://api.x.ai/v1')
-XAI_VISION_MODEL = env('XAI_VISION_MODEL', default='grok-2-vision-1212')
+XAI_VISION_MODEL = env('XAI_VISION_MODEL', default='grok-4.3')

@@ -38,7 +38,7 @@ BLACKLISTED_DOMAINS = (
 
 GROK_API_KEY = getattr(settings, "GROK_API_KEY", os.environ.get("GROK_API_KEY", ""))
 XAI_BASE_URL = getattr(settings, "XAI_BASE_URL", "https://api.x.ai/v1")
-XAI_VISION_MODEL = getattr(settings, "XAI_VISION_MODEL", "grok-2-vision-1212")
+XAI_VISION_MODEL = getattr(settings, "XAI_VISION_MODEL", "grok-4.3")
 
 VERDICT_MAP = {
     "real_photo": "real_photo",
