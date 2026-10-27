@@ -89,10 +89,52 @@ class VehicleCalculatorLookupResponseSerializer(serializers.Serializer):
 # Database Lookup & Matching Helper
 # ---------------------------------------------------------------------------
 
+def _token_filters(tokens, fields):
+    """Q object requiring EVERY token to appear in at least one of the fields."""
+    q = Q()
+    for t in tokens:
+        tq = Q()
+        for f in fields:
+            tq |= Q(**{f'{f}__icontains': t})
+        q &= tq
+    return q
+
+
+def _score_candidate(make, model, variant, year, tokens):
+    """Rank candidates: model-token hits weigh most, then variant, brand, newest year."""
+    make, model = make.casefold(), model.casefold()
+    variant = (variant or '').casefold()
+    score = 0
+    for t in tokens:
+        if t in model:
+            score += 4
+        elif t in variant:
+            score += 3
+        elif t in make:
+            score += 2
+    return (score, year or 0)
+
+
+def _best_vehicle(candidates, tokens):
+    return max(candidates, key=lambda v: _score_candidate(v.brand, v.model, v.variant, v.year, tokens))
+
+
+def _best_identity(candidates, tokens):
+    return max(candidates, key=lambda v: _score_candidate(v.make, v.model, v.variant, v.year, tokens))
+
+
 def find_vehicle_by_name(query: str) -> Optional[Tuple[str, Any]]:
     """
     Search `Vehicle` and `VehicleIdentity` by full name, variant, or fuzzy title match.
     Returns tuple of ('vehicle'|'identity', matched_instance) or None.
+
+    Matching order:
+      1. Exact token match (all tokens incl. model numbers like "CX-5" -> cx, 5)
+         on Vehicle, year-filtered when a year is given.
+      2. Exact token match on VehicleIdentity when a year is given but the
+         catalogue has no vehicle that year (older/discontinued cars).
+      3. Exact token match without year filter.
+      4. Trigram fuzzy fallback (catches typos like "toytota corola").
     """
     cleaned_query = query.strip()
     if not cleaned_query:
@@ -102,7 +144,34 @@ def find_vehicle_by_name(query: str) -> Optional[Tuple[str, Any]]:
     year_match = re.search(r'\b(19\d\d|20\d\d)\b', cleaned_query)
     year = int(year_match.group(1)) if year_match else None
 
-    # Build annotated Vehicle queryset with concatenated full title
+    # Alphanumeric tokens; keep short digit tokens (model numbers like "3" or
+    # the "5" in "CX-5") — dropping them is what made CX-5 match a CX-3.
+    tokens = [t for t in re.split(r'[^a-z0-9]+', cleaned_query.casefold())
+              if t and not (t.isdigit() and len(t) == 4)]
+
+    # 1-3. Exact token matching
+    if tokens:
+        vehicle_matches = Vehicle.objects.filter(
+            _token_filters(tokens, ['brand', 'model', 'variant']))
+        if year:
+            year_matches = vehicle_matches.filter(year=year)
+            if year_matches.exists():
+                return ('vehicle', _best_vehicle(year_matches, tokens))
+            # Catalogue has nothing for that year: the car is likely older —
+            # try the GVG identity dataset for the exact year before falling
+            # back to a different-year catalogue vehicle.
+            identity_matches = VehicleIdentity.objects.filter(
+                _token_filters(tokens, ['make', 'model', 'variant']), year=year)
+            if identity_matches.exists():
+                return ('identity', _best_identity(identity_matches, tokens))
+        if vehicle_matches.exists():
+            return ('vehicle', _best_vehicle(vehicle_matches, tokens))
+        identity_matches = VehicleIdentity.objects.filter(
+            _token_filters(tokens, ['make', 'model', 'variant']))
+        if identity_matches.exists():
+            return ('identity', _best_identity(identity_matches, tokens))
+
+    # 4. Trigram fuzzy fallback (typo tolerance) — vehicle first, then identity
     vehicle_qs = Vehicle.objects.annotate(
         full_title=Concat(
             Cast('year', CharField()), Value(' '),
@@ -110,60 +179,29 @@ def find_vehicle_by_name(query: str) -> Optional[Tuple[str, Any]]:
             'model', Value(' '),
             'variant'
         ),
-        title_no_year=Concat(
-            'brand', Value(' '),
-            'model', Value(' '),
-            'variant'
-        )
     )
 
-    # 1. Trigram search on Vehicle
-    # If a year was specified, first try filtering by that year for accuracy
     if year:
-        year_filtered_qs = vehicle_qs.filter(year=year).annotate(
+        best_v = vehicle_qs.filter(year=year).annotate(
             similarity=TrigramSimilarity('full_title', cleaned_query)
-        ).filter(similarity__gte=0.25).order_by('-similarity')
-        best_v = year_filtered_qs.first()
+        ).filter(similarity__gte=0.25).order_by('-similarity').first()
         if best_v and best_v.similarity >= 0.30:
             return ('vehicle', best_v)
 
-    # General trigram search across all years
-    general_trigram_qs = vehicle_qs.annotate(
+    best_v = vehicle_qs.annotate(
         similarity=TrigramSimilarity('full_title', cleaned_query)
-    ).filter(similarity__gte=0.25).order_by('-similarity')
-    best_v = general_trigram_qs.first()
+    ).filter(similarity__gte=0.25).order_by('-similarity').first()
     if best_v and best_v.similarity >= 0.35:
         return ('vehicle', best_v)
 
-    # 2. Token / icontains matching fallback on Vehicle
-    tokens = [t for t in re.split(r'[\s\-_]+', cleaned_query) if len(t) > 1 and not (t.isdigit() and len(t) == 4)]
-    if tokens:
-        q_tokens = Q()
-        for t in tokens:
-            q_tokens &= (Q(brand__icontains=t) | Q(model__icontains=t) | Q(variant__icontains=t))
-        token_match = vehicle_qs.filter(q_tokens).order_by('-year').first()
-        if token_match:
-            return ('vehicle', token_match)
-
-    # 3. Search VehicleIdentity (GVG / prior-year dataset)
     identity_qs = VehicleIdentity.objects.all()
     if year:
         identity_qs = identity_qs.filter(year=year)
-
     best_vi = identity_qs.annotate(
         similarity=TrigramSimilarity('search_text', cleaned_query.lower())
     ).filter(similarity__gte=0.25).order_by('-similarity').first()
     if best_vi and best_vi.similarity >= 0.30:
         return ('identity', best_vi)
-
-    # Token fallback on VehicleIdentity
-    if tokens:
-        q_vi = Q()
-        for t in tokens:
-            q_vi &= (Q(make__icontains=t) | Q(model__icontains=t) | Q(variant__icontains=t))
-        vi_token_match = VehicleIdentity.objects.filter(q_vi).order_by('-year').first()
-        if vi_token_match:
-            return ('identity', vi_token_match)
 
     return None
 

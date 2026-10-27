@@ -120,6 +120,72 @@ class VehicleCalculatorLookupAPITestCase(TestCase):
             }
         )
 
+    def _make_vehicle(self, brand, model, year, variant, **overrides):
+        defaults = dict(
+            body_style='SUV',
+            num_seats=5,
+            drive='Front',
+            powertrain_type=PowertrainType.PETROL,
+            energy_norm='petrol',
+            fcai_category='Medium SUV',
+            fcai_broad='SUVs',
+            engine_l=2.0,
+            fuel_consumption_per_100km=8.0,
+            test_cycle=TestCycle.ADR,
+            driveaway_price_by_state={'NSW': 4000000},
+        )
+        defaults.update(overrides)
+        return Vehicle.objects.create(brand=brand, model=model, year=year, variant=variant, **defaults)
+
+    def test_lookup_distinguishes_cx5_from_cx3(self):
+        """Regression: '2025 Mazda CX-5 Maxx' used to return the CX-3 Maxx Sport."""
+        self._make_vehicle('Mazda', 'CX-3', 2025, 'Maxx Sport')
+        self._make_vehicle('Mazda', 'CX-5', 2025, 'Maxx')
+
+        url = '/api/v1/vehicles/lookup/?name=2025%20Mazda%20CX-5%20Maxx&state=NSW'
+        response = self.client.get(url, HTTP_HOST='localhost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        vf = response.json()['vehicle_found']
+        self.assertEqual(vf['brand'], 'Mazda')
+        self.assertEqual(vf['model'], 'CX-5')
+        self.assertEqual(vf['variant'], 'Maxx')
+
+    def test_lookup_identity_for_discontinued_year(self):
+        """Regression: '2015 Mazda 3 Neo' used to fall back to any 2015 Mazda token match
+        (a CX-3) instead of the exact-year VehicleIdentity record."""
+        self._make_vehicle('Mazda', 'CX-3', 2025, 'Maxx')
+        VehicleIdentity.objects.create(
+            make='Mazda',
+            model='3',
+            year=2015,
+            variant='Neo',
+            body_style='sedan',
+            fcai_category='Small',
+            powertrain_type=PowertrainType.PETROL,
+            fuel_type_raw='petrol',
+            driveaway_price_estimate=2000000,
+        )
+
+        url = '/api/v1/vehicles/lookup/?name=2015%20Mazda%203%20Neo&state=NSW'
+        response = self.client.get(url, HTTP_HOST='localhost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        vf = response.json()['vehicle_found']
+        self.assertEqual(vf['brand'], 'Mazda')
+        self.assertEqual(vf['model'], '3')
+        self.assertEqual(vf['year'], 2015)
+        self.assertEqual(vf['variant'], 'Neo')
+
+    def test_lookup_without_year_still_matches_catalogue(self):
+        """Guard against the AND-token filter being too strict: 'LDV V80' with no year
+        must still resolve to the seeded 2025 catalogue vehicle."""
+        url = '/api/v1/vehicles/lookup/?name=LDV%20V80&state=NSW'
+        response = self.client.get(url, HTTP_HOST='localhost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()['vehicle_found']['model'], 'V80')
+
     def test_lookup_successful_vehicle_exact_name(self):
         url = '/api/v1/vehicles/lookup/?name=2025%20LDV%20V80%20High%20Roof&state=NSW'
         response = self.client.get(url, HTTP_HOST='localhost')
