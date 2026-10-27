@@ -98,12 +98,13 @@ def _score_candidate(make, model, variant, year, tokens):
     Score a candidate against query tokens and report whether the query fully
     identifies the model.
 
-    Returns (coverage, score). Coverage is 1 when every word of the model name
-    appears in the query tokens — e.g. "mazda 3" fully identifies model "3"
-    but NOT "CX-3" (the model also contains "cx"). This stops near-miss models
-    from outranking an exact model match on a year coincidence: without it,
-    "2015 mazda 3 neo" would rank a 2015 CX-3 (year exact) above the 2014
-    Mazda 3, and "2025 mazda cx-5 maxx" would fall through to a CX-3.
+    Returns (coverage, score, brand_hit, model_hits). Coverage is 1 when every
+    word of the model name appears in the query tokens — e.g. "mazda 3" fully
+    identifies model "3" but NOT "CX-3" (the model also contains "cx"). This
+    stops near-miss models from outranking an exact model match on a year
+    coincidence: without it, "2015 mazda 3 neo" would rank a 2015 CX-3 (year
+    exact) above the 2014 Mazda 3, and "2025 mazda cx-5 maxx" would fall
+    through to a CX-3.
     """
     make = (make or '').casefold()
     model = (model or '').casefold()
@@ -111,23 +112,27 @@ def _score_candidate(make, model, variant, year, tokens):
     compact_model = re.sub(r'[^a-z0-9]', '', model)
 
     score = 0
+    brand_hit = False
+    model_hits = []
     for t in tokens:
         if t in model or (len(t) >= 3 and compact_model and t in compact_model):
             score += 4
+            model_hits.append(t)
         elif t in variant:
             score += 3
         elif t in make:
             score += 2
+            brand_hit = True
 
     coverage = (
         all(t in tokens for t in _model_tokens(model))
         or any(compact_model and compact_model in t for t in tokens)
     )
-    return (1 if coverage else 0), score
+    return (1 if coverage else 0), score, brand_hit, model_hits
 
 
 def _rank_key(make, model, variant, year, tokens, query_year):
-    coverage, score = _score_candidate(make, model, variant, year, tokens)
+    coverage, score, _, _ = _score_candidate(make, model, variant, year, tokens)
     yr = year or 0
     year_exact = bool(query_year and yr == query_year)
     year_diff = abs(yr - query_year) if (query_year and yr) else 0
@@ -137,17 +142,25 @@ def _rank_key(make, model, variant, year, tokens, query_year):
 def _best_scored(queryset, fields, tokens, query_year):
     """
     Iterate DB-prefiltered candidates (any token hits make/brand, model or
-    variant), keep eligible ones (model fully covered by the query AND at
-    least one model token hit), and return the best-ranked instance.
+    variant), keep eligible ones, and return the best-ranked instance.
+    Eligibility = the model is fully covered by the query tokens AND the model
+    is genuinely identified: either the brand matched, or the model match is
+    distinctive (two+ tokens, or a single token of 3+ chars). This rejects
+    one-digit coincidences like "3" hitting Smart "#3", while still accepting
+    brandless queries such as "corolla" or "land cruiser".
     `fields` maps (brand_field, model_field, variant_field, year_field).
     """
     brand_f, model_f, variant_f, year_f = fields
     best_obj, best_key = None, None
     for row in queryset:
-        key = _rank_key(getattr(row, brand_f), getattr(row, model_f),
-                        getattr(row, variant_f), getattr(row, year_f),
-                        tokens, query_year)
-        if key[0] and key[1] >= 4 and (best_key is None or key > best_key):
+        fields_vals = (getattr(row, brand_f), getattr(row, model_f),
+                       getattr(row, variant_f), getattr(row, year_f))
+        coverage, score, brand_hit, model_hits = _score_candidate(*fields_vals, tokens)
+        distinctive = len(model_hits) >= 2 or any(len(t) >= 3 for t in model_hits)
+        if not (coverage and score >= 4 and (brand_hit or distinctive)):
+            continue
+        key = _rank_key(*fields_vals, tokens, query_year)
+        if best_key is None or key > best_key:
             best_obj, best_key = row, key
     return best_obj
 

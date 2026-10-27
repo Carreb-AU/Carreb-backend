@@ -219,6 +219,32 @@ class VehicleCalculatorLookupAPITestCase(TestCase):
         self.assertEqual(vf['model'], '3')
         self.assertEqual(vf['year'], 2014)
 
+    def test_lookup_single_digit_model_needs_brand_or_distinctive_match(self):
+        """Regression (prod data): '2015 Mazda 3 Neo' matched Smart '#3' in the
+        catalogue — the bare digit '3' is not a distinctive model match, so the
+        car is only eligible when the brand also matches. Result must be the
+        2014 Mazda 3 identity, not a digit coincidence."""
+        self._make_vehicle('Smart', '#3', 2026, 'Brabus')
+        VehicleIdentity.objects.create(
+            make='Mazda',
+            model='3',
+            year=2014,
+            variant='Hatch',
+            body_style='hatchback',
+            fcai_category='Small',
+            powertrain_type=PowertrainType.PETROL,
+            fuel_type_raw='petrol',
+            driveaway_price_estimate=1900000,
+        )
+
+        url = '/api/v1/vehicles/lookup/?name=2015%20Mazda%203%20Neo&state=NSW'
+        response = self.client.get(url, HTTP_HOST='localhost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        vf = response.json()['vehicle_found']
+        self.assertEqual(vf['brand'], 'Mazda')
+        self.assertEqual(vf['model'], '3')
+
     def test_lookup_without_year_still_matches_catalogue(self):
         """Guard: 'LDV V80' with no year must still resolve to the catalogue vehicle."""
         url = '/api/v1/vehicles/lookup/?name=LDV%20V80&state=NSW'
