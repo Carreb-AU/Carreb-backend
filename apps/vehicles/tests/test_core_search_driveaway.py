@@ -91,8 +91,7 @@ class CoreSearchDriveawayTest(TestCase):
         self.assertEqual(aston['driveaway_price'], 32500000)
         self.assertEqual(aston['driveaway_price_display'], '$325,000')
 
-    def test_search_returns_one_variant_per_model_cheapest_wins(self):
-        # A dearer variant (v1, $129k) and a different-year variant of the
+    def test_search_returns_one_variant_per_model_cheapest_wins(self):        # A dearer variant (v1, $129k) and a different-year variant of the
         # same model line; the cheapest one must be the only result.
         v3 = Vehicle.objects.create(
             brand='Alpina',
@@ -130,6 +129,88 @@ class CoreSearchDriveawayTest(TestCase):
         self.assertEqual(len(alpina), 1)
         self.assertEqual(alpina[0]['variant'], 'B3 Touring')
         self.assertEqual(alpina[0]['driveaway_price'], 9900000)
+
+    def test_better_rated_trim_within_price_tolerance_wins(self):
+        # Cheapest variant is $99k @ 3.0 stars; a $104k trim (within +10%)
+        # rates slightly higher and must represent the model line instead.
+        v_cheap = Vehicle.objects.create(
+            brand='Renault',
+            model='Koleos',
+            year=2024,
+            variant='Life',
+            fcai_category='Medium SUV',
+            powertrain_type='petrol',
+            tailpipe_co2_g_per_km=175.0,
+            driveaway_price_by_state={'NSW': 9900000},
+            mode_data_by_state={
+                'NSW': {
+                    'B': {
+                        'stars': 3.0,
+                        'mode_coo_pa': 21000.00,
+                        'mode_5yr_coo': 105000.00,
+                        'annual_co2_kg': 2900,
+                    }
+                }
+            }
+        )
+        v_smart = Vehicle.objects.create(
+            brand='Renault',
+            model='Koleos',
+            year=2024,
+            variant='Zen',
+            fcai_category='Medium SUV',
+            powertrain_type='petrol',
+            tailpipe_co2_g_per_km=178.0,
+            driveaway_price_by_state={'NSW': 10400000},
+            mode_data_by_state={
+                'NSW': {
+                    'B': {
+                        'stars': 3.05,
+                        'mode_coo_pa': 21500.00,
+                        'mode_5yr_coo': 107500.00,
+                        'annual_co2_kg': 2950,
+                    }
+                }
+            }
+        )
+        # Priced beyond +10% of the $99k baseline — must never be selected
+        Vehicle.objects.create(
+            brand='Renault',
+            model='Koleos',
+            year=2024,
+            variant='Intens',
+            fcai_category='Medium SUV',
+            powertrain_type='petrol',
+            tailpipe_co2_g_per_km=180.0,
+            driveaway_price_by_state={'NSW': 12000000},
+            mode_data_by_state={
+                'NSW': {
+                    'B': {
+                        'stars': 5.0,
+                        'mode_coo_pa': 23000.00,
+                        'mode_5yr_coo': 115000.00,
+                        'annual_co2_kg': 3000,
+                    }
+                }
+            }
+        )
+
+        payload = {
+            "target_band_slug": "steady-cruiser",
+            "fcai_category": "Medium SUV",
+            "state": "NSW",
+            "priority_slider": 3,
+            "core_mode": "pure_cost",
+            "user_inputs": {"annual_km": 15000}
+        }
+        response = self.client.post('/api/core-rating/search/', data=payload, format='json')
+        self.assertEqual(response.status_code, 200)
+        data = response.json().get('data', [])
+
+        koleos = [item for item in data if item['brand'] == 'Renault']
+        self.assertEqual(len(koleos), 1)
+        self.assertEqual(koleos[0]['variant'], 'Zen')
+        self.assertEqual(koleos[0]['driveaway_price'], 10400000)
 
     def test_batch_does_not_override_candidate_driveaway_price(self):
         payload = {

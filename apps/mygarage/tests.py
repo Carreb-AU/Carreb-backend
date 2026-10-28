@@ -11,6 +11,11 @@ from apps.mygarage.models import GarageVehicle, GarageVehicleSource
 User = get_user_model()
 
 
+# Rating registry: survives queryset refetches inside the view (an instance
+# attribute like v._test_rating would be lost when the view re-queries).
+_TEST_RATINGS = {}
+
+
 def make_vehicle(rating=3.0, **kwargs):
     """Create a vehicle. `rating` is honoured via the rating-engine mock."""
     defaults = dict(
@@ -27,16 +32,20 @@ def make_vehicle(rating=3.0, **kwargs):
     )
     defaults.update(kwargs)
     v = Vehicle.objects.create(**defaults)
-    v._test_rating = rating
+    _TEST_RATINGS[(v.brand, v.model, v.variant)] = rating
     return v
 
 
 def rating_side_effect(vehicle=None, **kwargs):
-    driveaway = 0
     if vehicle is not None:
         driveaway = (vehicle.driveaway_price_by_state or {}).get("NSW") or 0
+        rating = _TEST_RATINGS.get(
+            (vehicle.brand, vehicle.model, vehicle.variant), 3.0)
+    else:
+        driveaway = 0
+        rating = 3.0
     return {
-        "core_rating": getattr(vehicle, "_test_rating", 3.0),
+        "core_rating": rating,
         "band_name": "Good",
         "total_annual_cost": driveaway,
         "est_cost_difference": None,
@@ -98,6 +107,21 @@ class AISmartMatchViewTests(TestCase):
         cx5 = [r for r in res.json()["results"] if r["model"] == "CX-5"]
         self.assertEqual(len(cx5), 1)
         self.assertEqual(cx5[0]["variant"], "Priced")
+
+    def test_better_rated_trim_within_price_tolerance_wins(self, *_mocks):
+        # Baseline $38k @ 4.0; $40k is within +10% and rates higher -> wins;
+        # $52k rates highest but is beyond the tolerance -> stays excluded.
+        make_vehicle(brand="Mazda", model="CX-5", variant="Base",
+                     driveaway_price_by_state={"NSW": 38_000_00}, rating=4.0)
+        make_vehicle(brand="Mazda", model="CX-5", variant="Smart Buy",
+                     driveaway_price_by_state={"NSW": 40_000_00}, rating=4.6)
+        make_vehicle(brand="Mazda", model="CX-5", variant="Flagship",
+                     driveaway_price_by_state={"NSW": 52_000_00}, rating=5.0)
+        res = self._post()
+        cx5 = [r for r in res.json()["results"] if r["model"] == "CX-5"]
+        self.assertEqual(len(cx5), 1)
+        self.assertEqual(cx5[0]["variant"], "Smart Buy")
+        self.assertEqual(cx5[0]["driveaway_price"], 40_000_00)
 
     def test_rating_ties_break_by_cost_not_alphabetical(self, *_mocks):
         make_vehicle(brand="Toyota", model="ZZZ Late Alpha",

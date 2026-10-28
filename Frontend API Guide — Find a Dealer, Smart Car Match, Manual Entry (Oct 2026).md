@@ -165,7 +165,7 @@ Paid plans only (`IsPaidMember`).
 
 **Behaviour guarantees (frontend can rely on these):**
 - **At least 5 results** whenever enough vehicles exist in the catalogue. Over-strict filters are relaxed automatically; anything relaxed is listed in `relaxed_filters` (e.g. `["ancap_rating_min", "budget_max"]`) — optionally surface "We relaxed: budget" as a chip.
-- **One variant per model**: each model line appears exactly once, represented by its **cheapest variant** for the user's state. A variant with no price never wins over a priced one.
+- **One variant per model**: each model line appears exactly once. The representative is the **cheapest variant** — unless a better-rated trim is within **+10%** of the cheapest price, in which case that smarter-buy trim wins. A variant with no price never beats a priced one.
 - **Named-car boost**: if the user names a make/model (e.g. "Mazda CX-5"), that car's results appear first and its `recommendation_reason` is prefixed with `"Your searched car — Mazda CX-5. ..."`.
 - Results are ordered by name match → CORE rating → cost. Never alphabetical.
 - `est_cost_difference` is cents vs the user's current vehicle (positive = cheaper). Display `*_display` strings directly.
@@ -324,5 +324,5 @@ Side effects: if a `vehicle_catalogue_id` is saved that isn't in the user's gara
 | Find a Dealer | New spec route `GET /api/garage/find-a-dealer/` (brand or garage_vehicle_id); results now include `phone`, `website_url`, `maps_url`, `link_url`, `rating`; outage now returns `service_unavailable: true` instead of a fake "no dealers found" |
 | Dealer analytics | `POST /api/analytics/dealer-link-clicked/` accepts `dealer_name`, `vehicle_id`, `link_url` |
 | AI Smart Match | Minimum 5 results via auto-relaxation (`relaxed_filters`); **one variant per model — cheapest wins**; named-car boost with "Your searched car" reason; rating→cost ordering (never alphabetical) |
-| Smart Car Finder (`/api/core-rating/search/`) | Deduplication changed: one vehicle per (brand, model) — cheapest variant for the state replaces cheapest-by-COO per (brand, model, year) |
+| Smart Car Finder (`/api/core-rating/search/`) | Deduplication changed: one vehicle per (brand, model) — cheapest variant for the state replaces cheapest-by-COO per (brand, model, year); better-rated trim within +10% of cheapest price wins |
 | Manual Entry | New `POST /api/current-vehicle/ai-search/` (Grok, cache-per-query) and `ai_vehicle_entry_id` on save; cascade dropdowns include "Other / not listed" |

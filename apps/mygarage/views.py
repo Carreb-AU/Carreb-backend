@@ -1439,14 +1439,25 @@ class AISmartMatchView(views.APIView):
                 members = groups.get(key)
                 if not members:
                     continue
-                # One entry per model: the cheapest variant wins. Variants
-                # without a price fall back to lowest annual cost, then rating.
-                best = min(members, key=lambda e: (
-                    e['driveaway_price'] is None,
-                    e['driveaway_price'] if e['driveaway_price'] is not None else float('inf'),
-                    e['_cost'] if e['_cost'] is not None else float('inf'),
-                    -(e['_rating'] or 0),
-                ))
+                # One entry per model. Baseline: the cheapest variant — but a
+                # better-rated trim within PRICE_TOLERANCE of the cheapest
+                # price wins (a slightly pricier trim can be the smarter buy).
+                # Unpriced variants only compete when no variant has a price.
+                PRICE_TOLERANCE = 0.10
+                priced = [e for e in members if e['driveaway_price'] is not None]
+                if priced:
+                    baseline = min(e['driveaway_price'] for e in priced)
+                    within = [e for e in priced
+                              if e['driveaway_price'] <= baseline * (1 + PRICE_TOLERANCE)]
+                    best = max(within, key=lambda e: (
+                        e['_rating'] or 0,
+                        -(e['driveaway_price'] or 0),
+                    ))
+                else:
+                    best = min(members, key=lambda e: (
+                        -(e['_rating'] or 0),
+                        e['_cost'] if e['_cost'] is not None else float('inf'),
+                    ))
                 ordered.append(best)
 
             out = []

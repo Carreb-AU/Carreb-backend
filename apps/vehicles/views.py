@@ -290,26 +290,49 @@ class CoreSearchView(views.APIView):
             
         all_vehicles = list(queryset)
         
-        # Deduplicate variants: keep ONE vehicle per (brand, model) — the
-        # cheapest variant for the requested state — so a model line never
-        # appears multiple times with different trims/years.
-        cheapest_variants = {}
+        # Deduplicate variants: keep ONE vehicle per (brand, model). Baseline
+        # is the cheapest variant for the requested state — but a trim with a
+        # higher precomputed star rating within PRICE_TOLERANCE of the cheapest
+        # price wins (a slightly pricier trim can be the smarter buy).
+        # Spec §4 mode letters: B=Pure Cost, E=COOL Choice, C=True Value, F=Full Picture
+        mode_map = {
+            'pure_cost': 'B',
+            'cool_choice': 'E',
+            'true_value': 'C',
+            'full_picture': 'F'
+        }
+        mode_letter = mode_map.get(core_mode, 'B')
+        PRICE_TOLERANCE = 0.10
+
+        def _variant_stars(v):
+            try:
+                state_data = v.mode_data_by_state.get(state, {})
+                if isinstance(state_data, dict):
+                    mode_data = state_data.get(mode_letter, {})
+                    if isinstance(mode_data, dict):
+                        return float(mode_data.get('stars') or 0)
+            except (AttributeError, ValueError, TypeError):
+                pass
+            return 0.0
+
+        by_model = {}
         for vehicle in all_vehicles:
-            val = vehicle.driveaway_price_by_state.get(state)
-            key = (vehicle.brand, vehicle.model)
-            if key not in cheapest_variants:
-                cheapest_variants[key] = (val, vehicle)
+            by_model.setdefault((vehicle.brand, vehicle.model), []).append(vehicle)
+
+        vehicles = []
+        for _, members in by_model.items():
+            priced = [v for v in members if v.driveaway_price_by_state.get(state) is not None]
+            if priced:
+                baseline = min(v.driveaway_price_by_state[state] for v in priced)
+                within = [v for v in priced
+                          if v.driveaway_price_by_state[state] <= baseline * (1 + PRICE_TOLERANCE)]
+                vehicles.append(max(within, key=lambda v: (
+                    _variant_stars(v),
+                    -(v.driveaway_price_by_state[state]),
+                )))
             else:
-                cur_val = cheapest_variants[key][0]
-                # Missing price loses to any priced variant; otherwise lowest price wins
-                if (cur_val is None and val is not None) or (
-                    val is not None and cur_val is not None and val < cur_val
-                ):
-                    cheapest_variants[key] = (val, vehicle)
-                    
-        # Extract the optimized unique vehicles
-        vehicles = [v for _, v in cheapest_variants.values()]
-        
+                vehicles.append(max(members, key=_variant_stars))
+
         # Strip vehicle-specific overrides so candidate vehicles use their own catalog pricing
         candidate_user_inputs = {
             k: v for k, v in user_inputs.items()
