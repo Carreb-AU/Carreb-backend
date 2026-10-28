@@ -44,6 +44,10 @@ class Command(BaseSheetSyncCommand):
                 if c0.lower() in ("state", "fcai_category"):
                     continue
 
+                # Annotation/changelog rows inside a section carry no amounts
+                if curr_section in ("A", "B", "C") and self._dollars_to_cents(row[1] if len(row) > 1 else None) is None:
+                    continue
+
                 # Section A: CTP by state
                 if curr_section == "A":
                     state = c0.upper()

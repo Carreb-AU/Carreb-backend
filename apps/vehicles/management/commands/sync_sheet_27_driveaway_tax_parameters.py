@@ -27,6 +27,10 @@ class Command(BaseSheetSyncCommand):
                 param = self._safe_str(row[hmap.get("parameter", 0)])
                 if not param:
                     continue
+                if self._is_annotation_row(row, hmap, ["parameter"], [
+                    "value", "effective_from", "applies_to", "source", "devspec_ref", "note",
+                ]):
+                    continue
 
                 val = self._safe_str(row[hmap.get("value", 1)])
                 eff_from = self._safe_str(row[hmap.get("effective_from", 2)])

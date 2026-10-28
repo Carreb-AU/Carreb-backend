@@ -28,6 +28,8 @@ class Command(BaseSheetSyncCommand):
                 key = self._safe_str(row[hmap.get("key", 1)])
                 if not layer or not key:
                     continue
+                if self._is_annotation_row(row, hmap, ["layer", "key"], ["modifier", "source"]):
+                    continue
 
                 modifier = self._safe_float(row[hmap.get("modifier", 2)]) or 1.0
                 source = self._safe_str(row[hmap.get("source", 3)])

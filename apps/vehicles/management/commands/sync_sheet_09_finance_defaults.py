@@ -27,6 +27,12 @@ class Command(BaseSheetSyncCommand):
                 cat_broad = self._safe_str(row[hmap.get("fcai_category_broad", 0)])
                 if not cat_broad:
                     continue
+                if self._is_annotation_row(row, hmap, ["fcai_category_broad"], [
+                    "deposit_pct", "base_rate_pct", "alt_fuel_modifier_pct", "term_months",
+                    "balloon_pct", "estab_fee_default", "estab_fee_bev", "admin_fee_monthly",
+                    "effective_from", "source",
+                ]):
+                    continue
 
                 dep_pct = self._safe_float(row[hmap.get("deposit_pct", 1)]) or 10.0
                 base_rate = self._safe_float(row[hmap.get("base_rate_pct", 2)]) or 7.5

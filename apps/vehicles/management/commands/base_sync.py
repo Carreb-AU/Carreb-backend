@@ -116,6 +116,17 @@ class BaseSheetSyncCommand(BaseCommand):
         val = row[idx]
         return val if val is not None else default
 
+    def _is_annotation_row(self, row: Any, hmap: Dict[str, int], key_cols: List[str], data_cols: List[str]) -> bool:
+        """
+        The 21-Oct-26 standalone sheets embed changelog/notes rows (e.g.
+        'NOTES — 25-Sep-26 refresh', '27-OCT-26 audit: ...') alongside real
+        data. A real data row always carries at least one value in data_cols;
+        annotation rows only have prose in the key column.
+        """
+        if not any(self._safe_str(self._row_val(row, hmap, c)) for c in key_cols):
+            return True
+        return not any(self._safe_str(self._row_val(row, hmap, c)) for c in data_cols)
+
     # -------------------------------------------------------------------------
     # Excel Loading Helper
     # -------------------------------------------------------------------------

@@ -207,7 +207,7 @@ class SubstantiationSourceRegistry(models.Model):
     carreb_table_or_sheet = models.CharField(max_length=255, help_text="Internal model or workbook sheet reference")
     primary_source = models.TextField(help_text="Primary data publisher or regulatory authority")
     url_or_publisher = models.TextField(blank=True, help_text="URLs or publisher citation")
-    data_period_in_dump = models.CharField(max_length=100, blank=True, help_text="e.g. Mar 2026, 2025-26, Oct 2024")
+    data_period_in_dump = models.CharField(max_length=255, blank=True, help_text="e.g. Mar 2026, 2025-26, Oct 2024")
     refresh_cadence = models.CharField(max_length=100, blank=True, help_text="e.g. Annually, Monthly, Quarterly, On policy change")
     accc_substantiation_class = models.TextField(blank=True, help_text="ACCC legal substantiation classification")
     order = models.IntegerField(default=0)

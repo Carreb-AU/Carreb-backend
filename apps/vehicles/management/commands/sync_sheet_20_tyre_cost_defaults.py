@@ -27,6 +27,11 @@ class Command(BaseSheetSyncCommand):
                 fcai_cat = self._safe_str(row[hmap.get("fcai_category", 0)])
                 if not fcai_cat:
                     continue
+                if self._is_annotation_row(row, hmap, ["fcai_category"], [
+                    "typical_tyre_size", "cost_per_set_4_aud", "replacement_interval_km",
+                    "annualised_cost_aud", "source",
+                ]):
+                    continue
 
                 size = self._safe_str(row[hmap.get("typical_tyre_size", 1)])
                 cost_set_cents = self._dollars_to_cents(row[hmap.get("cost_per_set_4_aud", 2)]) or 0

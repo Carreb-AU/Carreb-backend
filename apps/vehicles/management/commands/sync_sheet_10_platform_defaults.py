@@ -27,6 +27,10 @@ class Command(BaseSheetSyncCommand):
                 config_key = self._safe_str(row[hmap.get("config_key", 0)])
                 if not config_key:
                     continue
+                if self._is_annotation_row(row, hmap, ["config_key"], [
+                    "config_value", "config_type", "source_label", "last_updated", "description",
+                ]):
+                    continue
 
                 config_val = self._safe_str(row[hmap.get("config_value", 1)])
                 config_type = self._safe_str(row[hmap.get("config_type", 2)]) or "string"

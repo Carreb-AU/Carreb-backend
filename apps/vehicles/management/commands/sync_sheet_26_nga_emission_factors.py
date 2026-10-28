@@ -27,6 +27,11 @@ class Command(BaseSheetSyncCommand):
                 grid = self._safe_str(row[hmap.get("grid", 0)])
                 if not grid:
                     continue
+                if self._is_annotation_row(row, hmap, ["grid"], [
+                    "states_covered", "scope2_factor_kgco2e_per_kwh", "edition",
+                    "effective_period", "source", "devspec_ref",
+                ]):
+                    continue
 
                 states = self._safe_str(row[hmap.get("states_covered", 1)])
                 factor = self._safe_float(row[hmap.get("scope2_factor_kgco2e_per_kwh", 2)]) or 0.0

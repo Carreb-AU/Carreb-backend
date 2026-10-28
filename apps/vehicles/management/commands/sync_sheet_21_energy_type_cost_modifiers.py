@@ -27,6 +27,11 @@ class Command(BaseSheetSyncCommand):
                 comp = self._safe_str(row[hmap.get("cost_component", 0)])
                 if not comp:
                     continue
+                if self._is_annotation_row(row, hmap, ["cost_component"], [
+                    "ice_petrol", "ice_diesel", "hev_hybrid", "bev", "phev",
+                    "rationale", "confidence",
+                ]):
+                    continue
 
                 ice_petrol_val = row[hmap.get("ice_petrol", 1)]
                 ice_diesel_val = row[hmap.get("ice_diesel", 2)]

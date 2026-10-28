@@ -465,7 +465,7 @@ class DepreciationLookup(models.Model):
     key = models.CharField(max_length=100, help_text="Category name, energy type, or brand name")
     powertrain_type = models.CharField(max_length=50, blank=True, default='', help_text="Powertrain qualifier (e.g. electric, hybrid, petrol, diesel, phev, default)")
     modifier = models.FloatField(help_text="Decimal rate or multiplier (e.g. 0.45 for 45% retention, 1.15 for +15% modifier)")
-    source = models.CharField(max_length=255, blank=True, default='')
+    source = models.TextField(blank=True, default='')
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -581,7 +581,7 @@ class StateEnergyPrice(models.Model):
     diesel_cents_per_litre = models.IntegerField(null=True, blank=True, help_text="Diesel retail price in whole cents per litre (e.g. 305 for $3.05/L)")
     electricity_cents_per_kwh = models.FloatField(null=True, blank=True, help_text="Electricity retail rate in cents per kWh (e.g. 27.5 for $0.275/kWh)")
     data_period = models.CharField(max_length=100, blank=True, default='')
-    source = models.CharField(max_length=255, blank=True, default='')
+    source = models.TextField(blank=True, default='')
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -611,7 +611,7 @@ class CTPStateDefault(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     state = models.CharField(max_length=20, unique=True, help_text="State code (NSW, VIC, QLD, SA, WA, TAS, NT, ACT)")
     annual_ctp_cents = models.IntegerField(help_text="Annual CTP in whole cents (e.g. 67500 for $675)")
-    bundled_in_rego = models.CharField(max_length=50, blank=True, help_text="Whether CTP is included in registration payment")
+    bundled_in_rego = models.CharField(max_length=255, blank=True, help_text="Whether CTP is included in registration payment")
     notes = models.TextField(blank=True)
     source = models.CharField(max_length=255, blank=True)
 
@@ -672,7 +672,7 @@ class InsuranceStateModifier(models.Model):
     avg_comprehensive_cents = models.IntegerField(help_text="State average comprehensive premium in cents")
     national_avg_cents = models.IntegerField(help_text="National baseline benchmark in cents")
     state_modifier = models.FloatField(help_text="Multiplier relative to national benchmark (e.g. 1.178 for NSW, 1.510 for VIC)")
-    relative_to_national = models.CharField(max_length=50, blank=True, help_text="e.g. +17.8%, +51.0%")
+    relative_to_national = models.CharField(max_length=255, blank=True, help_text="e.g. +17.8%, +51.0%")
     explanation = models.TextField(blank=True)
     source = models.CharField(max_length=255, blank=True)
 
@@ -1091,8 +1091,8 @@ class NGAEmissionFactor(models.Model):
     states_covered = models.CharField(max_length=100, help_text="Jurisdiction or state code covered (e.g. NSW, ACT, VIC, Australia)")
     scope2_factor_kgco2e_per_kwh = models.FloatField(help_text="Scope 2 emission factor in kg CO2-e per kWh (e.g. 0.64, 0.78, 0.20)")
     edition = models.CharField(max_length=100, blank=True, help_text="e.g. NGA Factors 2025 (DCCEEW)")
-    effective_period = models.CharField(max_length=100, blank=True, help_text="e.g. FY2025-26 (current to ~Aug 2026)")
-    source = models.CharField(max_length=255, blank=True)
+    effective_period = models.CharField(max_length=255, blank=True, help_text="e.g. FY2025-26 (current to ~Aug 2026)")
+    source = models.TextField(blank=True)
     devspec_ref = models.CharField(max_length=100, blank=True, help_text="e.g. Calc §2.10 Emissions; §8 Dataset")
     note = models.TextField(blank=True)
 
@@ -1142,8 +1142,8 @@ class DriveawayTaxParameter(models.Model):
     Powers Australian Luxury Car Tax (LCT), state stamp duty schedules, fuel excise, and EV rebate calculations.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    parameter = models.CharField(max_length=255, unique=True, help_text="e.g. LCT threshold — fuel-efficient, VIC EV cash subsidy")
-    value = models.CharField(max_length=255, help_text="Configured value, status, or formula rule")
+    parameter = models.CharField(max_length=500, unique=True, help_text="e.g. LCT threshold — fuel-efficient, VIC EV cash subsidy")
+    value = models.TextField(help_text="Configured value, status, or formula rule")
     effective_from = models.CharField(max_length=100, blank=True, help_text="e.g. 2026-07-01, ongoing, to 2027-06-30")
     applies_to = models.CharField(max_length=255, blank=True, help_text="Target vehicle scope or jurisdiction")
     source = models.CharField(max_length=255, blank=True, help_text="Statutory authority or revenue office")

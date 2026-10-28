@@ -28,6 +28,11 @@ class Command(BaseSheetSyncCommand):
                 cat = self._safe_str(row[hmap.get("data_category", 0)])
                 if not cat:
                     continue
+                if self._is_annotation_row(row, hmap, ["data_category"], [
+                    "carreb_table_or_sheet", "primary_source", "url_or_publisher",
+                    "data_period_in_dump", "refresh_cadence", "accc_substantiation_class",
+                ]):
+                    continue
 
                 sheet_ref = self._safe_str(row[hmap.get("carreb_table_or_sheet", 1)])
                 primary_src = self._safe_str(row[hmap.get("primary_source", 2)])

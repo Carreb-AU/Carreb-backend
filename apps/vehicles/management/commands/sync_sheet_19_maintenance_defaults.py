@@ -27,6 +27,11 @@ class Command(BaseSheetSyncCommand):
                 fcai_cat = self._safe_str(row[hmap.get("fcai_category", 0)])
                 if not fcai_cat:
                     continue
+                if self._is_annotation_row(row, hmap, ["fcai_category"], [
+                    "representative_vehicle", "service_interval", "five_year_total_aud",
+                    "annual_avg_aud", "year1_aud", "year5_aud", "source",
+                ]):
+                    continue
 
                 rep_veh = self._safe_str(row[hmap.get("representative_vehicle", 1)])
                 interval = self._safe_str(row[hmap.get("service_interval", 2)])
