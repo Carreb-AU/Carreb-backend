@@ -144,27 +144,34 @@ Return ONLY a valid JSON object with this exact schema:
 ANCAP ratings did not exist before 1993, so for older vehicles return null. If the exact model-year rating is unknown, use your best estimate and set confidence to low. Do not return any text outside the JSON object."""
 
 
-def _call_openai_json(prompt: str, model: str = "gpt-4o-mini") -> dict:
-    """Call OpenAI with a prompt and return parsed JSON, or {} on failure."""
-    if not OPENAI_API_KEY:
-        logger.error("OpenAI API key is missing; cannot run field estimation.")
+def _call_grok_json(prompt: str) -> dict:
+    """Call Grok (xAI) with a prompt and return parsed JSON, or {} on failure.
+
+    Uses the shared xai_client() so field estimation rides on the same
+    GROK_API_KEY as AI Smart Match and image AI. Replaces the old OpenAI
+    path (gpt-4o-mini), whose key was never provisioned on the server.
+    """
+    from apps.vehicles.services.image_ai import GROK_API_KEY, xai_client
+    from apps.vehicles.services.ai_vehicle_search import XAI_CHAT_MODEL
+
+    if not GROK_API_KEY:
+        logger.error("GROK_API_KEY is missing; cannot run field estimation.")
         return {}
 
-    client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=8.0)
     try:
-        response = client.chat.completions.create(
-            model=model,
+        response = xai_client().chat.completions.create(
+            model=XAI_CHAT_MODEL,
             messages=[
                 {"role": "system", "content": "You return only valid JSON."},
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
-            timeout=8.0,
+            timeout=30.0,
         )
         content = response.choices[0].message.content
         return json.loads(content)
     except Exception as e:
-        logger.error(f"OpenAI JSON call failed: {e}")
+        logger.error(f"Grok JSON call failed: {e}")
         return {}
 
 
@@ -176,7 +183,7 @@ def estimate_engine_displacement(make: str, model: str, variant: str, year: int)
         variant=variant or '',
         year=year or '',
     )
-    result = _call_openai_json(prompt)
+    result = _call_grok_json(prompt)
     engine_l = result.get('engine_l')
     if engine_l is None:
         return None
@@ -193,7 +200,7 @@ def estimate_ancap_rating(make: str, model: str, year: int) -> Optional[int]:
         model=model or '',
         year=year or '',
     )
-    result = _call_openai_json(prompt)
+    result = _call_grok_json(prompt)
     rating = result.get('ancap_rating')
     if rating is None:
         return None
