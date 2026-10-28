@@ -1,8 +1,10 @@
-# Frontend API Guide — Find a Dealer · AI Smart Match · Manual Entry
+# Frontend API Guide — Find a Dealer · AI Smart Match · Manual Entry · Finance
 
 **Base URL:** `https://api.carreb.com.au`
 **Auth:** all endpoints except where noted require `Authorization: Bearer <access_token>`
 (login: `POST /api/users/login/` with `{"email", "password"}` → `access` token)
+
+**Sections:** 1. Find a Dealer · 2. AI Smart Match · 3. Vehicle Lookup & Manual Entry · 4. Finance Section
 
 ---
 
@@ -366,6 +368,43 @@ Clear/Default chips: reset each field to the value in this response.
 }
 ```
 `loan_amount` can also be sent explicitly (overrides the driveaway−deposit calculation). Precedence when a value is omitted: `user_inputs` → FinanceDefaults for the vehicle's category.
+
+### Worked example (pinned test)
+
+$41,490 car, 10% deposit ($4,149), $37,341 financed, 60 months at 8.78%, no balloon:
+
+| Value | Result |
+|---|---|
+| Monthly repayment (P&I, fees excluded) | **$771.16** (`monthly_repayment_display`: `"$771"`) |
+| Yearly interest + fees (header value) | **$1,985.68** (`finance_cost_pa_display`: `"$1,986"`) |
+
+Interest+fees breakdown of the header: interest $8,928.41 over the term ÷ 5 = $1,785.68; fees ($400 establishment + $10×60 admin = $1,000) ÷ 5 = $200 → **$1,985.68/yr**.
+
+### Live responses (production)
+
+Petrol SUV (Mazda CX-5 G25 Pure, $44,379, NSW — category base rate 7.5%):
+```json
+"finance": {
+  "deposit_pct": 10.0, "deposit_amount": 4437.9, "loan_amount": 39941.1,
+  "loan_term_months": 60, "interest_rate_pct": 7.5,
+  "balloon_pct": 0.0, "balloon_amount": 0.0,
+  "monthly_repayment": 800.34, "monthly_repayment_display": "$800",
+  "finance_cost_pa": 1815.86, "finance_cost_pa_display": "$1,816",
+  "estab_fee": 400.0, "admin_fee_monthly": 10.0
+}
+```
+
+BEV (Tesla Model 3, $68,900, NSW — alt-fuel modifier −1.5 pp applied, BEV establishment-fee tier):
+```json
+"interest_rate_pct": 6.0, "estab_fee": 300.0, "monthly_repayment_display": "$1,199"
+```
+
+### Notes
+
+- **Current production defaults** (synced from the workbook's FinanceDefaults tab): deposit 10%, base rate **7.5%** (15% / 8.0% for Heavy Commercial), alt-fuel modifier −1.5 pp, term 60, balloon 0, establishment fee $400 ($300 BEV), admin fee $10/month. When the FinanceDefaults tab is updated and re-synced, every number above follows automatically — do not hardcode them in the UI; always bind to the response fields.
+- `monthly_repayment` is principal & interest only. The establishment and admin fees are **not** in the monthly figure — they only appear inside `finance_cost_pa`. Label the header "Finance – $X/yr" accordingly (or as designed in the spec) so users don't expect the fees in the monthly number.
+- The alt-fuel modifier applies to BEV and PHEV; `interest_rate_pct` already has it applied, so display it directly.
+- Recalculation: on the client, changing any editable field should ideally re-call the lookup/rating endpoint with updated `user_inputs` rather than recomputing locally — server-side is the single source of truth.
 
 ---
 
