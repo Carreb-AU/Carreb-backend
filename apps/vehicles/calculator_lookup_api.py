@@ -65,9 +65,19 @@ class VehicleCostsPaSerializer(serializers.Serializer):
 
 
 class FinanceSerializer(serializers.Serializer):
-    loan_amount = serializers.FloatField(help_text="Financed loan principal in dollars")
-    loan_term_months = serializers.IntegerField(help_text="Loan term in months")
-    monthly_repayment = serializers.FloatField(help_text="Estimated monthly loan repayment in dollars")
+    deposit_pct = serializers.FloatField(help_text="Deposit as % of driveaway (default from FinanceDefaults, typically 10)")
+    deposit_amount = serializers.FloatField(help_text="Deposit in dollars (driveaway × deposit_pct)")
+    loan_amount = serializers.FloatField(help_text="Financed loan principal in dollars (driveaway − deposit)")
+    loan_term_months = serializers.IntegerField(help_text="Loan term in months (default from FinanceDefaults, typically 60)")
+    interest_rate_pct = serializers.FloatField(help_text="Interest rate % p.a. before fees (FinanceDefaults base rate + alt-fuel modifier for BEV/PHEV)")
+    balloon_pct = serializers.FloatField(help_text="End-of-term balloon/residual as % of loan (default from FinanceDefaults)")
+    balloon_amount = serializers.FloatField(help_text="Balloon amount in dollars")
+    monthly_repayment = serializers.FloatField(help_text="Calculated monthly P&I repayment in dollars (read-only; fees excluded)")
+    monthly_repayment_display = serializers.CharField(help_text="Formatted monthly repayment, e.g. '$771'")
+    finance_cost_pa = serializers.FloatField(help_text="Calculated yearly interest + fees in dollars (for the 'Finance – $X' header)")
+    finance_cost_pa_display = serializers.CharField(help_text="Formatted yearly interest + fees, e.g. '$1,987'")
+    estab_fee = serializers.FloatField(help_text="One-off establishment fee in dollars")
+    admin_fee_monthly = serializers.FloatField(help_text="Monthly admin fee in dollars")
 
 
 class EnvironmentSerializer(serializers.Serializer):
@@ -462,8 +472,23 @@ def build_prefill_payload(source_type: str, vehicle_obj: Any, query: str, state:
         base_rate += fin_default.alt_fuel_modifier_pct
 
     loan_term_months = fin_default.term_months if fin_default else 60
-    loan_amount = round(driveaway_price * (1.0 - (deposit_pct / 100.0)), 2)
-    monthly_repayment = round(calculate_monthly_repayment(loan_amount, base_rate, loan_term_months), 2)
+    balloon_pct = fin_default.balloon_pct if fin_default else 0.0
+
+    deposit_amount = round(driveaway_price * deposit_pct / 100.0, 2)
+    loan_amount = round(driveaway_price - deposit_amount, 2)
+    balloon_amount = round(loan_amount * balloon_pct / 100.0, 2)
+    monthly_repayment = round(
+        calculate_monthly_repayment(loan_amount, base_rate, loan_term_months, balloon_amount), 2)
+
+    # Yearly interest + fees for the "Finance – $X" header. Fees: monthly
+    # admin fee across the term + one-off establishment fee (BEV rate for BEVs).
+    estab_fee_cents = (fin_default.estab_fee_bev if is_bev else fin_default.estab_fee_default) \
+        if fin_default else 40000
+    admin_fee_cents = fin_default.admin_fee_monthly if fin_default else 1000
+    years = loan_term_months / 12.0
+    interest_total = monthly_repayment * loan_term_months + balloon_amount - loan_amount
+    finance_cost_pa = round(
+        interest_total / years + (admin_fee_cents * loan_term_months + estab_fee_cents) / 100.0 / years, 2)
 
     # 5. Environment
     if mode_data.get('B', {}).get('annual_co2_kg') is not None:
@@ -514,9 +539,19 @@ def build_prefill_payload(source_type: str, vehicle_obj: Any, query: str, state:
             "depreciation_percentage": depreciation_percentage,
         },
         "finance": {
+            "deposit_pct": deposit_pct,
+            "deposit_amount": deposit_amount,
             "loan_amount": loan_amount,
             "loan_term_months": loan_term_months,
+            "interest_rate_pct": round(base_rate, 2),
+            "balloon_pct": balloon_pct,
+            "balloon_amount": balloon_amount,
             "monthly_repayment": monthly_repayment,
+            "monthly_repayment_display": f"${monthly_repayment:,.0f}",
+            "finance_cost_pa": finance_cost_pa,
+            "finance_cost_pa_display": f"${finance_cost_pa:,.0f}",
+            "estab_fee": estab_fee_cents / 100.0,
+            "admin_fee_monthly": admin_fee_cents / 100.0,
         },
         "environment": {
             "co2_emissions_kg_pa": co2_emissions_kg_pa,

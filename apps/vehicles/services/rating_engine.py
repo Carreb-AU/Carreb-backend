@@ -145,12 +145,55 @@ def _apply_star_co2_cap(stars: int, powertrain: str, tailpipe_co2: Optional[floa
     return stars, False, None
 
 
-def calculate_monthly_repayment(principal: float, annual_rate: float, months: int) -> float:
+def calculate_monthly_repayment(principal: float, annual_rate: float, months: int, balloon_value: float = 0.0) -> float:
+    """Monthly P&I repayment in dollars.
+
+    An end-of-term balloon (residual) is paid as a lump sum at maturity, so
+    only the net principal is amortised. Fees are NOT included in the
+    repayment — they surface in the yearly interest + fees figure instead.
+    """
+    principal = max(0.0, principal - (balloon_value or 0.0))
+    if months <= 0:
+        return 0.0
     if annual_rate == 0:
         return principal / months
     monthly_rate = (annual_rate / 100.0) / 12
     repayment = principal * (monthly_rate * math.pow(1 + monthly_rate, months)) / (math.pow(1 + monthly_rate, months) - 1)
     return repayment
+
+
+def get_finance_defaults_for_vehicle(vehicle):
+    """FinanceDefault row for a vehicle, mapped via its broad FCAI category.
+
+    Falls back to the first row when no broad-category match exists, so
+    callers always get defaults when any are configured.
+    """
+    from apps.vehicles.models import FinanceDefault
+
+    broad = (getattr(vehicle, 'fcai_broad', '') or '').strip()
+    if not broad:
+        cat = (getattr(vehicle, 'fcai_category', '') or '').lower()
+        if 'suv' in cat:
+            broad = 'SUVs'
+        elif any(w in cat for w in ('commercial', 'van', 'ute', 'mover')):
+            broad = 'Light Commercial'
+        elif 'heavy' in cat:
+            broad = 'Heavy Commercial'
+        else:
+            broad = 'Passenger Cars'
+
+    fin = FinanceDefault.objects.filter(fcai_category_broad__iexact=broad).first()
+    if not fin:
+        fin = FinanceDefault.objects.first()
+    return fin
+
+
+def _is_alt_fuel(powertrain) -> bool:
+    return str(powertrain or '').lower() in ('bev', 'electric', 'phev', 'plug-in hybrid')
+
+
+def _is_bev(powertrain) -> bool:
+    return str(powertrain or '').lower() in ('bev', 'electric')
 
 
 def _normalize_driveaway_for_loan(driveaway) -> float:
@@ -286,11 +329,32 @@ def calculate_vehicle_cost_breakdown(
             finance_annual = int(round_half_up(float(stored_mode['finance_cost_pa']) * 100, 0))
         else:
             driveaway_dollars = _normalize_driveaway_for_loan(driveaway)
-            loan_amount = user_inputs.get('loan_amount', driveaway_dollars * 0.8)  # 20% deposit
-            interest_rate = user_inputs.get('interest_rate', 7.5)
-            loan_term_months = user_inputs.get('loan_term_months', 60)
-            monthly = calculate_monthly_repayment(loan_amount, interest_rate, loan_term_months)
-            finance_annual = int(monthly * 12 * 100)  # dollars/month -> cents/year
+            fin = get_finance_defaults_for_vehicle(vehicle)
+            pt = getattr(vehicle, 'powertrain_type', '')
+
+            deposit_pct = float(user_inputs.get('deposit_pct', fin.deposit_pct if fin else 10.0))
+            base_rate = fin.base_rate_pct if fin else 7.5
+            if _is_alt_fuel(pt) and fin and fin.alt_fuel_modifier_pct:
+                base_rate += fin.alt_fuel_modifier_pct
+            interest_rate = float(user_inputs.get('interest_rate', base_rate))
+            loan_term_months = int(user_inputs.get('loan_term_months', fin.term_months if fin else 60))
+            balloon_pct = float(user_inputs.get('balloon_pct', fin.balloon_pct if fin else 0.0))
+
+            loan_amount = user_inputs.get('loan_amount')
+            if loan_amount is None:
+                loan_amount = driveaway_dollars * (1.0 - deposit_pct / 100.0)
+            balloon_value = loan_amount * balloon_pct / 100.0
+
+            monthly = calculate_monthly_repayment(loan_amount, interest_rate, loan_term_months, balloon_value)
+
+            # Annual cost = interest + fees (principal repayment is not a cost).
+            admin_monthly = (fin.admin_fee_monthly if fin else 1000) / 100.0
+            estab_fee = (fin.estab_fee_bev if (_is_bev(pt) and fin)
+                         else (fin.estab_fee_default if fin else 40000)) / 100.0
+            years = max(loan_term_months, 1) / 12.0
+            interest_pa = (monthly * loan_term_months + balloon_value - loan_amount) / years
+            finance_annual = int(round_half_up(
+                (interest_pa + admin_monthly * 12 + estab_fee / years) * 100, 0))
 
     resale_annual = 0
     if core_mode in ['true_value', 'full_picture']:

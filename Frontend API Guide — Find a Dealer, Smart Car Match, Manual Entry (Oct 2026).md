@@ -317,6 +317,58 @@ Side effects: if a `vehicle_catalogue_id` is saved that isn't in the user's gara
 
 ---
 
+## 4. Calculator Lookup — Finance Section
+
+`GET /api/vehicles/lookup/?name=<vehicle_name>&state=<state>` (public)
+
+The `finance` block now carries the **full finance field set**, each defaulted from the server's FinanceDefaults table (per broad vehicle category):
+
+```json
+"finance": {
+  "deposit_pct": 10.0,
+  "deposit_amount": 4149.0,
+  "loan_amount": 37341.0,
+  "loan_term_months": 60,
+  "interest_rate_pct": 8.78,
+  "balloon_pct": 0.0,
+  "balloon_amount": 0.0,
+  "monthly_repayment": 771.16,
+  "monthly_repayment_display": "$771",
+  "finance_cost_pa": 1985.68,
+  "finance_cost_pa_display": "$1,986",
+  "estab_fee": 400.0,
+  "admin_fee_monthly": 10.0
+}
+```
+
+Field semantics:
+
+| Field | Editable | Notes |
+|---|---|---|
+| `deposit_pct` | ✅ | Default from FinanceDefaults (typically 10% of driveaway). Changing it recalculates `deposit_amount` and `loan_amount`. |
+| `loan_amount` | ✅ | Calculated as driveaway − deposit. Default from FinanceDefaults chain. |
+| `loan_term_months` | ✅ | Default from FinanceDefaults (typically 60). |
+| `interest_rate_pct` | ✅ | FinanceDefaults base rate, **already including the alt-fuel modifier** (−0.5 pp for BEV/PHEV). |
+| `balloon_pct` | ✅ | Default from FinanceDefaults (typically 0). |
+| `monthly_repayment` / `monthly_repayment_display` | ❌ read-only | Calculated P&I — same visual treatment as the Depreciation (%) CALCULATION chip. Never a typed value. |
+| `finance_cost_pa` / `finance_cost_pa_display` | ❌ read-only | **Yearly interest + fees** — this feeds the "Finance – $X" section header. |
+| `estab_fee`, `admin_fee_monthly` | ❌ | Shown for transparency; included in `finance_cost_pa`. |
+
+Clear/Default chips: reset each field to the value in this response.
+
+**Sending edits back:** pass the user's values in `user_inputs` when calling `POST /api/core-rating/calculate/` (and batch/search) so COOL Choice and Full Picture recalculate with them:
+```json
+"user_inputs": {
+  "deposit_pct": 15.0,
+  "loan_term_months": 48,
+  "interest_rate": 8.5,
+  "balloon_pct": 20.0
+}
+```
+`loan_amount` can also be sent explicitly (overrides the driveaway−deposit calculation). Precedence when a value is omitted: `user_inputs` → FinanceDefaults for the vehicle's category.
+
+---
+
 ## Changelog (this release)
 
 | Area | Change |
@@ -325,4 +377,5 @@ Side effects: if a `vehicle_catalogue_id` is saved that isn't in the user's gara
 | Dealer analytics | `POST /api/analytics/dealer-link-clicked/` accepts `dealer_name`, `vehicle_id`, `link_url` |
 | AI Smart Match | Minimum 5 results via auto-relaxation (`relaxed_filters`); **one variant per model — cheapest wins**; named-car boost with "Your searched car" reason; rating→cost ordering (never alphabetical) |
 | Smart Car Finder (`/api/core-rating/search/`) | Deduplication changed: one vehicle per (brand, model) — cheapest variant for the state replaces cheapest-by-COO per (brand, model, year); better-rated trim within +10% of cheapest price wins |
+| Finance section | `lookup` finance block expanded: `deposit_pct`, `deposit_amount`, `interest_rate_pct` (incl. alt-fuel modifier), `balloon_pct`, `balloon_amount`, `monthly_repayment` (+display, read-only calculated), `finance_cost_pa` (+display, yearly interest + fees for the "Finance – $X" header), `estab_fee`, `admin_fee_monthly`. Rating-engine fallback (Modes E/F when no stored workbook value) now uses FinanceDefaults instead of hardcoded 80%/7.5%/60, honours `deposit_pct`/`balloon_pct` user inputs, and counts interest + fees (not principal) as the annual finance cost |
 | Manual Entry | New `POST /api/current-vehicle/ai-search/` (Grok, cache-per-query) and `ai_vehicle_entry_id` on save; cascade dropdowns include "Other / not listed" |
