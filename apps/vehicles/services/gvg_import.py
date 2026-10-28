@@ -173,6 +173,8 @@ class VehicleLike:
         self._apply_resale_estimate()
 
         # Consumption / emissions
+        self.fuel_consumption_combined_l_100km = record.fuel_consumption_combined_l_100km
+        self.electricity_consumption_wh_per_km = record.electricity_consumption_wh_per_km
         self.fuel_consumption_per_100km = record.fuel_consumption_combined_l_100km
         # GVG gives Wh/km; CORE expects kWh/100km -> divide by 10.
         self.electricity_consumption_per_100km = (

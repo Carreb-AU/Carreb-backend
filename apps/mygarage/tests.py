@@ -406,3 +406,153 @@ class FindDealerTests(TestCase):
              "link_url": "https://nearby.example.com"},
             format="json")
         self.assertEqual(resp.status_code, 200)
+
+
+class GVGGarageVehicleTests(TestCase):
+    """GVG (used/older) vehicles can be added to My Garage (Option A).
+
+    Previously GarageVehicle only held a non-nullable catalogue FK, so GVG
+    search results could be set as the current vehicle but never added to the
+    garage. These tests pin the new behaviour.
+    """
+
+    def setUp(self):
+        from apps.vehicles.models import VehicleIdentity, StateEnergyPrice
+        self.user = User.objects.create_user(email="gvg@example.com", password="x")
+        self.client.force_authenticate(self.user)
+        self.gvg_record = VehicleIdentity.objects.create(
+            make="Toyota", model="Corolla", year=2015,
+            body_style="hatchback", fcai_category="Small",
+            powertrain_type="petrol",
+            fuel_consumption_combined_l_100km=6.1,
+            tailpipe_co2_g_per_km=143.0,
+        )
+        StateEnergyPrice.objects.create(
+            state="NSW", petrol_ulp95_cents_per_litre=240,
+            diesel_cents_per_litre=280, electricity_cents_per_kwh=30.0,
+        )
+
+    def test_add_gvg_vehicle_to_garage(self):
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"green_vehicle_guide_record_id": str(self.gvg_record.id),
+             "source": "vehicle_lookup"},
+            format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(
+            str(resp.data["green_vehicle_guide_record_id"]), str(self.gvg_record.id))
+        gv = GarageVehicle.objects.get(user=self.user)
+        self.assertIsNone(gv.vehicle_catalogue_id)
+        self.assertEqual(str(gv.green_vehicle_guide_record_id), str(self.gvg_record.id))
+
+    def test_garage_list_includes_gvg_vehicle_with_costs(self):
+        GarageVehicle.objects.create(
+            user=self.user, green_vehicle_guide_record=self.gvg_record,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+        resp = self.client.get(reverse("garage-vehicles"))
+        self.assertEqual(resp.status_code, 200)
+        vehicles = resp.data["vehicles"]
+        self.assertEqual(len(vehicles), 1)
+        card = vehicles[0]
+        self.assertEqual(card["vehicle_data"]["source"], "gvg")
+        self.assertEqual(card["vehicle_data"]["make"], "Toyota")
+        self.assertEqual(card["vehicle_data"]["year"], 2015)
+        # Used-car cost path: fixed medians + own consumption, no CORE rating.
+        self.assertIsNotNone(card["engine_data"])
+        self.assertIsNone(card["engine_data"]["core_rating"])
+        self.assertGreater(card["engine_data"]["total_annual_cost"], 0)
+        self.assertEqual(card["engine_data"]["tailpipe_co2_g_per_km"], 143.0)
+
+    def test_both_ids_rejected(self):
+        v = make_vehicle()
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"vehicle_catalogue_id": str(v.id),
+             "green_vehicle_guide_record_id": str(self.gvg_record.id),
+             "source": "vehicle_lookup"},
+            format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("non_field_errors", resp.data)
+
+    def test_neither_id_rejected(self):
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"source": "vehicle_lookup"},
+            format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("non_field_errors", resp.data)
+
+    def test_unknown_gvg_id_rejected(self):
+        import uuid
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"green_vehicle_guide_record_id": str(uuid.uuid4()),
+             "source": "vehicle_lookup"},
+            format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_current_vehicle_gvg_pick_auto_adds_to_garage(self):
+        resp = self.client.post(
+            reverse("current-vehicle"),
+            {"green_vehicle_guide_record_id": str(self.gvg_record.id),
+             "state": "NSW"},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(GarageVehicle.objects.filter(
+            user=self.user,
+            green_vehicle_guide_record_id=self.gvg_record.id).exists())
+
+    def test_current_vehicle_gvg_pick_does_not_duplicate_garage_row(self):
+        GarageVehicle.objects.create(
+            user=self.user, green_vehicle_guide_record=self.gvg_record,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+        resp = self.client.post(
+            reverse("current-vehicle"),
+            {"green_vehicle_guide_record_id": str(self.gvg_record.id),
+             "state": "NSW"},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            GarageVehicle.objects.filter(
+                user=self.user,
+                green_vehicle_guide_record_id=self.gvg_record.id).count(), 1)
+
+    def test_spotlights_endpoint_tolerates_gvg_garage_vehicle(self):
+        from apps.users.models import SubscriptionTier
+        self.user.subscription_tier = SubscriptionTier.CORE_ADVANTAGE
+        self.user.save()
+        GarageVehicle.objects.create(
+            user=self.user, green_vehicle_guide_record=self.gvg_record,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+        resp = self.client.get(reverse("spotlights"))
+        self.assertEqual(resp.status_code, 200)
+        gvg_gv = GarageVehicle.objects.get(user=self.user)
+        # GVG rows appear in the result keyed by garage id but earn no badges.
+        self.assertIn(str(gvg_gv.id), resp.data)
+        self.assertEqual(resp.data[str(gvg_gv.id)], {})
+
+    def test_ridereveal_rejects_gvg_garage_vehicle_cleanly(self):
+        gv = GarageVehicle.objects.create(
+            user=self.user, green_vehicle_guide_record=self.gvg_record,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+        resp = self.client.post(
+            reverse("ridereveal-generate"),
+            {"garage_vehicle_id": str(gv.id)},
+            format="json")
+        self.assertEqual(resp.status_code, 422)
+
+    def test_find_dealer_uses_gvg_make(self):
+        gv = GarageVehicle.objects.create(
+            user=self.user, green_vehicle_guide_record=self.gvg_record,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+        from unittest import mock as _mock
+        from apps.mygarage import find_dealer_views as fdv
+        with _mock.patch.object(fdv, "get_dealers") as m_dealers, \
+             _mock.patch("apps.mygarage.views.emit_analytics_event"):
+            m_dealers.return_value = {"results": [], "service_unavailable": False}
+            resp = self.client.get(
+                reverse("find-a-dealer"),
+                {"garage_vehicle_id": str(gv.id),
+                 "postcode": "2000", "radius": "25"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(m_dealers.call_args[0][0], "Toyota")

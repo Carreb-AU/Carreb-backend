@@ -47,6 +47,39 @@ def _get_overrides(user, current_vehicle=None, garage_vehicle=None):
     )
     return {o.field_name: o.override_value for o in overrides}
 
+def _gvg_est_cost_diff(baseline_cents, total_cents):
+    """Shape-compatible est_cost_difference for non-catalogue (GVG/AI) vehicles.
+
+    Mirrors the object calculate_core_rating builds for catalogue vehicles so
+    the garage savings UI can consume both identically.
+    """
+    diff = baseline_cents - total_cents
+    base_disp = f"Est. ${int(round(baseline_cents / 100)):,}/year"
+    if diff < 0:
+        direction, val, bucket = "more_expensive", abs(diff), None
+    elif diff > 0:
+        direction, val = "saving", diff
+        s5 = val * 5
+        bucket = ("essentials_covered" if s5 < 250000
+                  else "home_family" if s5 < 750000
+                  else "savings_security" if s5 < 1250000
+                  else "future_proof")
+    else:
+        direction, val, bucket = "same", 0, None
+    s5 = val * 5
+    return {
+        "value_cents": val,
+        "value_display": f"Est. ${int(round(val / 100)):,}/year",
+        "direction": direction,
+        "comparison_mode": "current_vehicle",
+        "baseline_cost": baseline_cents,
+        "baseline_cost_display": base_disp,
+        "est_5yr_savings": s5,
+        "est_5yr_savings_display": f"Est. ${int(round(s5 / 100)):,} over 5 years",
+        "savings_bucket": bucket,
+    }
+
+
 def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, current_cost=None, is_current_vehicle=False):
     base_data = None
     overrides_qs = None
@@ -78,7 +111,7 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         cv = getattr(user, 'current_vehicle', None)
         state = cv.state if cv and cv.state else 'NSW'
         catalogue = vehicle_instance.vehicle_catalogue
-        gvg_record = None
+        gvg_record = vehicle_instance.green_vehicle_guide_record
 
     if catalogue and base_data:
         base_data['image_url'] = catalogue.image_url
@@ -124,11 +157,15 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
 
     engine_data = None
     if rating_vehicle and state:
-        if is_current_vehicle and not catalogue:
-            # Non-catalogue current car (GVG or AI-searched): fixed class
-            # medians from the Mode B rows plus the car's own consumption
-            # (spec section 8).
+        if not catalogue:
+            # Non-catalogue car (GVG or AI-searched): fixed class medians from
+            # the Mode B rows plus the car's own consumption. Used both for
+            # the current vehicle (spec section 8) and GVG garage vehicles.
             engine_data = cost_gvg_current_vehicle(rating_vehicle, state)
+            if current_cost is not None:
+                engine_data['est_cost_difference'] = _gvg_est_cost_diff(current_cost, engine_data['total_annual_cost'])
+            if gvg_record is not None:
+                engine_data['tailpipe_co2_g_per_km'] = float(gvg_record.tailpipe_co2_g_per_km or 0)
         else:
             engine_data = calculate_core_rating(
                 rating_vehicle,
@@ -172,16 +209,24 @@ class CurrentVehicleView(views.APIView):
         data = serializer.validated_data
         
         vehicle_catalogue_id = data.get('vehicle_catalogue_id')
+        gvg_record_id = data.get('green_vehicle_guide_record_id')
         exists_in_garage = False
-        
+
         if vehicle_catalogue_id:
             exists_in_garage = GarageVehicle.objects.filter(
                 user=request.user,
                 vehicle_catalogue_id=vehicle_catalogue_id,
                 status=GarageVehicleStatus.ACTIVE
             ).exists()
-            
-            if not exists_in_garage and not check_cap_limit(request.user):
+        elif gvg_record_id:
+            exists_in_garage = GarageVehicle.objects.filter(
+                user=request.user,
+                green_vehicle_guide_record_id=gvg_record_id,
+                status=GarageVehicleStatus.ACTIVE
+            ).exists()
+
+        if (vehicle_catalogue_id or gvg_record_id) and not exists_in_garage:
+            if not check_cap_limit(request.user):
                 cap = get_cap_counter(request.user)
                 return Response({
                     "detail": f"Plan limit reached. You are on {cap['plan']} which allows {cap['limit']} vehicles.",
@@ -212,6 +257,14 @@ class CurrentVehicleView(views.APIView):
             GarageVehicle.objects.create(
                 user=request.user,
                 vehicle_catalogue_id=vehicle_catalogue_id,
+                source=GarageVehicleSource.VEHICLE_LOOKUP
+            )
+            if getattr(request.user, 'analytics_consent', False):
+                emit_analytics_event.delay(str(request.user.id), 'vehicle_added_to_garage', {})
+        elif gvg_record_id and not exists_in_garage:
+            GarageVehicle.objects.create(
+                user=request.user,
+                green_vehicle_guide_record_id=gvg_record_id,
                 source=GarageVehicleSource.VEHICLE_LOOKUP
             )
             if getattr(request.user, 'analytics_consent', False):
@@ -887,7 +940,8 @@ class GarageVehicleListView(views.APIView):
             
         gv = GarageVehicle.objects.create(
             user=request.user,
-            vehicle_catalogue_id=serializer.validated_data['vehicle_catalogue_id'],
+            vehicle_catalogue_id=serializer.validated_data.get('vehicle_catalogue_id'),
+            green_vehicle_guide_record_id=serializer.validated_data.get('green_vehicle_guide_record_id'),
             source=serializer.validated_data['source']
         )
         

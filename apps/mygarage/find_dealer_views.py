@@ -60,11 +60,16 @@ class FindDealerView(views.APIView):
         brand = serializer.validated_data.get('brand')
         if serializer.validated_data.get('garage_vehicle_id'):
             try:
-                garage_vehicle = GarageVehicle.objects.select_related('vehicle_catalogue').get(
+                garage_vehicle = GarageVehicle.objects.select_related(
+                    'vehicle_catalogue', 'green_vehicle_guide_record'
+                ).get(
                     id=serializer.validated_data['garage_vehicle_id'],
                     user=request.user
                 )
-                brand = garage_vehicle.vehicle_catalogue.brand
+                if garage_vehicle.vehicle_catalogue:
+                    brand = garage_vehicle.vehicle_catalogue.brand
+                else:
+                    brand = garage_vehicle.green_vehicle_guide_record.make
             except GarageVehicle.DoesNotExist:
                 return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 

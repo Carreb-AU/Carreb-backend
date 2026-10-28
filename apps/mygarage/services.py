@@ -55,10 +55,15 @@ def calculate_spotlights(active_garage_vehicles, user_priority_state, state='NSW
         
     results = {str(gv.id): {} for gv in active_garage_vehicles}
     state = (state or 'NSW').upper()
-    
+
+    # Spotlight badges are a catalogue-only concept (they compare against the
+    # catalogue peer set). GVG/used-car garage entries participate in the
+    # result keys (as {}) but are never scored.
+    scorable_gvs = [gv for gv in active_garage_vehicles if gv.vehicle_catalogue_id]
+
     # Pre-group active vehicles by category
     by_category = {}
-    for gv in active_garage_vehicles:
+    for gv in scorable_gvs:
         cat = gv.vehicle_catalogue.fcai_category
         if cat:
             by_category.setdefault(cat, []).append(gv)
@@ -179,8 +184,8 @@ def calculate_spotlights(active_garage_vehicles, user_priority_state, state='NSW
     import json
     
     factory = APIRequestFactory()
-    vehicle_ids = [str(gv.vehicle_catalogue_id) for gv in active_garage_vehicles]
-    all_stars_scores = {str(gv.id): True for gv in active_garage_vehicles}
+    vehicle_ids = [str(gv.vehicle_catalogue_id) for gv in scorable_gvs]
+    all_stars_scores = {str(gv.id): True for gv in scorable_gvs}
     
     modes = ['pure_cost', 'cool_choice', 'true_value', 'full_picture']
     for m in modes:
@@ -197,16 +202,16 @@ def calculate_spotlights(active_garage_vehicles, user_priority_state, state='NSW
         if response.status_code == 200:
             data_list = response.data.get('data', [])
             score_map = {str(d['vehicle_id']): (d.get('core_rating', 0) or 0) for d in data_list}
-            for gv in active_garage_vehicles:
+            for gv in scorable_gvs:
                 v_cat_id = str(gv.vehicle_catalogue_id)
                 rating = score_map.get(v_cat_id, 0)
                 if rating < 4.0:
                     all_stars_scores[str(gv.id)] = False
         else:
-            for gv in active_garage_vehicles:
+            for gv in scorable_gvs:
                 all_stars_scores[str(gv.id)] = False
                 
-    for gv in active_garage_vehicles:
+    for gv in scorable_gvs:
         vid = str(gv.id)
         if all_stars_scores[vid]:
             results[vid]['core_all_stars'] = {

@@ -60,6 +60,12 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None):
     
     from apps.vehicles.models import PowertrainType
     vehicle_cat = garage_vehicle.vehicle_catalogue
+    if vehicle_cat is None:
+        return {
+            "status_code": 422,
+            "error": "ridereveal_unavailable",
+            "message": "RideReveal is only available for Carreb catalogue vehicles."
+        }
     if vehicle_cat.powertrain_type == PowertrainType.FCEV:
         return {
             "status_code": 422, 

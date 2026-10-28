@@ -49,18 +49,29 @@ class GarageVehicleSource(models.TextChoices):
 class GarageVehicle(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='garage_vehicles')
-    vehicle_catalogue = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name='garage_entries')
+    vehicle_catalogue = models.ForeignKey(
+        Vehicle, on_delete=models.CASCADE, null=True, blank=True, related_name='garage_entries'
+    )
+    green_vehicle_guide_record = models.ForeignKey(
+        'vehicles.VehicleIdentity',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='garage_entries',
+        help_text="GVG (used/older) vehicle, when the car is not in the Carreb catalogue"
+    )
     status = models.CharField(max_length=20, choices=GarageVehicleStatus.choices, default=GarageVehicleStatus.ACTIVE)
     source = models.CharField(max_length=50, choices=GarageVehicleSource.choices)
-    
+
     read_only = models.BooleanField(default=False)
     re_subscribe_required = models.BooleanField(default=False)
-    
+
     added_at = models.DateTimeField(auto_now_add=True)
     archived_at = models.DateTimeField(null=True, blank=True)
-    
+
     def __str__(self):
-        return f"Garage: {self.vehicle_catalogue} for {self.user.email}"
+        vehicle = self.vehicle_catalogue or self.green_vehicle_guide_record
+        return f"Garage: {vehicle} for {self.user.email}"
 
 class VehicleOverride(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

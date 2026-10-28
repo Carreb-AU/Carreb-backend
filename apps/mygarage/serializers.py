@@ -16,7 +16,7 @@ class CurrentVehicleSerializer(serializers.ModelSerializer):
 class GarageVehicleSerializer(serializers.ModelSerializer):
     class Meta:
         model = GarageVehicle
-        fields = ['id', 'vehicle_catalogue_id', 'status', 'source', 'added_at', 'archived_at']
+        fields = ['id', 'vehicle_catalogue_id', 'green_vehicle_guide_record_id', 'status', 'source', 'added_at', 'archived_at']
 
 class VehicleOverrideSerializer(serializers.ModelSerializer):
     class Meta:
@@ -100,13 +100,29 @@ class CurrentVehicleCreateSerializer(serializers.Serializer):
         return data
 
 class GarageVehicleCreateSerializer(serializers.Serializer):
-    vehicle_catalogue_id = serializers.UUIDField()
+    vehicle_catalogue_id = serializers.UUIDField(required=False, allow_null=True)
+    green_vehicle_guide_record_id = serializers.UUIDField(required=False, allow_null=True)
     source = serializers.ChoiceField(choices=GarageVehicleSource.choices)
-    
+
     def validate_vehicle_catalogue_id(self, value):
         if value and not Vehicle.objects.filter(id=value).exists():
             raise serializers.ValidationError("Vehicle with this ID does not exist in the catalogue.")
         return value
+
+    def validate_green_vehicle_guide_record_id(self, value):
+        from apps.vehicles.models import VehicleIdentity
+        if value and not VehicleIdentity.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Green Vehicle Guide record with this ID does not exist.")
+        return value
+
+    def validate(self, data):
+        has_catalogue = bool(data.get('vehicle_catalogue_id'))
+        has_gvg = bool(data.get('green_vehicle_guide_record_id'))
+        if has_catalogue == has_gvg:
+            raise serializers.ValidationError(
+                "Provide exactly one of vehicle_catalogue_id or green_vehicle_guide_record_id."
+            )
+        return data
     
 class VehicleDetailOverrideSerializer(serializers.Serializer):
     field_name = serializers.CharField()
