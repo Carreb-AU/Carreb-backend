@@ -754,7 +754,10 @@ def _looks_like_corrupt_row(row: pd.Series) -> bool:
 
 
 def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: bool = False) -> Dict[str, int]:
-    df = pd.read_excel(filepath, sheet_name='Vehicles 2004-2025')
+    if filepath.lower().endswith('.csv'):
+        df = pd.read_csv(filepath)
+    else:
+        df = pd.read_excel(filepath, sheet_name='Vehicles 2004-2025')
 
     if clear:
         VehicleIdentity.objects.filter(source_dataset='GVG-CURRENT').delete()
