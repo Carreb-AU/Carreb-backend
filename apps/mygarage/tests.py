@@ -374,6 +374,37 @@ class FindDealerTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         m_places.assert_not_called()
 
+    def test_radius_100km_clamps_bias_circle_but_keeps_true_radius(self, _m_analytics, m_places):
+        # Google Places caps locationBias circle.radius at 50000 m; passing
+        # 100000 m made every 100 km search fail with service_unavailable.
+        # The bias is clamped, and the haversine filter must still apply the
+        # real 100 km radius.
+        dealers = ([
+            {
+                "displayName": {"text": "In Range Motors"},  # ~80 km north
+                "location": {"latitude": -33.15, "longitude": 151.2093},
+                "googleMapsUri": "https://maps.google.com/?cid=4",
+            },
+            {
+                "displayName": {"text": "Too Far Motors"},  # ~150 km north
+                "location": {"latitude": -32.52, "longitude": 151.2093},
+                "googleMapsUri": "https://maps.google.com/?cid=5",
+            },
+        ], None)
+        self._mock_places(m_places, [self.GEOCODE_RESPONSE, dealers])
+        resp = self.client.post(
+            reverse("find-dealer"),
+            {"garage_vehicle_id": str(self.garage_vehicle.id),
+             "postcode": "2000", "radius_km": 100},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("service_unavailable", resp.data)
+        payload = m_places.call_args_list[1][0][0]
+        self.assertEqual(
+            payload["locationBias"]["circle"]["radius"], 50000)
+        names = [r["dealer_name"] for r in resp.data["results"]]
+        self.assertEqual(names, ["In Range Motors"])
+
     def test_invalid_postcode_rejected(self, _m_analytics, m_places):
         resp = self.client.post(
             reverse("find-dealer"),

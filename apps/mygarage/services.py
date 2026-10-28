@@ -362,10 +362,12 @@ def search_dealers_external(brand: str, postcode: str, radius_km: int) -> dict:
         # locationBias (not locationRestriction, which is rectangle-only in
         # this API surface) biases results toward the search circle; the
         # exact radius is then enforced by the haversine filter below.
+        # Google caps circle.radius at 50000 m, so clamp the bias — the
+        # haversine check below still applies the true radius_km.
         'locationBias': {
             'circle': {
                 'center': {'latitude': lat, 'longitude': lng},
-                'radius': radius_km * 1000,  # meters
+                'radius': min(radius_km, 50) * 1000,  # meters
             }
         },
         'maxResultCount': 20,
