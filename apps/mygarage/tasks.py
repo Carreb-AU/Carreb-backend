@@ -20,6 +20,7 @@ self_insight_text: 2-3 sentences exploring the psychological motivations behind 
 social_perception_text: 2-3 sentences about how others might perceive this vehicle choice
 did_you_know_fact: 1 interesting fact about this vehicle type or ownership profile
 share_caption: max 280 characters, suitable for social media
+If an Owner's Favorite Color is provided in the input, weave it naturally into the archetype_tagline or social_perception_text.
 All outputs are for entertainment and educational purposes only. Do not include financial advice, purchase recommendations, statements of fact about actual vehicle performance, or emissions claims. Return ONLY a valid JSON object with these six fields. No preamble. No markdown."""
 
 @shared_task(time_limit=30, soft_time_limit=25)
@@ -70,6 +71,7 @@ def generate_ridereveal_content(job_id, credit_type):
                 priority_label = "environmentally focused"
                 
         custom_plate_info = f"Custom Plate: {job.custom_plate}" if job.custom_plate else ""
+        favorite_color_info = f"Owner's Favorite Color: {job.favorite_color}" if job.favorite_color else ""
         
         user_prompt = f"""
 Vehicle: {vehicle.brand} {vehicle.model} {vehicle.year} {vehicle.variant}
@@ -78,6 +80,7 @@ CORE Rating: {core_rating}
 Band Name: {band_name}
 User Priority: {priority_label}
 {custom_plate_info}
+{favorite_color_info}
 """
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -108,6 +111,7 @@ User Priority: {priority_label}
             garage_vehicle=job.garage_vehicle,
             vehicle_catalogue=vehicle,
             custom_plate=job.custom_plate,
+            favorite_color=job.favorite_color,
             archetype_name=data['archetype_name'],
             archetype_tagline=data['archetype_tagline'],
             self_insight_text=data['self_insight_text'],

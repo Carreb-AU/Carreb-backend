@@ -163,7 +163,8 @@ class RideRevealResult(models.Model):
     garage_vehicle = models.ForeignKey(GarageVehicle, on_delete=models.CASCADE, related_name='ridereveal_results')
     vehicle_catalogue = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name='ridereveal_results')
     custom_plate = models.CharField(max_length=7, null=True, blank=True)
-    
+    favorite_color = models.CharField(max_length=50, null=True, blank=True)
+
     archetype_name = models.CharField(max_length=255)
     archetype_tagline = models.CharField(max_length=255)
     self_insight_text = models.TextField()
@@ -190,6 +191,7 @@ class RideRevealJob(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ridereveal_jobs')
     garage_vehicle = models.ForeignKey(GarageVehicle, on_delete=models.CASCADE, related_name='ridereveal_jobs')
     custom_plate = models.CharField(max_length=7, null=True, blank=True)
+    favorite_color = models.CharField(max_length=50, null=True, blank=True)
     status = models.CharField(max_length=20, choices=RideRevealJobStatus.choices, default=RideRevealJobStatus.PENDING)
     result = models.ForeignKey(RideRevealResult, on_delete=models.SET_NULL, null=True, blank=True, related_name='jobs')
     error_message = models.TextField(null=True, blank=True)

@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase as TestCase
 from django.urls import reverse
 
 from apps.vehicles.models import Vehicle
-from apps.mygarage.models import GarageVehicle, GarageVehicleSource
+from apps.mygarage.models import GarageVehicle, GarageVehicleSource, RideRevealJob
 
 User = get_user_model()
 
@@ -556,3 +556,55 @@ class GVGGarageVehicleTests(TestCase):
                  "postcode": "2000", "radius": "25"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(m_dealers.call_args[0][0], "Toyota")
+
+
+class RideRevealFavoriteColorTests(TestCase):
+    """Favorite color selected during RideReveal is captured and returned."""
+
+    def setUp(self):
+        from apps.users.models import SubscriptionTier
+        self.user = User.objects.create_user(
+            email="rr@example.com", password="x",
+            subscription_tier=SubscriptionTier.FULL_INSIGHT_PRO)
+        self.client.force_authenticate(self.user)
+        self.vehicle = make_vehicle()
+        self.gv = GarageVehicle.objects.create(
+            user=self.user, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+
+    @mock.patch("apps.mygarage.tasks.generate_ridereveal_content")
+    def test_generate_stores_favorite_color_on_job(self, m_task):
+        resp = self.client.post(
+            reverse("ridereveal-generate"),
+            {"garage_vehicle_id": str(self.gv.id),
+             "favorite_color": "Midnight Blue"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        job = RideRevealJob.objects.get(user=self.user)
+        self.assertEqual(job.favorite_color, "Midnight Blue")
+        m_task.delay.assert_called_once()
+
+    @mock.patch("apps.mygarage.tasks.generate_ridereveal_content")
+    def test_generate_without_color_stays_null(self, m_task):
+        resp = self.client.post(
+            reverse("ridereveal-generate"),
+            {"garage_vehicle_id": str(self.gv.id)}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        job = RideRevealJob.objects.get(user=self.user)
+        self.assertIsNone(job.favorite_color)
+
+    def test_result_serializer_returns_favorite_color(self):
+        from apps.mygarage.models import (
+            RideRevealResult, RideRevealCreditType)
+        from apps.mygarage.serializers import RideRevealResultSerializer
+        result = RideRevealResult.objects.create(
+            user=self.user, garage_vehicle=self.gv,
+            vehicle_catalogue=self.vehicle,
+            favorite_color="Midnight Blue",
+            archetype_name="Steady Optimist",
+            archetype_tagline="Calm confidence",
+            self_insight_text="x", social_perception_text="y",
+            did_you_know_fact="z", share_caption="c",
+            ai_model_version="gpt-4o-mini", generation_duration_ms=100,
+            credit_type=RideRevealCreditType.PLAN_INCLUDED)
+        data = RideRevealResultSerializer(result).data
+        self.assertEqual(data["favorite_color"], "Midnight Blue")
