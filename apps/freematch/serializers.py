@@ -58,7 +58,11 @@ class LockedFieldSerializer(serializers.Serializer):
 
 class PartialVehicleResultSerializer(serializers.Serializer):
     """
-    Partial (anonymous) match result — gated fields are locked: true, value: null.
+    Anonymous match result. The formerly gated cost fields are now returned
+    unlocked ({locked: false, value: <cents>}) — the public Vehicle API
+    already exposes the same figures anonymously, so gating them here only
+    broke results 2-5 on the results screen. est_cost_difference stays null
+    until the user has a current vehicle to compare against.
     """
     id = serializers.UUIDField()
     make = serializers.CharField()

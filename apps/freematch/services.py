@@ -80,7 +80,9 @@ def _score_and_rank(candidates, state: str, priority_slider: int) -> list[dict]:
                 "vehicle": vehicle,
                 "core_rating": rating,
                 "band_name": result.get("band_name"),
+                "band_slug": result.get("band_slug"),
                 "total_annual_cost": result.get("total_annual_cost"),
+                "est_cost_difference": result.get("est_cost_difference"),
             })
         except Exception:
             logger.exception("CORE Rating Engine error for vehicle %s — skipping", vehicle.id)
@@ -138,9 +140,18 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[list[dict], boo
 
 # ── Response Builders ────────────────────────────────────────────────────────
 
-def _build_match_vehicle_entry(entry: dict) -> dict:
+def _build_match_vehicle_entry(entry: dict, state: str) -> dict:
     vehicle = entry["vehicle"]
     annual_cost_cents = entry["total_annual_cost"] or 0
+    driveaway_cents = (vehicle.driveaway_price_by_state or {}).get(state)
+    resale_cents = vehicle.resale_value_5yr_estimate
+    diff_obj = entry.get("est_cost_difference")
+    if isinstance(diff_obj, dict):
+        diff_cents = diff_obj.get("value_cents")
+        if diff_cents is not None and diff_obj.get("direction") == "more_expensive":
+            diff_cents = -diff_cents
+    else:
+        diff_cents = diff_obj
     return {
         "id": str(vehicle.id),
         "make": vehicle.brand,
@@ -148,24 +159,36 @@ def _build_match_vehicle_entry(entry: dict) -> dict:
         "year": vehicle.year,
         "variant": vehicle.variant,
         "powertrain_type": vehicle.powertrain_type,
+        "body_style": vehicle.body_style,
+        "num_seats": vehicle.num_seats,
+        "image_url": vehicle.image_url or None,
         "core_rating": entry["core_rating"],
         "band_name": entry["band_name"],
+        "band_slug": entry.get("band_slug"),
         "annual_running_cost_estimate": annual_cost_cents,
         "annual_running_cost_display": _format_cents(annual_cost_cents),
         "co2_g_per_km": vehicle.tailpipe_co2_g_per_km,
         "is_estimate": True,
-        "resale_value_5yr_estimate": {"locked": True, "value": None},
-        "est_cost_difference": {"locked": True, "value": None},
-        "driveaway_price_estimate": {"locked": True, "value": None},
+        # Same {locked, value} shape as before, now populated — the public
+        # Vehicle API already exposes these figures anonymously, so gating
+        # them here only broke results 2-5 on the results screen.
+        "resale_value_5yr_estimate": {"locked": False, "value": resale_cents},
+        "resale_value_5yr_display": _format_cents(resale_cents),
+        "est_cost_difference": {"locked": False, "value": diff_cents},
+        "est_cost_difference_display": _format_cents(diff_cents) if diff_cents is not None else None,
+        "driveaway_price_estimate": {"locked": False, "value": driveaway_cents},
+        "driveaway_price_display": _format_cents(driveaway_cents) if driveaway_cents is not None else None,
     }
 
 
 def build_match_response(entries: list, session: FreeMatchSession, is_suggested: bool = False) -> dict:
     from django.utils import timezone
 
+    state = session.state or WIZARD_DEFAULT_STATE
+
     vehicles = []
     for entry in entries:
-        v = _build_match_vehicle_entry(entry)
+        v = _build_match_vehicle_entry(entry, state)
         if is_suggested:
             v["is_suggested"] = True
         vehicles.append(v)
