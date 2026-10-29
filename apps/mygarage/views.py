@@ -1466,6 +1466,10 @@ class AISmartMatchView(views.APIView):
                     "year": v.year,
                     "variant": v.variant,
                     "powertrain_type": v.powertrain_type,
+                    "image_url": v.image_url or get_vehicle_image_url(
+                        make=v.brand, model=v.model, year=v.year,
+                        fcai_category=v.fcai_category, body_style=v.body_style,
+                        drive=v.drive),
                     "core_rating": round(rating, 1) if rating else None,
                     "band_name": res.get('band_name'),
                     "total_annual_cost": res.get('total_annual_cost'),

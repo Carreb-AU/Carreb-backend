@@ -56,6 +56,8 @@ def rating_side_effect(vehicle=None, **kwargs):
 @mock.patch("apps.mygarage.views.calculate_core_rating", side_effect=rating_side_effect)
 @mock.patch("apps.mygarage.views.extract_search_parameters",
             return_value=(True, {"make": "Mazda", "model": "CX-5"}))
+@mock.patch("apps.mygarage.views.get_vehicle_image_url",
+            return_value="https://img.example/fallback.jpg")
 class AISmartMatchViewTests(TestCase):
     """Regression tests for the Smart Car Match endpoint.
 
@@ -142,7 +144,22 @@ class AISmartMatchViewTests(TestCase):
         self.assertEqual(body["interpreted_filters"]["make"], "Mazda")
         self.assertIn("relaxed_filters", body)
 
+    def test_results_include_image_url(self, *_mocks):
+        # Regression: results rendered without images because the response
+        # never carried image_url.
+        make_vehicle(brand="Mazda", model="CX-5", variant="Maxx",
+                     image_url="/media/mazda-cx5.jpg")
+        make_vehicle(brand="Mazda", model="CX-3", variant="Maxx")  # no stored image
+        results = self._post().json()["results"]
+        self.assertTrue(all("image_url" in r for r in results))
+        by_model = {r["model"]: r for r in results}
+        self.assertEqual(by_model["CX-5"]["image_url"], "/media/mazda-cx5.jpg")
+        # No stored image -> lookup fallback is used
+        self.assertEqual(by_model["CX-3"]["image_url"],
+                         "https://img.example/fallback.jpg")
 
+
+@mock.patch("apps.mygarage.views.get_vehicle_image_url", return_value="https://img.example/fallback.jpg")
 @mock.patch("apps.mygarage.views.emit_analytics_event")
 @mock.patch("apps.mygarage.views.calculate_core_rating", side_effect=rating_side_effect)
 @mock.patch("apps.mygarage.views.extract_search_parameters",
@@ -175,6 +192,7 @@ class AISmartMatchRelaxationTests(TestCase):
         self.assertGreaterEqual(len(body["results"]), 5)
         self.assertIn("ancap_rating_min", body["relaxed_filters"])
 
+@mock.patch("apps.mygarage.views.get_vehicle_image_url", return_value="https://img.example/fallback.jpg")
 
 @mock.patch("apps.mygarage.views.emit_analytics_event")
 @mock.patch("apps.mygarage.views.calculate_core_rating", side_effect=rating_side_effect)
@@ -204,6 +222,7 @@ class AISmartMatchBudgetRelaxTests(TestCase):
         self.assertGreaterEqual(len(body["results"]), 5)
         self.assertIn("core_rating_min", body["relaxed_filters"])
         self.assertIn("budget_max", body["relaxed_filters"])
+@mock.patch("apps.mygarage.views.get_vehicle_image_url", return_value="https://img.example/fallback.jpg")
 
 
 @mock.patch("apps.mygarage.views.emit_analytics_event")
