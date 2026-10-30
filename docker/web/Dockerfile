@@ -30,6 +30,13 @@ COPY --from=builder /wheels /wheels
 
 RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
 
+# Headless Chromium for RideReveal share-card screenshots (Playwright).
+# Shared path readable by the runtime user.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/playwright-browsers \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 
 RUN mkdir -p /app/staticfiles /app/media \

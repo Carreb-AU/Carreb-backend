@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=1080" />
+  <title>RideReveal share card</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 1080px;
+      min-height: 1350px;
+      background: #ffffff;
+      font-family: "Nunito Sans", "Helvetica Neue", Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      width: 1080px;
+      min-height: 1350px;
+      padding: 72px 64px 56px;
+      background:
+        radial-gradient(ellipse 70% 38% at 18% 8%, rgba(194, 232, 97, 0.55) 0%, rgba(240, 250, 215, 0.35) 42%, rgba(255,255,255,0) 70%),
+        linear-gradient(180deg, #f7fbe8 0%, #ffffff 28%, #ffffff 100%);
+    }
+    .hero {
+      display: flex;
+      align-items: flex-start;
+      gap: 28px;
+      margin-bottom: 8px;
+    }
+    .avatar, .avatar-fallback {
+      width: 168px;
+      height: 168px;
+      border-radius: 999px;
+      border: 6px solid #c2e861;
+      flex-shrink: 0;
+      object-fit: cover;
+      background: #e8f4ea;
+    }
+    .avatar-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 56px;
+      font-weight: 800;
+      color: #3d6b45;
+    }
+    .identity { padding-top: 18px; min-width: 0; }
+    .name {
+      font-size: 48px;
+      font-weight: 800;
+      line-height: 1.1;
+      color: #111e18;
+    }
+    .archetype {
+      margin-top: 6px;
+      font-size: 44px;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      color: #87bf19;
+    }
+    .tagline {
+      margin-top: 10px;
+      font-size: 22px;
+      font-weight: 400;
+      line-height: 1.35;
+      color: #111e18;
+    }
+    .vehicle-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-top: -12px;
+    }
+    .vehicle {
+      display: block;
+      width: 920px;
+      max-height: 420px;
+      object-fit: contain;
+    }
+    .plate {
+      margin-top: -8px;
+      min-width: 220px;
+      border: 2px solid #111e18;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #fffdec;
+    }
+    .plate-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 4px 12px;
+      background: #1d3d33;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .plate-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      background: #f4c542;
+    }
+    .plate-body {
+      padding: 4px 16px 6px;
+      text-align: center;
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: #244034;
+    }
+    .colour {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 18px;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #68726e;
+    }
+    .colour-swatch {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(17, 30, 24, 0.16);
+    }
+    .colour strong { color: #111e18; font-weight: 800; }
+    .traits {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin: 36px 0 28px;
+    }
+    .trait {
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: #1d3d33;
+      background: #c2e861;
+      white-space: nowrap;
+    }
+    .trait:nth-child(n+4) { background: #eff9ce; }
+    .insights {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-bottom: 28px;
+    }
+    .insight {
+      min-height: 220px;
+      padding: 28px 26px;
+      border-radius: 12px;
+      text-align: center;
+      box-shadow: 0 8px 18px rgba(17, 30, 24, 0.08);
+    }
+    .insight-self { background: #c2e861; color: #1d3d33; }
+    .insight-social { background: #244034; color: #ffffff; }
+    .insight h2 {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .insight p {
+      font-size: 22px;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .did-you-know {
+      font-size: 18px;
+      line-height: 1.45;
+      color: #273b32;
+    }
+    .did-you-know strong {
+      font-weight: 800;
+      color: #111e18;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <article class="card">
+    <header class="hero">
+      {% if photo_url %}
+      <img class="avatar" src="{{ photo_url }}" alt="" />
+      {% else %}
+      <div class="avatar-fallback">{{ avatar_initial }}</div>
+      {% endif %}
+      <div class="identity">
+        <p class="name">{{ display_name }}</p>
+        <p class="archetype">{{ archetype_name }}</p>
+        <p class="tagline">{{ archetype_tagline }}</p>
+      </div>
+    </header>
+
+    <div class="vehicle-wrap">
+      {% if vehicle_image_url %}
+      <img class="vehicle" src="{{ vehicle_image_url }}" alt="" />
+      {% endif %}
+      {% if license_plate %}
+      <div class="plate">
+        <div class="plate-header">
+          <span>WESTERN</span>
+          <span class="plate-dot"></span>
+          <span>AUSTRALIA</span>
+        </div>
+        <div class="plate-body">{{ license_plate }}</div>
+      </div>
+      {% endif %}
+      {% if favorite_color_label %}
+      <div class="colour">
+        {% if favorite_color_hex %}<span class="colour-swatch" style="background: {{ favorite_color_hex }}"></span>{% endif %}
+        My colour <strong>{{ favorite_color_label }}</strong>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if traits %}
+    <div class="traits">
+      {% for trait in traits %}<span class="trait">{{ trait }}</span>{% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="insights">
+      <article class="insight insight-self">
+        <h2>Self insight</h2>
+        <p>{{ self_insight_text }}</p>
+      </article>
+      <article class="insight insight-social">
+        <h2>Social perception</h2>
+        <p>{{ social_perception_text }}</p>
+      </article>
+    </div>
+
+    <p class="did-you-know"><strong>Did you know</strong> {{ did_you_know_fact }}</p>
+  </article>
+</body>
+</html>

@@ -129,6 +129,11 @@ User Priority: {priority_label}
         job.completed_at = timezone.now()
         job.save()
 
+        # Social share card PNG (headless Chromium). Failure never blocks the
+        # reveal — the frontend falls back to link-only sharing.
+        from apps.mygarage.share_card import generate_share_card_png
+        generate_share_card_png(result)
+
         emit_analytics_event.delay(
             user_id=job.user.id,
             event_name='ridereveal_generated',

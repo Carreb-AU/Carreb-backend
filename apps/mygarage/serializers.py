@@ -155,14 +155,25 @@ class RideRevealPurchaseSerializer(serializers.Serializer):
 
 class RideRevealResultSerializer(serializers.ModelSerializer):
     vehicle = serializers.SerializerMethodField()
+    share_image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = RideRevealResult
         fields = [
-            'archetype_name', 'archetype_tagline', 'self_insight_text', 
+            'archetype_name', 'archetype_tagline', 'self_insight_text',
             'social_perception_text', 'did_you_know_fact', 'share_caption',
-            'disclaimer', 'custom_plate', 'favorite_color', 'generated_at', 'vehicle'
+            'disclaimer', 'custom_plate', 'favorite_color', 'generated_at', 'vehicle',
+            'share_image_url'
         ]
+
+    def get_share_image_url(self, obj):
+        if not obj.share_image:
+            return None
+        url = obj.share_image.url
+        if url.startswith('/'):
+            from django.conf import settings
+            return getattr(settings, 'API_BASE_URL', '').rstrip('/') + url
+        return url
 
     def get_vehicle(self, obj):
         from apps.vehicles.services.rating_engine import calculate_core_rating

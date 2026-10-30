@@ -658,3 +658,70 @@ class RideRevealFavoriteColorTests(TestCase):
             credit_type=RideRevealCreditType.PLAN_INCLUDED)
         data = RideRevealResultSerializer(result).data
         self.assertEqual(data["favorite_color"], "Midnight Blue")
+
+
+class RideRevealShareCardTests(TestCase):
+    """Share-card context, HTML render, and share_image_url exposure."""
+
+    def setUp(self):
+        from apps.users.models import SubscriptionTier
+        self.user = User.objects.create_user(
+            email="rrshare@example.com", password="x", first_name="Ali",
+            subscription_tier=SubscriptionTier.FULL_INSIGHT_PRO)
+        self.client.force_authenticate(self.user)
+        self.vehicle = make_vehicle(image_url="/media/vehicle_images/x.png")
+        self.gv = GarageVehicle.objects.create(
+            user=self.user, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+        from apps.mygarage.models import RideRevealCreditType
+        from apps.mygarage.models import RideRevealResult
+        self.result = RideRevealResult.objects.create(
+            user=self.user, garage_vehicle=self.gv,
+            vehicle_catalogue=self.vehicle,
+            custom_plate="WE323", favorite_color="Midnight Blue",
+            archetype_name="Steady Optimist",
+            archetype_tagline="Calm confidence",
+            self_insight_text="You choose well.",
+            social_perception_text="Others notice.",
+            did_you_know_fact="Rare company.",
+            share_caption="c", ai_model_version="gpt-4o-mini",
+            generation_duration_ms=100,
+            credit_type=RideRevealCreditType.PLAN_INCLUDED)
+
+    def test_context_maps_result_fields(self):
+        from apps.mygarage.share_card import build_share_card_context
+        ctx = build_share_card_context(self.result)
+        self.assertEqual(ctx["display_name"], "Ali")
+        self.assertEqual(ctx["avatar_initial"], "A")
+        self.assertEqual(ctx["license_plate"], "WE323")
+        self.assertEqual(ctx["favorite_color_label"], "Midnight Blue")
+        self.assertEqual(ctx["favorite_color_hex"], "#1a2744")
+        self.assertTrue(ctx["vehicle_image_url"].startswith("http"))
+        self.assertEqual(ctx["traits"], [])
+
+    def test_context_color_without_known_name_has_no_hex(self):
+        from apps.mygarage.share_card import build_share_card_context
+        self.result.favorite_color = "Sparkle Unicorn"
+        ctx = build_share_card_context(self.result)
+        self.assertEqual(ctx["favorite_color_hex"], "")
+
+    def test_rendered_html_contains_card_content(self):
+        from apps.mygarage.share_card import render_share_card_html
+        html = render_share_card_html(self.result)
+        self.assertIn('class="card"', html)
+        self.assertIn("Steady Optimist", html)
+        self.assertIn("WE323", html)
+        self.assertIn("Midnight Blue", html)
+        # user has no profile photo -> avatar fallback initial is rendered
+        self.assertIn('class="avatar-fallback"', html)
+        self.assertIn(">A<", html)
+
+    def test_serializer_share_image_url_null_then_set(self):
+        from apps.mygarage.serializers import RideRevealResultSerializer
+        from django.core.files.base import ContentFile
+        data = RideRevealResultSerializer(self.result).data
+        self.assertIsNone(data["share_image_url"])
+        self.result.share_image.save(
+            f"{self.result.id}.png", ContentFile(b"png"), save=True)
+        data = RideRevealResultSerializer(self.result).data
+        self.assertTrue(data["share_image_url"].startswith("http"))

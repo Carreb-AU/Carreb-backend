@@ -265,6 +265,8 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 FRONTEND_URL = env('FRONTEND_URL', default='https://carreb.com')
 FRONTEND_DEV_URL = env('FRONTEND_DEV_URL', default='http://localhost:3000')
 FRONTEND_PROD_URL = env('FRONTEND_PROD_URL', default='https://carreb.com')
+# Public origin of this API, used to absolutize /media/... URLs for renders.
+API_BASE_URL = env('API_BASE_URL', default='https://api.carreb.com.au')
 
 # Notification Settings
 TWILIO_ACCOUNT_SID = env('TWILIO_ACCOUNT_SID', default='')
