@@ -5,7 +5,9 @@ GET /api/core-dial/dataset/?state=NSW   — every on-sale listing in the state,
                                         Free users get it too (locked Dial still
                                         shows COO and CO2). ETag from
                                         scoring_version + state; Cache-Control: private.
-GET /api/core-dial-matches/             — the green button. Paid plans only,
+GET /api/core-dial-matches/             — the green button. All tiers: viewing
+                                        results is free; the upgrade point is
+                                        add-to-garage (plan cap).
                                         "search"-scoped throttle 20/min.
 """
 from django.http import HttpResponseNotModified
@@ -14,7 +16,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
-from apps.users.models import SubscriptionTier
 from apps.vehicles.models import CoreDialBatch, CoreDialRow
 from apps.vehicles.services.core_dial import (
     AU_STATES,
@@ -86,14 +87,12 @@ class CoreDialDatasetView(views.APIView):
 
 
 class CoreDialMatchesView(views.APIView):
-    """The green button — "View [band]™ vehicles". Paid plans only."""
+    """The green button — "View [band]™ vehicles". Free users see results too;
+    the upgrade prompt happens at add-to-garage (plan vehicle cap)."""
     permission_classes = [IsAuthenticated]
     throttle_classes = [SearchRateThrottle]
 
     def get(self, request):
-        if request.user.subscription_tier == SubscriptionTier.FREE:
-            return Response({'error': 'upgrade_required'}, status=status.HTTP_403_FORBIDDEN)
-
         params = request.query_params
         state = (params.get('state') or '').upper()
         budget = params.get('budget')

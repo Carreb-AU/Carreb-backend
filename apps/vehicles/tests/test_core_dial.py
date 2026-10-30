@@ -340,11 +340,11 @@ class CoreDialApiTests(TestCase):
         resp = self._matches()
         self.assertEqual(resp.status_code, 401)
 
-    def test_matches_free_user_upgrade_required(self):
+    def test_matches_free_user_ok(self):
         self._auth(self.free_user)
         resp = self._matches()
-        self.assertEqual(resp.status_code, 403)
-        self.assertEqual(resp.data['error'], 'upgrade_required')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('results', resp.data)
 
     def test_matches_invalid_params(self):
         self._auth()
