@@ -327,6 +327,13 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.vehicles.tasks.quarterly_gvg_import_task',
         'schedule': crontab(hour=2, minute=0, day_of_month=1, month_of_year='1,4,7,10'),
     },
+
+    # Nightly warm of AI estimate caches (spec sheet / ANCAP / engine) for
+    # GVG + AI-search rows; chains itself in bounded chunks until done.
+    'sweep-vehicle-estimates': {
+        'task': 'apps.vehicles.tasks.sweep_vehicle_estimates_task',
+        'schedule': crontab(hour=3, minute=17),
+    },
 }
 
 # OTP Configuration

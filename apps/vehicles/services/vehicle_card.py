@@ -121,8 +121,21 @@ def _attr(record, field: str, source: str):
     return value, provenance
 
 
+def cached_spec_sheet(make, model, variant, year, powertrain: str = '') -> dict:
+    """Cache-READ-ONLY variant for the request path: never calls Grok, so
+    card building can never block a response on the AI. Returns {} when
+    cold; a warmer (celery task / sweep / management command) fills the
+    cache off-request."""
+    sheet = cache.get(spec_sheet_cache_key(make, model, variant, year, powertrain))
+    return sheet or {}
+
+
+def _estimate_cache_key(kind: str, make, model, variant, year) -> str:
+    return f"vc:est:{kind}:{make}|{model}|{variant}|{year}"
+
+
 def _cached_estimate(kind: str, func, make, model, variant, year):
-    key = f"vc:est:{kind}:{make}|{model}|{variant}|{year}"
+    key = _estimate_cache_key(kind, make, model, variant, year)
     cached = cache.get(key)
     if cached is not None:
         return cached or None
@@ -137,6 +150,12 @@ def _cached_estimate(kind: str, func, make, model, variant, year):
         value = None
     cache.set(key, value if value is not None else False, ESTIMATE_CACHE_TTL)
     return value
+
+
+def _cached_estimate_read(kind: str, make, model, variant, year):
+    """Cache-read-only counterpart of _cached_estimate for the request path."""
+    cached = cache.get(_estimate_cache_key(kind, make, model, variant, year))
+    return cached or None
 
 
 def spec_sheet_cache_key(make, model, variant, year, powertrain: str = '') -> str:
@@ -161,7 +180,7 @@ def spec_sheet_for(make, model, variant, year, powertrain: str = '') -> dict:
                        "%s %s: %s", make, model, exc)
         sheet = {}
     cache.set(key, sheet or False, ESTIMATE_CACHE_TTL)
-    return sheet
+    return sheet or {}
 
 
 SPEC_SHEET_FIELDS = ('transmission', 'doors', 'fuel_tank_l',
@@ -190,40 +209,87 @@ def warm_estimates(make, model, variant, year, powertrain: str,
                              make, model, variant, year)
 
 
-def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
-    """AI-estimate the spec fields a GVG/AI record doesn't carry.
+def record_needs_warm(rec, source: str) -> tuple:
+    """((job_args...), needs_any) for a GVG/AI record; (None, False) when
+    nothing is missing or everything is already warm."""
+    if source == 'carreb':
+        return None, False
+    make = getattr(rec, 'make', None) or getattr(rec, 'brand', '') or ''
+    model = getattr(rec, 'model', '') or ''
+    variant = getattr(rec, 'variant', '') or ''
+    year = getattr(rec, 'year', None)
+    powertrain = getattr(rec, 'powertrain_type', '') or ''
+    need_spec = any(getattr(rec, f, None) in (None, '') for f in SPEC_SHEET_FIELDS)
+    need_ancap = getattr(rec, 'ancap_safety_rating', None) is None
+    need_engine = getattr(rec, 'engine_l', None) is None
+    # Skip records whose caches are already warm.
+    if need_spec and cached_spec_sheet(make, model, variant, year, powertrain):
+        need_spec = False
+    if need_ancap and _cached_estimate_read('ancap', make, model, variant, year):
+        need_ancap = False
+    if need_engine and _cached_estimate_read('engine', make, model, variant, year):
+        need_engine = False
+    job = (make, model, variant, year, powertrain,
+           need_spec, need_ancap, need_engine)
+    return job, (need_spec or need_ancap or need_engine)
 
-    One combined 'spec sheet' Grok call (cached 30 days per
-    make|model|variant|year|powertrain) fills transmission, doors, fuel tank,
-    tow ratings, test cycle and variant. GVG records additionally use the
-    legacy single-field ANCAP/engine estimators.
+
+def warm_cold_records(source: str, limit: int, offset: int = 0,
+                      workers: int = 4) -> dict:
+    """Warm estimate caches for up to ``limit`` cold records of a source,
+    skipping rows that are already warm. Shared by the sweep task and the
+    management command."""
+    from concurrent.futures import ThreadPoolExecutor
+    if source == 'ai':
+        qs = AIVehicleEntry.objects.order_by('-search_count', '-created_at')
+    else:
+        qs = VehicleIdentity.objects.order_by('-year', 'make', 'model')
+    total = qs.count()
+    rows = list(qs[offset:offset + limit * 3])
+    jobs = []
+    already = 0
+    for rec in rows:
+        if len(jobs) >= limit:
+            break
+        job, needs = record_needs_warm(rec, source)
+        if needs:
+            jobs.append(job)
+        else:
+            already += 1
+    if jobs:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(lambda j: warm_estimates(*j), jobs))
+    return {'warmed': len(jobs), 'already_warm': already, 'total': total,
+            'next_offset': offset + len(jobs) + already,
+            'remaining': max(0, total - offset - len(jobs) - already)}
+
+
+def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
+    """Apply AI-estimated spec fields a GVG/AI record doesn't carry, from
+    the 30-day estimate caches. READ-ONLY on the request path: this never
+    calls Grok — warmers (celery tasks, nightly sweep, management command)
+    populate the caches off-request, so card building stays instant.
     """
     out = {}
     if source not in ('gvg', 'ai'):
         return out
-    from apps.mygarage.ai_service import (
-        estimate_ancap_rating,
-        estimate_engine_displacement,
-    )
 
     missing = [f for f in SPEC_SHEET_FIELDS
                if getattr(record, f, None) in (None, '')]
     if missing:
         powertrain = getattr(record, 'powertrain_type', '') or ''
-        sheet = spec_sheet_for(make, model, variant, year, powertrain)
+        sheet = cached_spec_sheet(make, model, variant, year, powertrain)
         for field in missing:
             if sheet.get(field) is not None:
                 out[field] = (sheet[field], 'ai')
 
     if source == 'gvg':
         if getattr(record, 'ancap_safety_rating', None) is None:
-            rating = _cached_estimate('ancap', estimate_ancap_rating,
-                                      make, model, variant, year)
+            rating = _cached_estimate_read('ancap', make, model, variant, year)
             if rating:
                 out['ancap_safety_rating'] = (rating, 'ai')
         if getattr(record, 'engine_l', None) is None:
-            engine = _cached_estimate('engine', estimate_engine_displacement,
-                                      make, model, variant, year)
+            engine = _cached_estimate_read('engine', make, model, variant, year)
             if engine:
                 out['engine_l'] = (engine, 'ai')
     return out

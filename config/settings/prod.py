@@ -5,6 +5,18 @@ from sentry_sdk.integrations.django import DjangoIntegration
 
 DEBUG = env.bool('DEBUG', default=False)
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS')
+
+# Shared cache across gunicorn/celery/celery-beat processes: the estimate
+# warmers (spec sheet / ANCAP / engine) write from celery workers and the
+# web workers must see those values. LocMemCache is per-process and would
+# silently break that pipeline.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": env('REDIS_CACHE_URL', default='redis://redis:6379/1'),
+        "TIMEOUT": 300,
+    }
+}
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 USE_X_FORWARDED_PROTO = True

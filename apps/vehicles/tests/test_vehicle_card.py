@@ -128,25 +128,55 @@ class VehicleCardTests(TestCase):
         grok.return_value = {"ancap_rating": 4, "engine_l": 1.8}
         # Unique name so the 30-day estimate cache can't carry a miss over
         # from the earlier GVG tests in this module.
-        card = build_vehicle_card(_make_gvg(make="Mazda", model="3"), 'gvg')
+        rec = _make_gvg(make="Mazda", model="3")
+        # The card path is cache-READ-ONLY: a cold cache yields nothing and
+        # must never call Grok inline.
+        card = build_vehicle_card(rec, 'gvg')
+        self.assertIsNone(card['ancap_safety_rating'])
+        self.assertEqual(grok.call_count, 0)
+        # Once a warmer populates the cache, the card picks the values up.
+        from apps.vehicles.services.vehicle_card import warm_estimates
+        warm_estimates("Mazda", "3", "Ascent", 2015, "petrol",
+                       need_spec=False, need_ancap=True, need_engine=True)
+        card = build_vehicle_card(rec, 'gvg')
         self.assertEqual(card['ancap_safety_rating'], 4)
         self.assertEqual(card['field_sources']['ancap_safety_rating'], 'ai')
         self.assertEqual(card['engine_l'], 1.8)
 
+    def test_card_never_calls_grok_on_cold_cache(self):
+        """Request-path guarantee: building any card with cold caches makes
+        zero AI calls (responses must stay instant; warmers run off-request)."""
+        from apps.mygarage.ai_service import _call_grok_json
+        real = _call_grok_json
+        calls = []
+        def spy(*a, **k):
+            calls.append(1)
+            return real(*a, **k)
+        with mock.patch("apps.mygarage.ai_service._call_grok_json", spy):
+            build_vehicle_card(_make_gvg(make="Spy", model="Cold1"), 'gvg')
+            build_vehicle_card(
+                _make_ai(make="Spy", model="Cold2",
+                         search_query="spy cold2 zz"), 'ai')
+        self.assertEqual(calls, [])
+
     @mock.patch("apps.mygarage.ai_service._call_grok_json")
     def test_ai_record_missing_specs_backfilled_by_spec_sheet(self, grok):
         """Old cached AI rows (pre-spec-columns) heal via the combined
-        spec-sheet estimator — one Grok call, cached 30 days."""
+        spec-sheet estimator — one Grok call per car, cached 30 days —
+        applied off-request, then served by the card."""
         grok.return_value = {
             "transmission": "automatic", "doors": 4, "fuel_tank_l": 60.0,
             "tow_braked_kg": 1200, "tow_unbraked_kg": 600,
             "test_cycle": "NEDC", "variant": "Altise",
             "confidence": "medium", "reasoning": "base sedan",
         }
-        card = build_vehicle_card(
-            _make_ai(variant="", powertrain_type="petrol",
-                     search_query="toyota camry 2015 petrol specsheet"),
-            'ai')
+        rec = _make_ai(variant="", powertrain_type="petrol",
+                       search_query="toyota camry 2015 petrol specsheet")
+        from apps.vehicles.services.vehicle_card import warm_estimates
+        warm_estimates("Toyota", "Camry", "", 2015, "petrol",
+                       need_spec=True, need_ancap=False, need_engine=False)
+        self.assertEqual(grok.call_count, 1)  # one combined call, not six
+        card = build_vehicle_card(rec, 'ai')
         self.assertEqual(card['transmission'], 'automatic')
         self.assertEqual(card['field_sources']['transmission'], 'ai')
         self.assertEqual(card['doors'], 4)

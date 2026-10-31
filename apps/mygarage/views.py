@@ -416,35 +416,19 @@ class CurrentVehicleSearchView(views.APIView):
                 seen.add(key)
                 records.append((r, 'gvg'))
 
-        # Warm the AI estimate caches for GVG/AI records that lack spec
-        # fields, concurrently — each Grok call is independent, and warming
-        # before card building keeps the response inside the worker timeout
-        # even when the cache is completely cold.
-        warm_jobs = []
-        seen_jobs = set()
+        # GVG/AI results may lack AI-estimable spec fields (doors, tow,
+        # ANCAP...). Never call Grok inline — a cold Grok call takes 10-30s
+        # and would blow the response budget. Instead, enqueue fire-and-
+        # forget warmers; the card reads whatever the 30-day caches hold
+        # and fills in on the next view once the warmer lands.
+        from apps.vehicles.services.vehicle_card import record_needs_warm
+        from apps.vehicles.tasks import warm_vehicle_estimates_task
         for rec, src in records:
             if src not in ('gvg', 'ai'):
                 continue
-            make = getattr(rec, 'make', None) or getattr(rec, 'brand', '') or ''
-            job = (
-                make, rec.model or '', getattr(rec, 'variant', '') or '',
-                getattr(rec, 'year', None),
-                getattr(rec, 'powertrain_type', '') or '',
-                any(getattr(rec, f, None) in (None, '')
-                    for f in ('transmission', 'doors', 'fuel_tank_l',
-                              'tow_braked_kg', 'tow_unbraked_kg', 'test_cycle',
-                              'variant')),
-                src == 'gvg' and getattr(rec, 'ancap_safety_rating', None) is None,
-                src == 'gvg' and getattr(rec, 'engine_l', None) is None,
-            )
-            if any(job[5:]) and job not in seen_jobs:
-                seen_jobs.add(job)
-                warm_jobs.append(job)
-        if warm_jobs:
-            from concurrent.futures import ThreadPoolExecutor
-            from apps.vehicles.services.vehicle_card import warm_estimates
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                list(pool.map(lambda j: warm_estimates(*j), warm_jobs))
+            _, needs = record_needs_warm(rec, src)
+            if needs:
+                warm_vehicle_estimates_task.delay(str(rec.id), src)
 
         results = [self._normalize_result(rec, src) for rec, src in records]
 

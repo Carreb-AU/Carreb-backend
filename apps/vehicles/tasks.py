@@ -234,3 +234,52 @@ def quarterly_gvg_import_task():
     except Exception as e:
         logger.error(f"Quarterly GVG import failed: {e}")
 
+
+
+@shared_task(bind=True, max_retries=2)
+def warm_vehicle_estimates_task(self, record_id: str, source: str):
+    """Off-request estimate warmer for one GVG/AI record.
+
+    Search/list endpoints enqueue this (fire-and-forget) for results that
+    lack AI-estimable spec fields, so responses stay instant while Grok
+    (10-30s per call) fills the 30-day caches in the background.
+    """
+    from apps.vehicles.models import AIVehicleEntry, VehicleIdentity
+    from apps.vehicles.services.vehicle_card import (
+        record_needs_warm, warm_estimates)
+
+    model = {'gvg': VehicleIdentity, 'ai': AIVehicleEntry}.get(source)
+    if model is None:
+        return
+    try:
+        rec = model.objects.get(id=record_id)
+    except model.DoesNotExist:
+        return
+    job, needs = record_needs_warm(rec, source)
+    if needs:
+        warm_estimates(*job)
+
+
+@shared_task
+def sweep_vehicle_estimates_task(limit: int = 250, offset: int = 0):
+    """Nightly sweep warming estimate caches for AI entries first, then GVG
+    rows, in bounded chunks that stay well inside the 30-minute task limit.
+    Each run chains the next chunk (offset+limit) until the table is done;
+    the offset resets to 0 once the end is reached so new/updated rows get
+    picked up in the next full pass."""
+    from apps.vehicles.services.vehicle_card import warm_cold_records
+
+    ai_result = warm_cold_records('ai', limit=limit, offset=offset, workers=4)
+    logger.info(f"AI estimate sweep @{offset}: {ai_result}")
+    if ai_result['remaining'] > 0:
+        sweep_vehicle_estimates_task.apply_async(
+            args=[limit, ai_result['next_offset']], countdown=30)
+        return
+
+    gvg_limit = limit * 2
+    gvg_result = warm_cold_records('gvg', limit=gvg_limit, offset=offset,
+                                   workers=4)
+    logger.info(f"GVG estimate sweep @{offset}: {gvg_result}")
+    if gvg_result['remaining'] > 0:
+        sweep_vehicle_estimates_task.apply_async(
+            args=[limit, gvg_result['next_offset']], countdown=30)
