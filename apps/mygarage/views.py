@@ -139,6 +139,10 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         base_data['fuel_consumption_per_100km'] = gvg_record.fuel_consumption_combined_l_100km
         base_data['tailpipe_co2_g_per_km'] = gvg_record.tailpipe_co2_g_per_km
         base_data['source'] = 'gvg'
+        base_data['image_url'] = gvg_record.image_url or get_vehicle_image_url(
+            gvg_record.make, gvg_record.model, year=gvg_record.year,
+            fcai_category=gvg_record.fcai_category, body_style=gvg_record.body_style,
+            delay=0.05)
     elif not rating_vehicle and ai_entry:
         # AI-searched car (missing from catalogue and GVG): specs from Grok,
         # costed like a GVG current car (class medians + own consumption).
@@ -154,6 +158,18 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         base_data['fuel_consumption_per_100km'] = ai_entry.fuel_consumption_combined_l_100km
         base_data['tailpipe_co2_g_per_km'] = ai_entry.tailpipe_co2_g_per_km
         base_data['source'] = 'ai'
+        # Full spec block: the AI entry stores more than the GVG-shape fields
+        # above, so surface it all instead of leaving the card half empty.
+        base_data['drive'] = ai_entry.drive
+        base_data['engine_l'] = ai_entry.engine_l
+        base_data['battery_kwh'] = ai_entry.battery_kwh
+        base_data['num_seats'] = ai_entry.num_seats
+        base_data['ancap_safety_rating'] = ai_entry.ancap_safety_rating
+        base_data['driveaway_price_estimate'] = ai_entry.driveaway_price_estimate
+        base_data['image_url'] = ai_entry.image_url or get_vehicle_image_url(
+            ai_entry.make, ai_entry.model, year=ai_entry.year,
+            fcai_category=ai_entry.fcai_category, body_style=ai_entry.body_style,
+            drive=ai_entry.drive, delay=0.05)
 
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
 

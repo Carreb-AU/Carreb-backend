@@ -833,6 +833,26 @@ class GarageAddAIEntryTests(TestCase):
         gv = GarageVehicle.objects.get(user=self.user)
         self.assertEqual(str(gv.ai_vehicle_entry_id), str(self.ai_entry.id))
 
+    def test_ai_garage_card_surfaces_full_spec(self):
+        """AI garage cards must not come back half-empty: drive, engine_l,
+        seats, ANCAP and an image fallback all appear in vehicle_data."""
+        self.ai_entry.drive = "FWD"
+        self.ai_entry.engine_l = 2.5
+        self.ai_entry.num_seats = 5
+        self.ai_entry.ancap_safety_rating = 5
+        self.ai_entry.save()
+        self.client.post(
+            reverse("garage-vehicles"),
+            {"ai_vehicle_entry_id": str(self.ai_entry.id),
+             "source": "vehicle_lookup"}, format="json")
+        resp = self.client.get(reverse("garage-vehicles"))
+        card = resp.data["vehicles"][0]
+        vd = card["vehicle_data"]
+        self.assertEqual(vd["drive"], "FWD")
+        self.assertEqual(vd["engine_l"], 2.5)
+        self.assertEqual(vd["num_seats"], 5)
+        self.assertEqual(vd["ancap_safety_rating"], 5)
+
     def test_current_vehicle_with_ai_entry_creates_garage_row(self):
         resp = self.client.post(
             reverse("current-vehicle"),
