@@ -17,7 +17,10 @@ from apps.mygarage.models import (
 )
 from apps.vehicles.models import Vehicle, VehicleIdentity
 from apps.vehicles.services.gvg_import import build_vehicle_like_from_gvg
-from apps.vehicles.services.image_lookup import get_vehicle_image_url
+from apps.vehicles.services.image_lookup import (
+    get_used_vehicle_image_url,
+    get_vehicle_image_url,
+)
 from apps.users.models import SubscriptionTier
 from apps.users.permissions import IsPaidMember
 from apps.mygarage.serializers import (
@@ -139,13 +142,17 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         base_data['fuel_consumption_per_100km'] = gvg_record.fuel_consumption_combined_l_100km
         base_data['tailpipe_co2_g_per_km'] = gvg_record.tailpipe_co2_g_per_km
         base_data['source'] = 'gvg'
-        base_data['image_url'] = gvg_record.image_url or get_vehicle_image_url(
+        base_data['image_url'] = gvg_record.image_url or get_used_vehicle_image_url(
             gvg_record.make, gvg_record.model, year=gvg_record.year,
-            fcai_category=gvg_record.fcai_category, body_style=gvg_record.body_style,
-            delay=0.05)
+            fcai_category=gvg_record.fcai_category, body_style=gvg_record.body_style)
     elif not rating_vehicle and ai_entry:
         # AI-searched car (missing from catalogue and GVG): specs from Grok,
         # costed like a GVG current car (class medians + own consumption).
+        # Rows created before the estimate-filler existed are completed
+        # lazily here (sheet defaults only — no AI tokens).
+        if not ai_entry.ctp_by_state:
+            from apps.vehicles.services.ai_entry_estimates import fill_ai_entry_estimates
+            fill_ai_entry_estimates(ai_entry)
         rating_vehicle = ai_entry
         base_data = base_data or {}
         base_data['ai_vehicle_entry_id'] = str(ai_entry.id)
@@ -166,10 +173,13 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         base_data['num_seats'] = ai_entry.num_seats
         base_data['ancap_safety_rating'] = ai_entry.ancap_safety_rating
         base_data['driveaway_price_estimate'] = ai_entry.driveaway_price_estimate
-        base_data['image_url'] = ai_entry.image_url or get_vehicle_image_url(
+        base_data['servicing_5yr_estimate'] = ai_entry.servicing_5yr_estimate
+        base_data['tyre_replacement_estimate'] = ai_entry.tyre_replacement_estimate
+        base_data['resale_value_5yr_estimate'] = ai_entry.resale_value_5yr_estimate
+        base_data['image_url'] = ai_entry.image_url or get_used_vehicle_image_url(
             ai_entry.make, ai_entry.model, year=ai_entry.year,
             fcai_category=ai_entry.fcai_category, body_style=ai_entry.body_style,
-            drive=ai_entry.drive, delay=0.05)
+            drive=ai_entry.drive)
 
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
 
@@ -545,9 +555,9 @@ class CurrentVehicleSearchView(views.APIView):
         for e in entries:
             if year and e.year and abs(e.year - year) > 1:
                 continue
-            image_url = get_vehicle_image_url(
+            image_url = get_used_vehicle_image_url(
                 e.make, e.model, year=e.year, fcai_category=e.fcai_category,
-                body_style=e.body_style, drive=e.drive, delay=0.05)
+                body_style=e.body_style, drive=e.drive)
             out.append({
                 "id": str(e.id),
                 "source": "ai",
@@ -564,6 +574,11 @@ class CurrentVehicleSearchView(views.APIView):
                 ),
                 "tailpipe_co2_g_per_km": e.tailpipe_co2_g_per_km,
                 "image_url": image_url,
+                "drive": e.drive,
+                "engine_l": e.engine_l,
+                "num_seats": e.num_seats,
+                "ancap_safety_rating": e.ancap_safety_rating,
+                "driveaway_price_estimate": e.driveaway_price_estimate,
                 "name": f"{e.year or ''} {e.make} {e.model} {e.variant}".strip(),
             })
         return out or None

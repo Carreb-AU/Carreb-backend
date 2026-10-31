@@ -128,3 +128,30 @@ def get_vehicle_image_url(
 def warm_vehicle_image_cache(make: str, model: str, year: int | None = None) -> str:
     """Explicitly warm the cache for a known vehicle."""
     return get_vehicle_image_url(make, model, year=year)
+
+
+def get_used_vehicle_image_url(
+    make: str,
+    model: str,
+    year: int | None = None,
+    fcai_category: Optional[str] = None,
+    body_style: Optional[str] = None,
+    drive: Optional[str] = None,
+) -> str:
+    """Image for a used/AI/GVG car: a curated photo when the library has this
+    exact make-model-year on disk, otherwise an FCAI silhouette.
+
+    Deliberately skips the Wikimedia Commons step — generic web photos for
+    older cars (taxi fleets, wrong markets) look worse than a clean
+    silhouette.
+    """
+    import os
+
+    slug = f"{make or ''}-{model or ''}-{year or ''}".lower().replace(" ", "-")
+    slug = "".join(ch for ch in slug if ch.isalnum() or ch == "-").strip("-")
+    if slug:
+        filename = f"{slug}.png"
+        path = os.path.join(str(settings.MEDIA_ROOT), "vehicle_images", filename)
+        if os.path.isfile(path):
+            return f"{settings.MEDIA_URL}vehicle_images/{filename}"
+    return get_silhouette_url(fcai_category, body_style, drive)

@@ -55,7 +55,9 @@ Return ONLY a valid JSON object, no markdown fences, no extra text:
       "electric_range_km": float or null,
       "tailpipe_co2_g_per_km": float combined or null,
       "fcai_category": one of Light|Small|Medium|Large|Upper Large|Small SUV|Medium SUV|Large SUV|Upper Large SUV|People Mover|Ute|Van|Light Commercial or "",
-      "driveaway_price_aud": integer Australian driveaway/RRP dollars or null
+      "driveaway_price_aud": integer Australian driveaway/RRP dollars or null,
+      "used_market_price_aud": integer typical current used-market price in Australia for this exact year/variant, or null,
+      "resale_value_5yr_aud": integer estimated value in 5 years from now in Australia, or null
     }}
   ]
 }}
@@ -66,7 +68,8 @@ Rules:
 - fuel_consumption_l_100km is for petrol/diesel/hybrid/PHEV; electricity_consumption_wh_per_km and electric_range_km for BEV/PHEV.
 - For PHEV provide both fuel consumption and electric range/consumption if known.
 - For fuel_consumption_l_100km and tailpipe_co2_g_per_km, provide your best-estimate combined ADR figures even for older or obscure cars — only use null if you have no reasonable estimate at all.
-- fcai_category: pick the closest FCAI size/shape segment for the Australian market (e.g. a Toyota Corolla is "Small", a Mazda CX-5 is "Medium SUV", a Holden Commodore is "Large", a Toyota HiLux is "Ute")."""
+- fcai_category: pick the closest FCAI size/shape segment for the Australian market (e.g. a Toyota Corolla is "Small", a Mazda CX-5 is "Medium SUV", a Holden Commodore is "Large", a Toyota HiLux is "Ute").
+- used_market_price_aud and resale_value_5yr_aud: give your best honest estimate even if unsure (use null only if you have no idea). used_market_price_aud is what a buyer would pay today for this year/variant in average condition; for a current-year car it equals the driveaway price. resale_value_5yr_aud is what this car is likely worth 5 years from today."""
 
 
 class AIVehicleSearchError(Exception):
@@ -95,10 +98,12 @@ def search_ai_vehicles(query: str, user=None) -> tuple[list[AIVehicleEntry], boo
     if not candidates:
         raise AIVehicleSearchError("The AI could not identify a matching vehicle.")
 
-    entries = [
-        AIVehicleEntry.objects.create(search_query=norm, created_by=user, **c)
-        for c in candidates
-    ]
+    entries = []
+    from apps.vehicles.services.ai_entry_estimates import fill_ai_entry_estimates
+    for c in candidates:
+        entry = AIVehicleEntry.objects.create(search_query=norm, created_by=user, **c)
+        # Complete the cost columns from the sheet defaults (no extra tokens).
+        entries.append(fill_ai_entry_estimates(entry))
     logger.info("AI vehicle search %r: stored %d candidates", norm, len(entries))
     return entries, False
 
@@ -176,6 +181,8 @@ def _normalize_candidate(v: dict, raw: dict) -> dict:
     pt_key = re.sub(r'[^a-z0-9]+', ' ', str(v.get('powertrain') or '').casefold()).strip()
     powertrain = _POWERTRAIN_MAP.get(pt_key, PowertrainType.PETROL)
     price_aud = _to_int(v.get('driveaway_price_aud'))
+    used_price_aud = _to_int(v.get('used_market_price_aud'))
+    resale_aud = _to_int(v.get('resale_value_5yr_aud'))
     return {
         'make': str(v.get('make')).strip()[:100],
         'model': str(v.get('model')).strip()[:100],
@@ -194,7 +201,8 @@ def _normalize_candidate(v: dict, raw: dict) -> dict:
         'electric_range_km': _to_float(v.get('electric_range_km')),
         'tailpipe_co2_g_per_km': _to_float(v.get('tailpipe_co2_g_per_km')),
         'fcai_category': str(v.get('fcai_category') or '').strip()[:100],
-        'driveaway_price_estimate': price_aud * 100 if price_aud else None,
+        'driveaway_price_estimate': (price_aud or used_price_aud) * 100 if (price_aud or used_price_aud) else None,
+        'resale_value_5yr_estimate': resale_aud * 100 if resale_aud else None,
         'raw_response': {'candidate': v, 'full_response': raw},
         'provenance': {
             'source': 'ai_vehicle_search',
