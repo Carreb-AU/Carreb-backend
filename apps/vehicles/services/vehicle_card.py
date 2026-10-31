@@ -139,6 +139,31 @@ def _cached_estimate(kind: str, func, make, model, variant, year):
     return value
 
 
+def spec_sheet_cache_key(make, model, variant, year, powertrain: str = '') -> str:
+    return (f"vc:est:specsheet:{make}|{model}|{variant}|{year}"
+            f"|{powertrain or ''}")
+
+
+def spec_sheet_for(make, model, variant, year, powertrain: str = '') -> dict:
+    """Cached spec-sheet estimate for one car (30-day cache). Fetches from
+    Grok on a cold cache; returns {} when the AI is unavailable. Pure
+    values in/out so callers can run it off-thread without touching the ORM.
+    """
+    key = spec_sheet_cache_key(make, model, variant, year, powertrain)
+    sheet = cache.get(key)
+    if sheet is not None:
+        return sheet or {}
+    from apps.mygarage.ai_service import estimate_spec_sheet
+    try:
+        sheet = estimate_spec_sheet(make, model, variant, year, powertrain)
+    except Exception as exc:
+        logger.warning("vehicle_card spec-sheet estimate failed for "
+                       "%s %s: %s", make, model, exc)
+        sheet = {}
+    cache.set(key, sheet or False, ESTIMATE_CACHE_TTL)
+    return sheet
+
+
 def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
     """AI-estimate the spec fields a GVG/AI record doesn't carry.
 
@@ -153,7 +178,6 @@ def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
     from apps.mygarage.ai_service import (
         estimate_ancap_rating,
         estimate_engine_displacement,
-        estimate_spec_sheet,
     )
 
     missing = [f for f in ('transmission', 'doors', 'fuel_tank_l',
@@ -162,22 +186,10 @@ def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
                if getattr(record, f, None) in (None, '')]
     if missing:
         powertrain = getattr(record, 'powertrain_type', '') or ''
-        key = (f"vc:est:specsheet:{make}|{model}|{variant}|{year}"
-               f"|{powertrain}")
-        sheet = cache.get(key)
-        if sheet is None:
-            try:
-                sheet = estimate_spec_sheet(make, model, variant, year,
-                                            powertrain)
-            except Exception as exc:
-                logger.warning("vehicle_card spec-sheet estimate failed for "
-                               "%s %s: %s", make, model, exc)
-                sheet = {}
-            cache.set(key, sheet or False, ESTIMATE_CACHE_TTL)
-        if sheet:
-            for field in missing:
-                if sheet.get(field) is not None:
-                    out[field] = (sheet[field], 'ai')
+        sheet = spec_sheet_for(make, model, variant, year, powertrain)
+        for field in missing:
+            if sheet.get(field) is not None:
+                out[field] = (sheet[field], 'ai')
 
     if source == 'gvg':
         if getattr(record, 'ancap_safety_rating', None) is None:

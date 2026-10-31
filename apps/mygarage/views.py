@@ -380,16 +380,18 @@ class CurrentVehicleSearchView(views.APIView):
             return ((brand or '').casefold(), (model_name or '').casefold(),
                     (variant or '').casefold(), yr)
 
+        records: list = []  # (record, source) pairs, warmed then carded
+
         # 1. Carreb catalogue (new vehicles; preferred on collision)
         carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
         if year:
             carreb_qs = carreb_qs.filter(year=year)
         for v in carreb_qs.order_by('brand', 'model', '-year')[:10]:
             seen.add(identity_key(v.brand, v.model, v.variant, v.year))
-            results.append(self._normalize_result(v, 'carreb'))
+            records.append((v, 'carreb'))
 
         # 2. GVG records (older vehicles) - trigram fuzzy type-ahead
-        if len(results) < 10:
+        if len(records) < 10:
             gvg_qs = VehicleIdentity.objects.all()
             if connection.vendor == 'postgresql':
                 needle = (' '.join(([str(year)] if year else []) + words) or query).lower()
@@ -406,13 +408,40 @@ class CurrentVehicleSearchView(views.APIView):
                 gvg_qs = gvg_qs.order_by('make', 'model', '-year')
 
             for r in gvg_qs[:20]:
-                if len(results) >= 10:
+                if len(records) >= 10:
                     break
                 key = identity_key(r.make, r.model, r.variant, r.year)
                 if key in seen:
                     continue
                 seen.add(key)
-                results.append(self._normalize_result(r, 'gvg'))
+                records.append((r, 'gvg'))
+
+        # Warm the AI spec-sheet cache for the GVG/AI records that lack spec
+        # fields, concurrently — each Grok call is independent, and warming
+        # before card building keeps the response inside the worker timeout
+        # even when the cache is completely cold.
+        warm_jobs = []
+        for rec, src in records:
+            if src not in ('gvg', 'ai'):
+                continue
+            missing = [f for f in ('transmission', 'doors', 'fuel_tank_l',
+                                   'tow_braked_kg', 'tow_unbraked_kg',
+                                   'test_cycle', 'variant')
+                       if getattr(rec, f, None) in (None, '')]
+            if missing:
+                warm_jobs.append((
+                    getattr(rec, 'make', None) or getattr(rec, 'brand', '') or '',
+                    rec.model or '',
+                    getattr(rec, 'variant', '') or '',
+                    getattr(rec, 'year', None),
+                    getattr(rec, 'powertrain_type', '') or ''))
+        if warm_jobs:
+            from concurrent.futures import ThreadPoolExecutor
+            from apps.vehicles.services.vehicle_card import spec_sheet_for
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                list(pool.map(lambda j: spec_sheet_for(*j), warm_jobs))
+
+        results = [self._normalize_result(rec, src) for rec, src in records]
 
         # 3. Nothing in the DB *strictly* matches the query (e.g. an older
         #    car absent from both catalogue and GVG) -> fall back to the AI

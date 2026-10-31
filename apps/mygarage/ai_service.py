@@ -166,7 +166,7 @@ Rules:
 - Do not return any text outside the JSON object."""
 
 
-def _call_grok_json(prompt: str) -> dict:
+def _call_grok_json(prompt: str, timeout: float = 30.0) -> dict:
     """Call Grok (xAI) with a prompt and return parsed JSON, or {} on failure.
 
     Uses the shared xai_client() so field estimation rides on the same
@@ -188,7 +188,7 @@ def _call_grok_json(prompt: str) -> dict:
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
-            timeout=30.0,
+            timeout=timeout,
         )
         content = response.choices[0].message.content
         return json.loads(content)
@@ -242,7 +242,9 @@ def estimate_spec_sheet(make: str, model: str, variant: str, year: int,
     prompt = SPEC_SHEET_PROMPT.format(
         make=make or '', model=model or '', variant=variant or '',
         year=year or '', powertrain=powertrain or '')
-    result = _call_grok_json(prompt)
+    # Short timeout: this estimator runs inline inside search responses, so
+    # it must fail fast rather than push the request past the worker timeout.
+    result = _call_grok_json(prompt, timeout=12.0)
     out = {}
     transmission = str(result.get('transmission') or '').strip().lower()
     if transmission in ('automatic', 'manual', 'cvt', 'dct'):
