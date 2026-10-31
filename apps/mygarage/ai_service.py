@@ -255,13 +255,19 @@ def estimate_spec_sheet(make: str, model: str, variant: str, year: int,
             out['doors'] = int(doors)
     except (ValueError, TypeError):
         pass
-    for key, field in (('fuel_tank_l', 'fuel_tank_l'),
-                       ('tow_braked_kg', 'tow_braked_kg'),
-                       ('tow_unbraked_kg', 'tow_unbraked_kg')):
+    for key, field in (('fuel_tank_l', 'fuel_tank_l'),):
         try:
             val = result.get(key)
             if val is not None and val != '':
                 out[field] = round(float(val), 2)
+        except (ValueError, TypeError):
+            pass
+    for key, field in (('tow_braked_kg', 'tow_braked_kg'),
+                       ('tow_unbraked_kg', 'tow_unbraked_kg')):
+        try:
+            val = result.get(key)
+            if val is not None and val != '':
+                out[field] = int(round(float(val)))
         except (ValueError, TypeError):
             pass
     cycle = str(result.get('test_cycle') or '').strip().upper()

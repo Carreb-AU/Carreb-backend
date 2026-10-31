@@ -281,7 +281,10 @@ def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
         sheet = cached_spec_sheet(make, model, variant, year, powertrain)
         for field in missing:
             if sheet.get(field) is not None:
-                out[field] = (sheet[field], 'ai')
+                value = sheet[field]
+                if field in ('tow_braked_kg', 'tow_unbraked_kg', 'doors'):
+                    value = int(value)
+                out[field] = (value, 'ai')
 
     if source == 'gvg':
         if getattr(record, 'ancap_safety_rating', None) is None:
@@ -377,6 +380,18 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
         if value is not None:
             card[field] = value
             card['field_sources'][field] = provenance
+
+    # Provenance truthfulness: an AI entry's cost fields are never produced
+    # by the AI — fill_ai_entry_estimates sources them from the Data &
+    # Assumptions sheets at entry creation. Only the pricing/spec fields on
+    # the entry are actually Grok's.
+    if source == 'ai':
+        for field in ('ctp_by_state', 'insurance_estimate_by_state',
+                      'registration_by_state', 'servicing_5yr_estimate',
+                      'tyre_replacement_estimate',
+                      'total_5yr_cost_of_ownership_by_state'):
+            if field in card['field_sources']:
+                card['field_sources'][field] = 'default'
 
     # Source-specific conversions.
     if source == 'carreb':
