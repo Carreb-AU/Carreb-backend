@@ -16,6 +16,7 @@ Fallback order for every field: database value → sheet assumption/default →
 AI estimate. Fields are never omitted just because their value is null.
 """
 import logging
+import re
 from typing import Any, Optional
 
 from django.core.cache import cache
@@ -23,6 +24,7 @@ from django.core.cache import cache
 from apps.vehicles.models import (
     AIVehicleEntry,
     CategoryCostDefault,
+    FCAICategoryRegistry,
     Vehicle,
     VehicleIdentity,
 )
@@ -76,6 +78,34 @@ _FIELD_ATTRS = {
 _GVG_MISSING = object()  # sentinel
 
 
+def record_powertrain(card_or_record) -> str:
+    """Normalised powertrain string used for applicability rules."""
+    pt = getattr(card_or_record, 'powertrain_type', None)
+    if pt is None and isinstance(card_or_record, dict):
+        pt = card_or_record.get('powertrain_type')
+    return re.sub(r'[^a-z0-9]+', '', str(pt or '').casefold())
+
+
+def _fcai_broad_default(category: str) -> Optional[str]:
+    """Broad vehicle class for an FCAI category, from the registry sheet."""
+    if not category:
+        return None
+    row = FCAICategoryRegistry.objects.filter(
+        carreb_db_label__iexact=category.strip()).first()
+    if not row:
+        # Registry labels sometimes carry price-band suffixes the card
+        # category drops (e.g. "Small" vs "Small (under $40,000)").
+        row = FCAICategoryRegistry.objects.filter(
+            carreb_db_label__istartswith=category.strip()).first()
+    if not row:
+        return None
+    return {
+        'Passenger': 'Passenger Cars',
+        'SUV': 'SUVs',
+        'Light Commercial': 'Light Commercial',
+    }.get(row.vehicle_class) or None
+
+
 def _attr(record, field: str, source: str):
     """(value, provenance) for a field straight off the record."""
     attr = _FIELD_ATTRS.get(source, {}).get(field, field)
@@ -110,24 +140,56 @@ def _cached_estimate(kind: str, func, make, model, variant, year):
 
 
 def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
-    """AI-estimate the spec fields a GVG record doesn't carry."""
+    """AI-estimate the spec fields a GVG/AI record doesn't carry.
+
+    One combined 'spec sheet' Grok call (cached 30 days per
+    make|model|variant|year|powertrain) fills transmission, doors, fuel tank,
+    tow ratings, test cycle and variant. GVG records additionally use the
+    legacy single-field ANCAP/engine estimators.
+    """
     out = {}
-    if source != 'gvg':
+    if source not in ('gvg', 'ai'):
         return out
     from apps.mygarage.ai_service import (
         estimate_ancap_rating,
         estimate_engine_displacement,
+        estimate_spec_sheet,
     )
-    if getattr(record, 'ancap_safety_rating', None) is None:
-        rating = _cached_estimate('ancap', estimate_ancap_rating,
-                                  make, model, variant, year)
-        if rating:
-            out['ancap_safety_rating'] = (rating, 'ai')
-    if getattr(record, 'engine_l', None) is None:
-        engine = _cached_estimate('engine', estimate_engine_displacement,
-                                  make, model, variant, year)
-        if engine:
-            out['engine_l'] = (engine, 'ai')
+
+    missing = [f for f in ('transmission', 'doors', 'fuel_tank_l',
+                           'tow_braked_kg', 'tow_unbraked_kg', 'test_cycle',
+                           'variant')
+               if getattr(record, f, None) in (None, '')]
+    if missing:
+        powertrain = getattr(record, 'powertrain_type', '') or ''
+        key = (f"vc:est:specsheet:{make}|{model}|{variant}|{year}"
+               f"|{powertrain}")
+        sheet = cache.get(key)
+        if sheet is None:
+            try:
+                sheet = estimate_spec_sheet(make, model, variant, year,
+                                            powertrain)
+            except Exception as exc:
+                logger.warning("vehicle_card spec-sheet estimate failed for "
+                               "%s %s: %s", make, model, exc)
+                sheet = {}
+            cache.set(key, sheet or False, ESTIMATE_CACHE_TTL)
+        if sheet:
+            for field in missing:
+                if sheet.get(field) is not None:
+                    out[field] = (sheet[field], 'ai')
+
+    if source == 'gvg':
+        if getattr(record, 'ancap_safety_rating', None) is None:
+            rating = _cached_estimate('ancap', estimate_ancap_rating,
+                                      make, model, variant, year)
+            if rating:
+                out['ancap_safety_rating'] = (rating, 'ai')
+        if getattr(record, 'engine_l', None) is None:
+            engine = _cached_estimate('engine', estimate_engine_displacement,
+                                      make, model, variant, year)
+            if engine:
+                out['engine_l'] = (engine, 'ai')
     return out
 
 
@@ -227,12 +289,47 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
                 card[f] = v
                 card['field_sources'][f] = 'db'
 
-    # AI-estimate missing spec fields (GVG records).
+    # AI-estimate missing spec fields (GVG + AI records).
     for field, (value, provenance) in _ai_spec_fallbacks(
             record, source, make, model, variant, year).items():
         if card[field] is None:
             card[field] = value
             card['field_sources'][field] = provenance
+
+    # fcai_broad: deterministic registry lookup (category -> broad class).
+    if card['fcai_broad'] is None and card['fcai_category']:
+        broad = _fcai_broad_default(card['fcai_category'])
+        if broad:
+            card['fcai_broad'] = broad
+            card['field_sources']['fcai_broad'] = 'default'
+
+    # Pure combustion cars factually have no battery/electric drivetrain:
+    # report 0.0 instead of null so consumers never render "null". These are
+    # structural truths, not estimates, so field_sources stays untouched.
+    if (record_powertrain(card) in ('petrol', 'diesel')):
+        for field in ('battery_kwh', 'electricity_consumption_wh_per_km',
+                      'electric_range_km', 'wltp_range_km', 'range_battery_km'):
+            if card[field] is None:
+                card[field] = 0.0
+
+    # Derived ranges: petrol range from tank ÷ consumption; total range adds
+    # the electric leg for plug-ins (BEV total is the battery range).
+    pt = record_powertrain(card)
+    if card['range_petrol_km'] is None \
+            and card['fuel_tank_l'] and card['fuel_consumption_combined_l_100km'] \
+            and pt in ('petrol', 'diesel', 'hybrid', 'mildhybrid'):
+        card['range_petrol_km'] = round(
+            card['fuel_tank_l'] / card['fuel_consumption_combined_l_100km'] * 100)
+        card['field_sources']['range_petrol_km'] = 'default'
+    if card['range_total_km'] is None:
+        legs = [v for v in (card['range_petrol_km'], card['range_battery_km'])
+                if v]
+        if pt == 'bev':
+            legs = [v for v in (card['range_battery_km'], card['wltp_range_km'])
+                    if v]
+        if legs:
+            card['range_total_km'] = sum(legs)
+            card['field_sources']['range_total_km'] = 'default'
 
     # Driveaway price: state price → scalar estimate → nearest-year twin.
     if card['driveaway_price'] is None:

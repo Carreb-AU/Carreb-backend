@@ -143,6 +143,28 @@ Return ONLY a valid JSON object with this exact schema:
 
 ANCAP ratings did not exist before 1993, so for older vehicles return null. If the exact model-year rating is unknown, use your best estimate and set confidence to low. Do not return any text outside the JSON object."""
 
+SPEC_SHEET_PROMPT = """You are an Australian vehicle database assistant. Provide the missing specification details for the vehicle described.
+
+Vehicle: {year} {make} {model} {variant} ({powertrain})
+
+Return ONLY a valid JSON object with this exact schema:
+{{
+  "transmission": "automatic" | "manual" | "cvt" | "dct" | "",  // most common for this exact variant in Australia
+  "doors": integer or null,  // passenger doors + hatch/tailgate as counted in AU listings (a Camry sedan is 4)
+  "fuel_tank_l": float or null,  // usable fuel tank capacity in litres
+  "tow_braked_kg": integer or null,  // maximum braked tow rating in kg
+  "tow_unbraked_kg": integer or null,  // maximum unbraked tow rating in kg
+  "test_cycle": "NEDC" | "WLTP" | "",  // emissions test cycle this model-year was rated under in Australia
+  "variant": string or "",  // the Australian-market trim/variant name; "" if genuinely unknown
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "one short sentence"
+}}
+
+Rules:
+- Use null only when you have no reasonable estimate; prefer your best honest estimate with low confidence.
+- For electric (BEV/FCEV) vehicles return null for transmission, fuel_tank_l and tow only if the car truly has no such figure.
+- Do not return any text outside the JSON object."""
+
 
 def _call_grok_json(prompt: str) -> dict:
     """Call Grok (xAI) with a prompt and return parsed JSON, or {} on failure.
@@ -209,6 +231,44 @@ def estimate_ancap_rating(make: str, model: str, year: int) -> Optional[int]:
         return rating if 1 <= rating <= 5 else None
     except (ValueError, TypeError):
         return None
+
+
+def estimate_spec_sheet(make: str, model: str, variant: str, year: int,
+                        powertrain: str = '') -> dict:
+    """One combined Grok call filling every card spec field a GVG/AI record
+    may lack: transmission, doors, fuel tank, tow ratings, test cycle and
+    variant. Returns a dict of card-field -> value (only known entries).
+    Cached 30 days by the caller per make|model|variant|year."""
+    prompt = SPEC_SHEET_PROMPT.format(
+        make=make or '', model=model or '', variant=variant or '',
+        year=year or '', powertrain=powertrain or '')
+    result = _call_grok_json(prompt)
+    out = {}
+    transmission = str(result.get('transmission') or '').strip().lower()
+    if transmission in ('automatic', 'manual', 'cvt', 'dct'):
+        out['transmission'] = transmission
+    try:
+        doors = result.get('doors')
+        if doors is not None and doors != '':
+            out['doors'] = int(doors)
+    except (ValueError, TypeError):
+        pass
+    for key, field in (('fuel_tank_l', 'fuel_tank_l'),
+                       ('tow_braked_kg', 'tow_braked_kg'),
+                       ('tow_unbraked_kg', 'tow_unbraked_kg')):
+        try:
+            val = result.get(key)
+            if val is not None and val != '':
+                out[field] = round(float(val), 2)
+        except (ValueError, TypeError):
+            pass
+    cycle = str(result.get('test_cycle') or '').strip().upper()
+    if cycle in ('NEDC', 'WLTP'):
+        out['test_cycle'] = cycle
+    variant_name = str(result.get('variant') or '').strip()
+    if variant_name:
+        out['variant'] = variant_name
+    return out
 
 
 def estimate_resale_value(

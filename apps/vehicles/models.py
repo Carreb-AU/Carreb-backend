@@ -1344,6 +1344,15 @@ class AIVehicleEntry(models.Model):
     electric_range_km = models.FloatField(null=True, blank=True)
     tailpipe_co2_g_per_km = models.FloatField(null=True, blank=True)
     test_cycle = models.CharField(max_length=10, blank=True, default='')
+    # Spec sheet fields requested from Grok at search time (nullable: older
+    # cached entries predate these columns and are backfilled lazily by the
+    # card-level spec-sheet estimator).
+    transmission = models.CharField(max_length=30, blank=True, default='')
+    doors = models.IntegerField(null=True, blank=True)
+    fuel_tank_l = models.FloatField(null=True, blank=True)
+    wltp_range_km = models.FloatField(null=True, blank=True)
+    tow_braked_kg = models.IntegerField(null=True, blank=True)
+    tow_unbraked_kg = models.IntegerField(null=True, blank=True)
     driveaway_price_estimate = models.IntegerField(
         null=True, blank=True, help_text='Driveaway price in cents')
     fcai_category = models.CharField(max_length=100, blank=True, default='')

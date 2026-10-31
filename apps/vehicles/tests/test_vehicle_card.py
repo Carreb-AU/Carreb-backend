@@ -132,3 +132,58 @@ class VehicleCardTests(TestCase):
         self.assertEqual(card['ancap_safety_rating'], 4)
         self.assertEqual(card['field_sources']['ancap_safety_rating'], 'ai')
         self.assertEqual(card['engine_l'], 1.8)
+
+    @mock.patch("apps.mygarage.ai_service._call_grok_json")
+    def test_ai_record_missing_specs_backfilled_by_spec_sheet(self, grok):
+        """Old cached AI rows (pre-spec-columns) heal via the combined
+        spec-sheet estimator — one Grok call, cached 30 days."""
+        grok.return_value = {
+            "transmission": "automatic", "doors": 4, "fuel_tank_l": 60.0,
+            "tow_braked_kg": 1200, "tow_unbraked_kg": 600,
+            "test_cycle": "NEDC", "variant": "Altise",
+            "confidence": "medium", "reasoning": "base sedan",
+        }
+        card = build_vehicle_card(
+            _make_ai(variant="", powertrain_type="petrol",
+                     search_query="toyota camry 2015 petrol specsheet"),
+            'ai')
+        self.assertEqual(card['transmission'], 'automatic')
+        self.assertEqual(card['field_sources']['transmission'], 'ai')
+        self.assertEqual(card['doors'], 4)
+        self.assertEqual(card['fuel_tank_l'], 60.0)
+        self.assertEqual(card['tow_braked_kg'], 1200)
+        self.assertEqual(card['tow_unbraked_kg'], 600)
+        self.assertEqual(card['test_cycle'], 'NEDC')
+        self.assertEqual(card['variant'], 'Altise')
+        self.assertEqual(card['field_sources']['variant'], 'ai')
+
+    def test_combustion_car_electric_fields_are_zero_not_null(self):
+        """A petrol car factually has no battery: 0.0, not null, and not
+        badged as an estimate (structural truth)."""
+        card = build_vehicle_card(
+            _make_ai(powertrain_type="petrol", search_query="camry petrol zz"),
+            'ai')
+        for field in ('battery_kwh', 'electricity_consumption_wh_per_km',
+                      'electric_range_km', 'wltp_range_km', 'range_battery_km'):
+            self.assertEqual(card[field], 0.0, field)
+            self.assertNotIn(field, card['field_sources'])
+
+    def test_range_petrol_computed_from_tank_and_consumption(self):
+        card = build_vehicle_card(
+            _make_ai(powertrain_type="petrol", fuel_tank_l=60.0,
+                     fuel_consumption_combined_l_100km=7.5,
+                     search_query="camry range calc zz"),
+            'ai')
+        self.assertEqual(card['range_petrol_km'], 800)
+        self.assertEqual(card['range_total_km'], 800)
+        self.assertEqual(card['field_sources']['range_petrol_km'], 'default')
+
+    def test_fcai_broad_from_registry(self):
+        from apps.vehicles.models import FCAICategoryRegistry
+        FCAICategoryRegistry.objects.create(
+            segment_id=7, fcai_segment="Medium (under $60,000)",
+            carreb_db_label="Medium", vehicle_class="Passenger")
+        card = build_vehicle_card(
+            _make_ai(fcai_broad="", search_query="camry broad zz"), 'ai')
+        self.assertEqual(card['fcai_broad'], 'Passenger Cars')
+        self.assertEqual(card['field_sources']['fcai_broad'], 'default')
