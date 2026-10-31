@@ -122,6 +122,7 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         base_data['variant'] = catalogue.variant
         base_data['body_style'] = catalogue.body_style
         base_data['powertrain_type'] = catalogue.powertrain_type
+        base_data['source'] = 'carreb'
 
     # Build a vehicle-like object for rating. Prefer Carreb catalogue, then GVG record.
     rating_vehicle = catalogue
