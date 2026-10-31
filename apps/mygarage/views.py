@@ -21,6 +21,7 @@ from apps.vehicles.services.image_lookup import (
     get_used_vehicle_image_url,
     get_vehicle_image_url,
 )
+from apps.vehicles.services.vehicle_card import build_vehicle_card
 from apps.users.models import SubscriptionTier
 from apps.users.permissions import IsPaidMember
 from apps.mygarage.serializers import (
@@ -118,33 +119,17 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         ai_entry = getattr(vehicle_instance, 'ai_vehicle_entry', None)
 
     if catalogue and base_data:
-        base_data['image_url'] = catalogue.image_url
-        base_data['year'] = catalogue.year
-        base_data['make'] = catalogue.brand
-        base_data['model'] = catalogue.model
-        base_data['variant'] = catalogue.variant
-        base_data['body_style'] = catalogue.body_style
-        base_data['powertrain_type'] = catalogue.powertrain_type
         base_data['source'] = 'carreb'
 
     # Build a vehicle-like object for rating. Prefer Carreb catalogue, then GVG record.
     rating_vehicle = catalogue
+    card = None
     if not rating_vehicle and gvg_record:
         rating_vehicle = build_vehicle_like_from_gvg(gvg_record, state)
         base_data = base_data or {}
         base_data['gvg_record_id'] = str(gvg_record.id)
-        base_data['year'] = gvg_record.year
-        base_data['make'] = gvg_record.make
-        base_data['model'] = gvg_record.model
-        base_data['variant'] = gvg_record.variant
-        base_data['body_style'] = gvg_record.body_style
-        base_data['powertrain_type'] = gvg_record.powertrain_type
-        base_data['fuel_consumption_per_100km'] = gvg_record.fuel_consumption_combined_l_100km
-        base_data['tailpipe_co2_g_per_km'] = gvg_record.tailpipe_co2_g_per_km
         base_data['source'] = 'gvg'
-        base_data['image_url'] = gvg_record.image_url or get_used_vehicle_image_url(
-            gvg_record.make, gvg_record.model, year=gvg_record.year,
-            fcai_category=gvg_record.fcai_category, body_style=gvg_record.body_style)
+        card = build_vehicle_card(gvg_record, 'gvg', state=state)
     elif not rating_vehicle and ai_entry:
         # AI-searched car (missing from catalogue and GVG): specs from Grok,
         # costed like a GVG current car (class medians + own consumption).
@@ -156,30 +141,27 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         rating_vehicle = ai_entry
         base_data = base_data or {}
         base_data['ai_vehicle_entry_id'] = str(ai_entry.id)
-        base_data['year'] = ai_entry.year
-        base_data['make'] = ai_entry.make
-        base_data['model'] = ai_entry.model
-        base_data['variant'] = ai_entry.variant
-        base_data['body_style'] = ai_entry.body_style
-        base_data['powertrain_type'] = ai_entry.powertrain_type
-        base_data['fuel_consumption_per_100km'] = ai_entry.fuel_consumption_combined_l_100km
-        base_data['tailpipe_co2_g_per_km'] = ai_entry.tailpipe_co2_g_per_km
         base_data['source'] = 'ai'
-        # Full spec block: the AI entry stores more than the GVG-shape fields
-        # above, so surface it all instead of leaving the card half empty.
-        base_data['drive'] = ai_entry.drive
-        base_data['engine_l'] = ai_entry.engine_l
-        base_data['battery_kwh'] = ai_entry.battery_kwh
-        base_data['num_seats'] = ai_entry.num_seats
-        base_data['ancap_safety_rating'] = ai_entry.ancap_safety_rating
-        base_data['driveaway_price_estimate'] = ai_entry.driveaway_price_estimate
-        base_data['servicing_5yr_estimate'] = ai_entry.servicing_5yr_estimate
-        base_data['tyre_replacement_estimate'] = ai_entry.tyre_replacement_estimate
-        base_data['resale_value_5yr_estimate'] = ai_entry.resale_value_5yr_estimate
-        base_data['image_url'] = ai_entry.image_url or get_used_vehicle_image_url(
-            ai_entry.make, ai_entry.model, year=ai_entry.year,
-            fcai_category=ai_entry.fcai_category, body_style=ai_entry.body_style,
-            drive=ai_entry.drive)
+        card = build_vehicle_card(ai_entry, 'ai', state=state)
+    elif catalogue:
+        card = build_vehicle_card(catalogue, 'carreb', state=state)
+
+    # Merge the canonical full-field card into vehicle_data. Existing keys
+    # (garage/current-vehicle ids, state, etc.) win; the card fills every
+    # missing field with its database/default/AI value + field_sources map.
+    if card is not None and base_data is not None:
+        for key, value in card.items():
+            if key in ('id', 'name'):
+                continue
+            if key not in base_data or base_data.get(key) in (None, ''):
+                base_data[key] = value
+        if 'field_sources' not in base_data:
+            base_data['field_sources'] = card.get('field_sources', {})
+        # Backward-compat alias: cards expose the canonical name.
+        if base_data.get('fuel_consumption_per_100km') in (None, '') \
+                and card.get('fuel_consumption_combined_l_100km'):
+            base_data['fuel_consumption_per_100km'] = \
+                card['fuel_consumption_combined_l_100km']
 
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
 
@@ -354,32 +336,10 @@ class AIVehicleSearchView(views.APIView):
 
     @staticmethod
     def _serialize(e):
-        return {
-            "id": str(e.id),
-            "source": "ai",
-            "name": f"{e.year or ''} {e.make} {e.model} {e.variant}".strip(),
-            "make": e.make,
-            "model": e.model,
-            "year": e.year,
-            "variant": e.variant,
-            "body_style": e.body_style,
-            "powertrain_type": e.powertrain_type,
-            "engine_l": e.engine_l,
-            "battery_kwh": e.battery_kwh,
-            "num_seats": e.num_seats,
-            "ancap_safety_rating": e.ancap_safety_rating,
-            "fuel_consumption_combined_l_100km": e.fuel_consumption_combined_l_100km,
-            "electricity_consumption_wh_per_km": e.electricity_consumption_wh_per_km,
-            "electric_range_km": e.electric_range_km,
-            "tailpipe_co2_g_per_km": e.tailpipe_co2_g_per_km,
-            "fcai_category": e.fcai_category,
-            "driveaway_price_estimate": e.driveaway_price_estimate,
-            "driveaway_price_display": (
-                f"${e.driveaway_price_estimate // 100:,}" if e.driveaway_price_estimate else None
-            ),
-            "search_count": e.search_count,
-            "selected_count": e.selected_count,
-        }
+        card = build_vehicle_card(e, 'ai')
+        card["search_count"] = e.search_count
+        card["selected_count"] = e.selected_count
+        return card
 
 
 class CurrentVehicleSearchView(views.APIView):
@@ -387,69 +347,13 @@ class CurrentVehicleSearchView(views.APIView):
     permission_classes = [AllowAny]
 
     def _image_url_for(self, obj, source):
-        """Return a usable image URL, looking it up on-demand if missing."""
-        if source == 'carreb':
-            stored = getattr(obj, 'image_url', None)
-            make, model, year = obj.brand, obj.model, obj.year
-            fcai_category = getattr(obj, 'fcai_category', None)
-            body_style = getattr(obj, 'body_style', None)
-            drive = getattr(obj, 'drive', None)
-        else:
-            stored = getattr(obj, 'image_url', None)
-            make, model, year = obj.make, obj.model, obj.year
-            fcai_category = getattr(obj, 'fcai_category', None)
-            body_style = getattr(obj, 'body_style', None)
-            drive = getattr(obj, 'drive', None)
-
-        if stored:
-            return stored
-        return get_vehicle_image_url(
-            make,
-            model,
-            year=year,
-            fcai_category=fcai_category,
-            body_style=body_style,
-            drive=drive,
-            delay=0.05,
-        )
+        """Kept for backward compatibility — delegates to the card helper."""
+        card = build_vehicle_card(obj, source)
+        return card.get('image_url')
 
     def _normalize_result(self, obj, source):
-        """Return a consistent shape for catalogue and GVG records."""
-        image_url = self._image_url_for(obj, source)
-        if source == 'carreb':
-            return {
-                "id": str(obj.id),
-                "source": "carreb",
-                "year": obj.year,
-                "make": obj.brand,
-                "model": obj.model,
-                "variant": obj.variant,
-                "body_style": obj.body_style,
-                "powertrain_type": obj.powertrain_type,
-                "fuel_consumption_per_100km": obj.fuel_consumption_per_100km,
-                "electricity_consumption_per_100km": obj.electricity_consumption_per_100km,
-                "tailpipe_co2_g_per_km": obj.tailpipe_co2_g_per_km,
-                "image_url": image_url,
-                "name": str(obj),
-            }
-        return {
-            "id": str(obj.id),
-            "source": "gvg",
-            "year": obj.year,
-            "make": obj.make,
-            "model": obj.model,
-            "variant": obj.variant,
-            "body_style": obj.body_style,
-            "powertrain_type": obj.powertrain_type,
-            "fuel_consumption_per_100km": obj.fuel_consumption_combined_l_100km,
-            "electricity_consumption_per_100km": (
-                obj.electricity_consumption_wh_per_km / 10.0
-                if obj.electricity_consumption_wh_per_km else None
-            ),
-            "tailpipe_co2_g_per_km": obj.tailpipe_co2_g_per_km,
-            "image_url": image_url,
-            "name": f"{obj.year} {obj.make} {obj.model} {obj.variant}".strip(),
-        }
+        """Canonical full-field card — identical shape for catalogue and GVG."""
+        return build_vehicle_card(obj, source)
 
     def post(self, request):
         import re
@@ -555,32 +459,11 @@ class CurrentVehicleSearchView(views.APIView):
         for e in entries:
             if year and e.year and abs(e.year - year) > 1:
                 continue
-            image_url = get_used_vehicle_image_url(
-                e.make, e.model, year=e.year, fcai_category=e.fcai_category,
-                body_style=e.body_style, drive=e.drive)
-            out.append({
-                "id": str(e.id),
-                "source": "ai",
-                "year": e.year,
-                "make": e.make,
-                "model": e.model,
-                "variant": e.variant,
-                "body_style": e.body_style,
-                "powertrain_type": e.powertrain_type,
-                "fuel_consumption_per_100km": e.fuel_consumption_combined_l_100km,
-                "electricity_consumption_per_100km": (
-                    e.electricity_consumption_wh_per_km / 10.0
-                    if e.electricity_consumption_wh_per_km else None
-                ),
-                "tailpipe_co2_g_per_km": e.tailpipe_co2_g_per_km,
-                "image_url": image_url,
-                "drive": e.drive,
-                "engine_l": e.engine_l,
-                "num_seats": e.num_seats,
-                "ancap_safety_rating": e.ancap_safety_rating,
-                "driveaway_price_estimate": e.driveaway_price_estimate,
-                "name": f"{e.year or ''} {e.make} {e.model} {e.variant}".strip(),
-            })
+            card = build_vehicle_card(e, 'ai')
+            # Legacy aliases the current-vehicle picker already consumes.
+            card["fuel_consumption_per_100km"] = card["fuel_consumption_combined_l_100km"]
+            card["driveaway_price_estimate"] = e.driveaway_price_estimate
+            out.append(card)
         return out or None
 
 class CurrentVehicleDetailsView(views.APIView):
@@ -1044,7 +927,21 @@ class GarageVehicleListView(views.APIView):
     def post(self, request):
         serializer = GarageVehicleCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+
+        # Duplicate guard: re-adding a vehicle already in the garage returns
+        # the existing active row instead of creating a second record.
+        dup_filters = {'user': request.user, 'status': GarageVehicleStatus.ACTIVE}
+        for fk in ('vehicle_catalogue_id', 'green_vehicle_guide_record_id',
+                   'ai_vehicle_entry_id'):
+            if serializer.validated_data.get(fk):
+                dup_filters[fk] = serializer.validated_data[fk]
+                break
+        existing = GarageVehicle.objects.filter(**dup_filters).first()
+        if existing:
+            data = GarageVehicleSerializer(existing).data
+            data['already_in_garage'] = True
+            return Response(data, status=status.HTTP_200_OK)
+
         if not check_cap_limit(request.user):
             cap = get_cap_counter(request.user)
             return Response({
@@ -1611,6 +1508,7 @@ class AISmartMatchView(views.APIView):
                     "_boost": boost,
                     "_cost": res.get('total_annual_cost'),
                     "_rating": rating,
+                    "_vehicle": v,
                 })
 
             # Group variants: keep the best MAX_VARIANTS_PER_MODEL per model line,
@@ -1646,7 +1544,15 @@ class AISmartMatchView(views.APIView):
 
             out = []
             for e in ordered[:MAX_RESULTS]:
+                v = e.pop('_vehicle')
                 e.pop('_boost'), e.pop('_cost'), e.pop('_rating')
+                # Fill the result out to the canonical card schema so AI Smart
+                # Match rows carry the same complete field set as every other
+                # search surface (existing match-specific keys win).
+                card = build_vehicle_card(v, 'carreb', state=state)
+                for k, val in card.items():
+                    if k not in e or e.get(k) in (None, ''):
+                        e[k] = val
                 out.append(e)
             return out
 

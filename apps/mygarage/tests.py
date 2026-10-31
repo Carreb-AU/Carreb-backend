@@ -898,3 +898,110 @@ class FirstGarageAddSetsCurrentVehicleTests(TestCase):
             format="json")
         cv = self.user.current_vehicle
         self.assertEqual(str(cv.vehicle_catalogue_id), str(v1.id))
+
+
+class GarageAddDedupeTests(TestCase):
+    """Re-adding a vehicle that is already in the garage must not duplicate."""
+
+    def setUp(self):
+        from apps.users.models import SubscriptionTier
+        self.user = User.objects.create_user(
+            email="dedupe@example.com", password="x",
+            subscription_tier=SubscriptionTier.FULL_INSIGHT_PRO)
+        self.client.force_authenticate(self.user)
+        self.vehicle = make_vehicle(image_url="/media/vehicle_images/dedupe.png")
+
+    def test_second_add_returns_existing_row(self):
+        body = {"vehicle_catalogue_id": str(self.vehicle.id),
+                "source": "vehicle_lookup"}
+        r1 = self.client.post(reverse("garage-vehicles"), body, format="json")
+        self.assertEqual(r1.status_code, 201)
+        r2 = self.client.post(reverse("garage-vehicles"), body, format="json")
+        self.assertEqual(r2.status_code, 200)
+        self.assertTrue(r2.data["already_in_garage"])
+        self.assertEqual(r1.data["id"], r2.data["id"])
+        self.assertEqual(GarageVehicle.objects.filter(user=self.user).count(), 1)
+
+
+class FreeRideRevealEntitlementTests(TestCase):
+    """Free-tier users get exactly one free RideReveal, consumed on use and
+    refunded when generation fails; race-safe via row locking."""
+
+    def setUp(self):
+        from apps.users.models import SubscriptionTier
+        self.user = User.objects.create_user(
+            email="freereveal@example.com", password="x",
+            subscription_tier=SubscriptionTier.FREE)
+        self.client.force_authenticate(self.user)
+        self.vehicle = make_vehicle(image_url="/media/vehicle_images/rr.png")
+        self.gv = GarageVehicle.objects.create(
+            user=self.user, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.SMART_CAR_FINDER)
+
+    def _generate(self):
+        return self.client.post(
+            reverse("ridereveal-generate"),
+            {"garage_vehicle_id": str(self.gv.id)}, format="json")
+
+    def test_credits_endpoint_advertises_free_reveal(self):
+        resp = self.client.get(reverse("ridereveal-credits"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["free_reveal_available"])
+        self.assertFalse(resp.data["free_reveal_used"])
+
+    @mock.patch("apps.mygarage.tasks.generate_ridereveal_content")
+    def test_free_user_generates_with_free_signup_credit(self, task):
+        from apps.mygarage.models import RideRevealCredit
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200)
+        args, _ = task.delay.call_args
+        self.assertEqual(args[1], "free_signup")
+        # Query fresh: the create path caches a stale instance on the user.
+        credit = RideRevealCredit.objects.get(user=self.user)
+        self.assertTrue(credit.free_reveal_used)
+        self.assertEqual(credit.credits_used, 0)  # counters untouched
+
+        # Entitlement is consumed — a second attempt hits the paywall.
+        resp2 = self._generate()
+        self.assertEqual(resp2.status_code, 402)
+        task.delay.assert_called_once()
+
+        # Still consumed after logout/login (same DB row).
+        credit.refresh_from_db()
+        self.assertTrue(credit.free_reveal_used)
+        resp3 = self.client.get(reverse("ridereveal-credits"))
+        self.assertFalse(resp3.data["free_reveal_available"])
+
+    @mock.patch("apps.mygarage.tasks.generate_ridereveal_content")
+    def test_paid_user_flow_unaffected(self, task):
+        from apps.users.models import SubscriptionTier
+        self.user.subscription_tier = SubscriptionTier.CAR_BUYING_SPRINT
+        self.user.save()
+        resp = self._generate()
+        self.assertEqual(resp.status_code, 200)
+        args, _ = task.delay.call_args
+        self.assertEqual(args[1], "plan_included")
+
+    def test_failed_generation_refunds_free_entitlement(self):
+        """A failed reveal must give the free entitlement back."""
+        from apps.mygarage import tasks as rr_tasks
+        from apps.mygarage.models import (
+            RideRevealCredit, RideRevealJob, RideRevealJobStatus,
+        )
+
+        with mock.patch("apps.mygarage.tasks.generate_ridereveal_content") as svc_task:
+            resp = self._generate()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(
+            RideRevealCredit.objects.get(user=self.user).free_reveal_used)
+
+        job = RideRevealJob.objects.get(user=self.user)
+        with mock.patch.object(rr_tasks.openai, "OpenAI") as openai_cls:
+            openai_cls.side_effect = Exception("AI provider down")
+            rr_tasks.generate_ridereveal_content(job.id, "free_signup")
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, RideRevealJobStatus.FAILED)
+        credit = RideRevealCredit.objects.get(user=self.user)
+        self.assertFalse(credit.free_reveal_used)
+        self.assertEqual(credit.credits_used, 0)

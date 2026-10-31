@@ -146,6 +146,7 @@ class RideRevealCreditType(models.TextChoices):
     PLAN_INCLUDED = 'plan_included', 'Plan Included'
     PURCHASED_SINGLE = 'purchased_single', 'Purchased Single'
     PURCHASED_BUNDLE = 'purchased_bundle', 'Purchased Bundle'
+    FREE_SIGNUP = 'free_signup', 'Free Signup'
 
 class RideRevealCredit(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -154,6 +155,10 @@ class RideRevealCredit(models.Model):
     credits_included = models.IntegerField(default=0)
     credits_purchased = models.IntegerField(default=0)
     credits_used = models.IntegerField(default=0)
+    # One-off sign-up entitlement for free-tier users. Persists across
+    # logins/devices; consumed on first successful reveal (refunded if the
+    # generation fails), never reset by plan syncs.
+    free_reveal_used = models.BooleanField(default=False)
     period_start = models.DateField(null=True, blank=True)
     period_end = models.DateField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -11,6 +11,13 @@ class VehicleListSerializer(serializers.ModelSerializer):
             'battery_kwh', 'is_scoring_outlier', 'scoring_version', 'image_url',
             'research_status', 'energy_type', 'cost_category', 'au_launch',
             'co2_energy_cycle_g_per_km', 'spotlight_data',
+            # Pricing & cost-of-ownership columns (cents).
+            'driveaway_price_by_state', 'resale_value_5yr_estimate',
+            'servicing_5yr_estimate', 'tyre_replacement_estimate',
+            'insurance_estimate_by_state', 'ctp_by_state',
+            'registration_by_state', 'total_5yr_cost_of_ownership_by_state',
+            'fuel_consumption_per_100km', 'electricity_consumption_per_100km',
+            'tailpipe_co2_g_per_km', 'wltp_range_km',
         ]
 
 class VehicleDetailSerializer(serializers.ModelSerializer):

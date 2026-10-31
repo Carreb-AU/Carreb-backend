@@ -6,7 +6,10 @@ from django.conf import settings
 from django.utils import timezone
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
-from apps.mygarage.models import RideRevealJob, RideRevealJobStatus, RideRevealResult, RideRevealCredit
+from apps.mygarage.models import (
+    RideRevealCredit, RideRevealCreditType, RideRevealJob, RideRevealJobStatus,
+    RideRevealResult,
+)
 from apps.vehicles.tasks import emit_analytics_event
 
 logger = logging.getLogger(__name__)
@@ -158,11 +161,17 @@ User Priority: {priority_label}
     job.completed_at = timezone.now()
     job.save()
     
-    # Refund credit
+    # Refund credit — only when it was actually consumed. The free sign-up
+    # entitlement never touched credits_used, so refunding it means clearing
+    # the flag again; paid/plan credits get their counter decremented.
     try:
         credits = RideRevealCredit.objects.get(user=job.user)
-        credits.credits_used = max(0, credits.credits_used - 1)
-        credits.save()
+        if credit_type == RideRevealCreditType.FREE_SIGNUP:
+            credits.free_reveal_used = False
+            credits.save(update_fields=['free_reveal_used'])
+        else:
+            credits.credits_used = max(0, credits.credits_used - 1)
+            credits.save(update_fields=['credits_used'])
     except RideRevealCredit.DoesNotExist:
         pass
         

@@ -13,29 +13,35 @@ logger = logging.getLogger(__name__)
 
 stripe.api_key = getattr(settings, 'STRIPE_SECRET_KEY', None)
 
+_PLAN_INCLUDED_CREDITS = {
+    SubscriptionTier.CAR_BUYING_SPRINT: 1,
+    SubscriptionTier.CORE_ADVANTAGE: 4,
+    SubscriptionTier.FULL_INSIGHT_PRO: 0,
+    SubscriptionTier.FREE: 0,
+}
+
+
 def _get_or_create_credits(user):
     credits, created = RideRevealCredit.objects.get_or_create(
         user=user,
         defaults={'plan': user.subscription_tier}
     )
-    if credits.plan != user.subscription_tier:
+    if created:
+        credits.credits_included = _PLAN_INCLUDED_CREDITS.get(
+            user.subscription_tier, 0)
+        credits.save(update_fields=['credits_included'])
+    elif credits.plan != user.subscription_tier:
         credits.plan = user.subscription_tier
-        if user.subscription_tier == SubscriptionTier.CAR_BUYING_SPRINT:
-            credits.credits_included = 1
-        elif user.subscription_tier == SubscriptionTier.CORE_ADVANTAGE:
-            credits.credits_included = 4
-        elif user.subscription_tier == SubscriptionTier.FULL_INSIGHT_PRO:
-            credits.credits_included = 0
-        else:
-            credits.credits_included = 0
+        credits.credits_included = _PLAN_INCLUDED_CREDITS.get(
+            user.subscription_tier, 0)
         credits.save()
     return credits
 
 def get_ridereveal_credits(user):
     credits = _get_or_create_credits(user)
-    
+
     vehicles_with_results = RideRevealResult.objects.filter(user=user).values_list('garage_vehicle_id', flat=True)
-    
+
     return {
         "plan": credits.plan,
         "credits_included": credits.credits_included,
@@ -44,7 +50,12 @@ def get_ridereveal_credits(user):
         "credits_available": credits.credits_available,
         "is_unlimited": credits.plan == SubscriptionTier.FULL_INSIGHT_PRO,
         "period_end": credits.period_end,
-        "vehicles_with_results": list(vehicles_with_results)
+        "vehicles_with_results": list(vehicles_with_results),
+        # One-off sign-up entitlement for free-tier users.
+        "free_reveal_available": (
+            credits.plan == SubscriptionTier.FREE and not credits.free_reveal_used
+        ),
+        "free_reveal_used": credits.free_reveal_used,
     }
 
 def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, favorite_color=None):
@@ -86,14 +97,19 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, fa
 
     credits = _get_or_create_credits(user)
     is_unlimited = credits.plan == SubscriptionTier.FULL_INSIGHT_PRO
-    
+
     credit_type = RideRevealCreditType.PLAN_INCLUDED
-    
+
     with transaction.atomic():
         credits = RideRevealCredit.objects.select_for_update().get(id=credits.id)
-        
+
         if not is_unlimited:
-            if credits.credits_available <= 0:
+            # Free-tier sign-up entitlement: exactly one free reveal, consumed
+            # here but refunded by the task if generation fails.
+            is_free_tier = credits.plan == SubscriptionTier.FREE
+            free_available = is_free_tier and not credits.free_reveal_used
+
+            if credits.credits_available <= 0 and not free_available:
                 return {
                     "status_code": 402,
                     "error": "insufficient_credits",
@@ -103,15 +119,20 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, fa
                         "bundle": {"price_display": "A$19.99", "credits": 5}
                     }
                 }
-            
-            # Simple check for what kind of credit was consumed
-            if credits.credits_included - credits.credits_used > 0:
-                credit_type = RideRevealCreditType.PLAN_INCLUDED
+
+            if free_available and credits.credits_available <= 0:
+                credit_type = RideRevealCreditType.FREE_SIGNUP
+                credits.free_reveal_used = True
+                credits.save(update_fields=['free_reveal_used'])
             else:
-                credit_type = RideRevealCreditType.PURCHASED_SINGLE
-                
-            credits.credits_used += 1
-            credits.save()
+                # Simple check for what kind of credit was consumed
+                if credits.credits_included - credits.credits_used > 0:
+                    credit_type = RideRevealCreditType.PLAN_INCLUDED
+                else:
+                    credit_type = RideRevealCreditType.PURCHASED_SINGLE
+
+                credits.credits_used += 1
+                credits.save()
             
         job = RideRevealJob.objects.create(
             user=user,

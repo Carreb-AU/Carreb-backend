@@ -20,7 +20,7 @@ from apps.freematch.selectors import (
 )
 from apps.vehicles.models import Vehicle
 from apps.vehicles.services.rating_engine import calculate_core_rating
-from apps.mygarage.models import GarageVehicle, GarageVehicleSource
+from apps.mygarage.models import GarageVehicle, GarageVehicleSource, GarageVehicleStatus
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def _build_match_vehicle_entry(entry: dict, state: str) -> dict:
             diff_cents = -diff_cents
     else:
         diff_cents = diff_obj
-    return {
+    out = {
         "id": str(vehicle.id),
         "make": vehicle.brand,
         "model": vehicle.model,
@@ -179,6 +179,18 @@ def _build_match_vehicle_entry(entry: dict, state: str) -> dict:
         "driveaway_price_estimate": {"locked": False, "value": driveaway_cents},
         "driveaway_price_display": _format_cents(driveaway_cents) if driveaway_cents is not None else None,
     }
+    # Fill out to the canonical full-field card schema (existing keys win).
+    # A state with no price stays null (the {locked, value} contract above) —
+    # the card's cross-state fallback must not contradict it.
+    from apps.vehicles.services.vehicle_card import build_vehicle_card
+    card = build_vehicle_card(vehicle, 'carreb', state=state)
+    if driveaway_cents is None:
+        card.pop('driveaway_price', None)
+        card.pop('driveaway_price_display', None)
+    for k, val in card.items():
+        if k not in out or out.get(k) in (None, ''):
+            out[k] = val
+    return out
 
 
 def build_match_response(entries: list, session: FreeMatchSession, is_suggested: bool = False) -> dict:
@@ -245,29 +257,40 @@ def build_unlocked_response(vehicle: Vehicle, user, garage_vehicle) -> dict:
     else:
         est_diff_cents = diff_obj or 0
 
+    vehicle_payload = {
+        "id": str(vehicle.id),
+        "make": vehicle.brand,
+        "model": vehicle.model,
+        "year": vehicle.year,
+        "variant": vehicle.variant,
+        "powertrain_type": vehicle.powertrain_type,
+        "core_rating": engine_data.get("core_rating"),
+        "band_name": engine_data.get("band_name"),
+        "band_slug": engine_data.get("band_slug"),
+        "annual_running_cost_estimate": annual_cost_cents,
+        "annual_running_cost_display": _format_cents(annual_cost_cents),
+        "co2_g_per_km": vehicle.tailpipe_co2_g_per_km,
+        "is_estimate": True,
+        "resale_value_5yr_estimate": resale_cents,
+        "resale_value_5yr_display": _format_cents(resale_cents),
+        "est_cost_difference": est_diff_cents,
+        "est_cost_difference_display": _format_cents(est_diff_cents),
+        "driveaway_price_estimate": driveaway_cents,
+        "driveaway_price_display": _format_cents(driveaway_cents),
+    }
+    # Fill out to the canonical full-field card schema (existing keys win).
+    from apps.vehicles.services.vehicle_card import build_vehicle_card
+    card = build_vehicle_card(vehicle, 'carreb', state=state)
+    if driveaway_cents is None:
+        card.pop('driveaway_price', None)
+        card.pop('driveaway_price_display', None)
+    for k, val in card.items():
+        if k not in vehicle_payload or vehicle_payload.get(k) in (None, ''):
+            vehicle_payload[k] = val
+
     return {
         "garage_vehicle_id": str(garage_vehicle.id),
-        "vehicle": {
-            "id": str(vehicle.id),
-            "make": vehicle.brand,
-            "model": vehicle.model,
-            "year": vehicle.year,
-            "variant": vehicle.variant,
-            "powertrain_type": vehicle.powertrain_type,
-            "core_rating": engine_data.get("core_rating"),
-            "band_name": engine_data.get("band_name"),
-            "band_slug": engine_data.get("band_slug"),
-            "annual_running_cost_estimate": annual_cost_cents,
-            "annual_running_cost_display": _format_cents(annual_cost_cents),
-            "co2_g_per_km": vehicle.tailpipe_co2_g_per_km,
-            "is_estimate": True,
-            "resale_value_5yr_estimate": resale_cents,
-            "resale_value_5yr_display": _format_cents(resale_cents),
-            "est_cost_difference": est_diff_cents,
-            "est_cost_difference_display": _format_cents(est_diff_cents),
-            "driveaway_price_estimate": driveaway_cents,
-            "driveaway_price_display": _format_cents(driveaway_cents),
-        },
+        "vehicle": vehicle_payload,
         "meta": {
             "calculated_at": timezone.now().isoformat(),
             "is_estimate": True,
@@ -333,6 +356,18 @@ def process_free_match(payload: dict) -> dict:
 
 @transaction.atomic
 def convert_session_to_garage(session: FreeMatchSession, user) -> GarageVehicle:
+    # Duplicate guard: the same catalogue vehicle may already be in the
+    # garage (e.g. added via vehicle lookup before signing up) — reuse it.
+    existing = GarageVehicle.objects.filter(
+        user=user,
+        vehicle_catalogue=session.matched_vehicle,
+        status=GarageVehicleStatus.ACTIVE,
+    ).first()
+    if existing:
+        session.converted_user = user
+        session.save(update_fields=["converted_user"])
+        return existing
+
     garage_vehicle = GarageVehicle.objects.create(
         user=user,
         vehicle_catalogue=session.matched_vehicle,
