@@ -820,6 +820,19 @@ class GarageAddAIEntryTests(TestCase):
              "source": "vehicle_lookup"}, format="json")
         self.assertEqual(resp.status_code, 400)
 
+    def test_ai_id_in_catalogue_field_is_routed(self):
+        """Frontend that always sends the result id as vehicle_catalogue_id
+        still works when the result was an AI vehicle."""
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"vehicle_catalogue_id": str(self.ai_entry.id),
+             "source": "vehicle_lookup"}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(str(resp.data["ai_vehicle_entry_id"]), str(self.ai_entry.id))
+        self.assertIsNone(resp.data["vehicle_catalogue_id"])
+        gv = GarageVehicle.objects.get(user=self.user)
+        self.assertEqual(str(gv.ai_vehicle_entry_id), str(self.ai_entry.id))
+
     def test_current_vehicle_with_ai_entry_creates_garage_row(self):
         resp = self.client.post(
             reverse("current-vehicle"),

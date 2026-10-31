@@ -106,8 +106,9 @@ class GarageVehicleCreateSerializer(serializers.Serializer):
     source = serializers.ChoiceField(choices=GarageVehicleSource.choices)
 
     def validate_vehicle_catalogue_id(self, value):
-        if value and not Vehicle.objects.filter(id=value).exists():
-            raise serializers.ValidationError("Vehicle with this ID does not exist in the catalogue.")
+        # Existence is enforced in validate(): an id that actually belongs to
+        # a GVG or AI record is auto-routed to the right field instead of
+        # erroring, so clients that always send the result id here still work.
         return value
 
     def validate_green_vehicle_guide_record_id(self, value):
@@ -123,6 +124,22 @@ class GarageVehicleCreateSerializer(serializers.Serializer):
         return value
 
     def validate(self, data):
+        # Tolerate the search-result id landing in vehicle_catalogue_id:
+        # if it really belongs to a GVG or AI record, move it over.
+        cid = data.get('vehicle_catalogue_id')
+        if cid and not Vehicle.objects.filter(id=cid).exists():
+            from apps.vehicles.models import VehicleIdentity, AIVehicleEntry
+            if VehicleIdentity.objects.filter(id=cid).exists():
+                data['green_vehicle_guide_record_id'] = cid
+                data['vehicle_catalogue_id'] = None
+            elif AIVehicleEntry.objects.filter(id=cid).exists():
+                data['ai_vehicle_entry_id'] = cid
+                data['vehicle_catalogue_id'] = None
+            else:
+                raise serializers.ValidationError({
+                    'vehicle_catalogue_id': "Vehicle with this ID does not exist in the catalogue."
+                })
+
         provided = [k for k in ('vehicle_catalogue_id', 'green_vehicle_guide_record_id',
                                 'ai_vehicle_entry_id') if data.get(k)]
         if len(provided) != 1:
