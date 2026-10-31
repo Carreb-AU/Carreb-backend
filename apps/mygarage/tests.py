@@ -830,3 +830,38 @@ class GarageAddAIEntryTests(TestCase):
         self.assertEqual(str(gv.ai_vehicle_entry_id), str(self.ai_entry.id))
         self.assertEqual(resp.data["vehicle_data"]["source"], "ai")
         self.assertEqual(resp.data["vehicle_data"]["make"], "Toyota")
+
+
+class FirstGarageAddSetsCurrentVehicleTests(TestCase):
+    """First vehicle added to the garage becomes the current vehicle."""
+
+    def setUp(self):
+        from apps.users.models import SubscriptionTier
+        self.user = User.objects.create_user(
+            email="firstadd@example.com", password="x",
+            subscription_tier=SubscriptionTier.FULL_INSIGHT_PRO)
+        self.client.force_authenticate(self.user)
+
+    def test_first_garage_add_sets_current_vehicle(self):
+        v = make_vehicle()
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"vehicle_catalogue_id": str(v.id), "source": "vehicle_lookup"},
+            format="json")
+        self.assertEqual(resp.status_code, 201)
+        cv = self.user.current_vehicle
+        self.assertEqual(str(cv.vehicle_catalogue_id), str(v.id))
+
+    def test_second_garage_add_does_not_overwrite(self):
+        v1 = make_vehicle()
+        self.client.post(
+            reverse("garage-vehicles"),
+            {"vehicle_catalogue_id": str(v1.id), "source": "vehicle_lookup"},
+            format="json")
+        v2 = make_vehicle(brand="Subaru")
+        self.client.post(
+            reverse("garage-vehicles"),
+            {"vehicle_catalogue_id": str(v2.id), "source": "vehicle_lookup"},
+            format="json")
+        cv = self.user.current_vehicle
+        self.assertEqual(str(cv.vehicle_catalogue_id), str(v1.id))

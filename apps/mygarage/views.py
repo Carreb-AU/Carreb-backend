@@ -1028,6 +1028,17 @@ class GarageVehicleListView(views.APIView):
             ai_vehicle_entry_id=serializer.validated_data.get('ai_vehicle_entry_id'),
             source=serializer.validated_data['source']
         )
+
+        # First vehicle added to the garage becomes the current vehicle,
+        # mirroring the reverse path (setting current vehicle creates a
+        # garage row). Never overwrite an existing current vehicle.
+        if not hasattr(request.user, 'current_vehicle'):
+            CurrentVehicle.objects.create(
+                user=request.user,
+                vehicle_catalogue_id=gv.vehicle_catalogue_id,
+                green_vehicle_guide_record_id=gv.green_vehicle_guide_record_id,
+                ai_vehicle_entry_id=gv.ai_vehicle_entry_id,
+            )
         
         if getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_added_to_garage', {})
