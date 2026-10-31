@@ -60,6 +60,14 @@ class GarageVehicle(models.Model):
         related_name='garage_entries',
         help_text="GVG (used/older) vehicle, when the car is not in the Carreb catalogue"
     )
+    ai_vehicle_entry = models.ForeignKey(
+        'vehicles.AIVehicleEntry',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='garage_entries',
+        help_text="AI-searched vehicle specs, when the car was missing from the catalogue and GVG"
+    )
     status = models.CharField(max_length=20, choices=GarageVehicleStatus.choices, default=GarageVehicleStatus.ACTIVE)
     source = models.CharField(max_length=50, choices=GarageVehicleSource.choices)
 

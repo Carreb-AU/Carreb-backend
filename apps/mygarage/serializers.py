@@ -16,7 +16,7 @@ class CurrentVehicleSerializer(serializers.ModelSerializer):
 class GarageVehicleSerializer(serializers.ModelSerializer):
     class Meta:
         model = GarageVehicle
-        fields = ['id', 'vehicle_catalogue_id', 'green_vehicle_guide_record_id', 'status', 'source', 'added_at', 'archived_at']
+        fields = ['id', 'vehicle_catalogue_id', 'green_vehicle_guide_record_id', 'ai_vehicle_entry_id', 'status', 'source', 'added_at', 'archived_at']
 
 class VehicleOverrideSerializer(serializers.ModelSerializer):
     class Meta:
@@ -102,6 +102,7 @@ class CurrentVehicleCreateSerializer(serializers.Serializer):
 class GarageVehicleCreateSerializer(serializers.Serializer):
     vehicle_catalogue_id = serializers.UUIDField(required=False, allow_null=True)
     green_vehicle_guide_record_id = serializers.UUIDField(required=False, allow_null=True)
+    ai_vehicle_entry_id = serializers.UUIDField(required=False, allow_null=True)
     source = serializers.ChoiceField(choices=GarageVehicleSource.choices)
 
     def validate_vehicle_catalogue_id(self, value):
@@ -115,12 +116,19 @@ class GarageVehicleCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Green Vehicle Guide record with this ID does not exist.")
         return value
 
+    def validate_ai_vehicle_entry_id(self, value):
+        from apps.vehicles.models import AIVehicleEntry
+        if value and not AIVehicleEntry.objects.filter(id=value).exists():
+            raise serializers.ValidationError("AI vehicle entry with this ID does not exist.")
+        return value
+
     def validate(self, data):
-        has_catalogue = bool(data.get('vehicle_catalogue_id'))
-        has_gvg = bool(data.get('green_vehicle_guide_record_id'))
-        if has_catalogue == has_gvg:
+        provided = [k for k in ('vehicle_catalogue_id', 'green_vehicle_guide_record_id',
+                                'ai_vehicle_entry_id') if data.get(k)]
+        if len(provided) != 1:
             raise serializers.ValidationError(
-                "Provide exactly one of vehicle_catalogue_id or green_vehicle_guide_record_id."
+                "Provide exactly one of vehicle_catalogue_id, "
+                "green_vehicle_guide_record_id or ai_vehicle_entry_id."
             )
         return data
     

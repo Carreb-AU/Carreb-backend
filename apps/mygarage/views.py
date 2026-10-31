@@ -112,6 +112,7 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         state = cv.state if cv and cv.state else 'NSW'
         catalogue = vehicle_instance.vehicle_catalogue
         gvg_record = vehicle_instance.green_vehicle_guide_record
+        ai_entry = getattr(vehicle_instance, 'ai_vehicle_entry', None)
 
     if catalogue and base_data:
         base_data['image_url'] = catalogue.image_url
@@ -210,6 +211,7 @@ class CurrentVehicleView(views.APIView):
         
         vehicle_catalogue_id = data.get('vehicle_catalogue_id')
         gvg_record_id = data.get('green_vehicle_guide_record_id')
+        ai_entry_id = data.get('ai_vehicle_entry_id')
         exists_in_garage = False
 
         if vehicle_catalogue_id:
@@ -224,8 +226,14 @@ class CurrentVehicleView(views.APIView):
                 green_vehicle_guide_record_id=gvg_record_id,
                 status=GarageVehicleStatus.ACTIVE
             ).exists()
+        elif ai_entry_id:
+            exists_in_garage = GarageVehicle.objects.filter(
+                user=request.user,
+                ai_vehicle_entry_id=ai_entry_id,
+                status=GarageVehicleStatus.ACTIVE
+            ).exists()
 
-        if (vehicle_catalogue_id or gvg_record_id) and not exists_in_garage:
+        if (vehicle_catalogue_id or gvg_record_id or ai_entry_id) and not exists_in_garage:
             if not check_cap_limit(request.user):
                 cap = get_cap_counter(request.user)
                 return Response({
@@ -265,6 +273,14 @@ class CurrentVehicleView(views.APIView):
             GarageVehicle.objects.create(
                 user=request.user,
                 green_vehicle_guide_record_id=gvg_record_id,
+                source=GarageVehicleSource.VEHICLE_LOOKUP
+            )
+            if getattr(request.user, 'analytics_consent', False):
+                emit_analytics_event.delay(str(request.user.id), 'vehicle_added_to_garage', {})
+        elif ai_entry_id and not exists_in_garage:
+            GarageVehicle.objects.create(
+                user=request.user,
+                ai_vehicle_entry_id=ai_entry_id,
                 source=GarageVehicleSource.VEHICLE_LOOKUP
             )
             if getattr(request.user, 'analytics_consent', False):
@@ -1008,6 +1024,7 @@ class GarageVehicleListView(views.APIView):
             user=request.user,
             vehicle_catalogue_id=serializer.validated_data.get('vehicle_catalogue_id'),
             green_vehicle_guide_record_id=serializer.validated_data.get('green_vehicle_guide_record_id'),
+            ai_vehicle_entry_id=serializer.validated_data.get('ai_vehicle_entry_id'),
             source=serializer.validated_data['source']
         )
         

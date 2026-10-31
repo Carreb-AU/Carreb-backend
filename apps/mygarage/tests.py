@@ -784,3 +784,49 @@ class CurrentVehicleSearchAIFallbackTests(TestCase):
         resp = self.client.post(self.ENDPOINT, {"query": "camry"}, format="json")
         self.assertEqual(resp.status_code, 200)
         m_ai.assert_not_called()
+
+
+class GarageAddAIEntryTests(TestCase):
+    """Garage accepts AIVehicleEntry rows (cars missing from catalogue+GVG)."""
+
+    def setUp(self):
+        from apps.users.models import SubscriptionTier
+        self.user = User.objects.create_user(
+            email="aigarage@example.com", password="x",
+            subscription_tier=SubscriptionTier.FULL_INSIGHT_PRO)
+        self.client.force_authenticate(self.user)
+        from apps.vehicles.models import AIVehicleEntry
+        self.ai_entry = AIVehicleEntry.objects.create(
+            search_query="toyota camry 2015", make="Toyota", model="Camry",
+            year=2015, variant="Atara S", body_style="sedan",
+            powertrain_type="petrol", fuel_consumption_combined_l_100km=7.8,
+            tailpipe_co2_g_per_km=181, fcai_category="Medium")
+
+    def test_add_ai_entry_to_garage(self):
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"ai_vehicle_entry_id": str(self.ai_entry.id),
+             "source": "vehicle_lookup"}, format="json")
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(str(resp.data["ai_vehicle_entry_id"]), str(self.ai_entry.id))
+        self.assertIsNone(resp.data["vehicle_catalogue_id"])
+
+    def test_add_rejects_two_id_fields(self):
+        v = make_vehicle()
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"vehicle_catalogue_id": str(v.id),
+             "ai_vehicle_entry_id": str(self.ai_entry.id),
+             "source": "vehicle_lookup"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_current_vehicle_with_ai_entry_creates_garage_row(self):
+        resp = self.client.post(
+            reverse("current-vehicle"),
+            {"ai_vehicle_entry_id": str(self.ai_entry.id),
+             "state": "NSW"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        gv = GarageVehicle.objects.get(user=self.user)
+        self.assertEqual(str(gv.ai_vehicle_entry_id), str(self.ai_entry.id))
+        self.assertEqual(resp.data["vehicle_data"]["source"], "ai")
+        self.assertEqual(resp.data["vehicle_data"]["make"], "Toyota")
