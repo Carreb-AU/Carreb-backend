@@ -725,3 +725,62 @@ class RideRevealShareCardTests(TestCase):
             f"{self.result.id}.png", ContentFile(b"png"), save=True)
         data = RideRevealResultSerializer(self.result).data
         self.assertTrue(data["share_image_url"].startswith("http"))
+
+
+class CurrentVehicleSearchAIFallbackTests(TestCase):
+    """DB search falls back to the Grok (AI) lookup only when the vehicle
+    is genuinely absent from both the catalogue and GVG."""
+
+    ENDPOINT = reverse("current-vehicle-search")
+
+    def _ai_entry(self, **kwargs):
+        from apps.vehicles.models import AIVehicleEntry
+        defaults = dict(
+            search_query="toyota camry 2015", make="Toyota", model="Camry",
+            year=2015, variant="Atara S", body_style="sedan",
+            powertrain_type="petrol",
+            fuel_consumption_combined_l_100km=7.8,
+            tailpipe_co2_g_per_km=181, fcai_category="Medium")
+        defaults.update(kwargs)
+        return AIVehicleEntry.objects.create(**defaults)
+
+    @mock.patch("apps.mygarage.views.search_ai_vehicles")
+    def test_db_match_never_calls_ai(self, m_ai):
+        make_vehicle(brand="Toyota", model="Camry")
+        resp = self.client.post(self.ENDPOINT,
+                                {"query": "toyota camry"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(any(r["source"] == "carreb" for r in resp.data))
+        m_ai.assert_not_called()
+
+    @mock.patch("apps.mygarage.views.get_vehicle_image_url",
+                 return_value="https://img.example/camry.jpg")
+    @mock.patch("apps.mygarage.views.search_ai_vehicles")
+    def test_missing_vehicle_falls_back_to_ai(self, m_ai, _img):
+        m_ai.return_value = ([self._ai_entry()], False)
+        resp = self.client.post(self.ENDPOINT,
+                                {"query": "toyota camry 2015"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 1)
+        row = resp.data[0]
+        self.assertEqual(row["source"], "ai")
+        self.assertEqual(row["make"], "Toyota")
+        self.assertEqual(row["model"], "Camry")
+        self.assertEqual(row["year"], 2015)
+        self.assertEqual(row["fuel_consumption_per_100km"], 7.8)
+        self.assertEqual(row["tailpipe_co2_g_per_km"], 181)
+
+    @mock.patch("apps.mygarage.views.search_ai_vehicles")
+    def test_ai_failure_keeps_db_results(self, m_ai):
+        from apps.vehicles.services.ai_vehicle_search import AIVehicleSearchError
+        m_ai.side_effect = AIVehicleSearchError("AI lookup failed")
+        resp = self.client.post(self.ENDPOINT,
+                                {"query": "toyota camry 2015"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsInstance(resp.data, list)
+
+    @mock.patch("apps.mygarage.views.search_ai_vehicles")
+    def test_single_word_fragment_never_calls_ai(self, m_ai):
+        resp = self.client.post(self.ENDPOINT, {"query": "camry"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        m_ai.assert_not_called()

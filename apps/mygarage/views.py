@@ -467,7 +467,73 @@ class CurrentVehicleSearchView(views.APIView):
                 seen.add(key)
                 results.append(self._normalize_result(r, 'gvg'))
 
+        # 3. Nothing in the DB *strictly* matches the query (e.g. an older
+        #    car absent from both catalogue and GVG) -> fall back to the AI
+        #    (Grok) lookup, served from the AIVehicleEntry cache when possible.
+        if not self._strict_matches(results, words):
+            ai_results = self._ai_fallback(query, year, words, request)
+            if ai_results is not None:
+                return Response(ai_results)
+
         return Response(results)
+
+    @staticmethod
+    def _strict_matches(results, words):
+        """True when some result matches every query word against its
+        make/model/variant — i.e. the searched vehicle actually exists in
+        the returned rows (loose trigram siblings like a RAV4 for a Camry
+        query don't count)."""
+        if not words:
+            return bool(results)
+        lowered = [w.casefold() for w in words]
+        for r in results:
+            hay = f"{r.get('make') or ''} {r.get('model') or ''} {r.get('variant') or ''}".casefold()
+            if all(w in hay for w in lowered):
+                return True
+        return False
+
+    def _ai_fallback(self, query, year, words, request):
+        """Grok lookup for vehicles missing from the DB.
+
+        Only spent on queries that look complete (make + model, >= 2 words)
+        so type-ahead fragments don't burn tokens; repeat searches hit the
+        AIVehicleEntry cache. Returns None when the fallback doesn't apply
+        or the AI lookup fails — caller keeps the loose DB results.
+        """
+        if len(words) < 2:
+            return None
+        user = request.user if request.user.is_authenticated else None
+        try:
+            entries, _from_cache = search_ai_vehicles(query, user=user)
+        except AIVehicleSearchError:
+            return None
+
+        out = []
+        for e in entries:
+            if year and e.year and abs(e.year - year) > 1:
+                continue
+            image_url = get_vehicle_image_url(
+                e.make, e.model, year=e.year, fcai_category=e.fcai_category,
+                body_style=e.body_style, drive=e.drive, delay=0.05)
+            out.append({
+                "id": str(e.id),
+                "source": "ai",
+                "year": e.year,
+                "make": e.make,
+                "model": e.model,
+                "variant": e.variant,
+                "body_style": e.body_style,
+                "powertrain_type": e.powertrain_type,
+                "fuel_consumption_per_100km": e.fuel_consumption_combined_l_100km,
+                "electricity_consumption_per_100km": (
+                    e.electricity_consumption_wh_per_km / 10.0
+                    if e.electricity_consumption_wh_per_km else None
+                ),
+                "tailpipe_co2_g_per_km": e.tailpipe_co2_g_per_km,
+                "image_url": image_url,
+                "name": f"{e.year or ''} {e.make} {e.model} {e.variant}".strip(),
+            })
+        return out or None
 
 class CurrentVehicleDetailsView(views.APIView):
     permission_classes = [IsAuthenticated]
