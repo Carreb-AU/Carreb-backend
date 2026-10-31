@@ -164,6 +164,32 @@ def spec_sheet_for(make, model, variant, year, powertrain: str = '') -> dict:
     return sheet
 
 
+SPEC_SHEET_FIELDS = ('transmission', 'doors', 'fuel_tank_l',
+                     'tow_braked_kg', 'tow_unbraked_kg', 'test_cycle',
+                     'variant')
+
+
+def warm_estimates(make, model, variant, year, powertrain: str,
+                   need_spec: bool, need_ancap: bool, need_engine: bool):
+    """Populate the 30-day estimate caches for one car off-thread, so
+    build_vehicle_card never fires a cold AI call inline. Pure values
+    in/out — safe to run in a thread pool without touching the ORM.
+    """
+    if need_spec:
+        spec_sheet_for(make, model, variant, year, powertrain)
+    if need_ancap or need_engine:
+        from apps.mygarage.ai_service import (
+            estimate_ancap_rating,
+            estimate_engine_displacement,
+        )
+        if need_ancap:
+            _cached_estimate('ancap', estimate_ancap_rating,
+                             make, model, variant, year)
+        if need_engine:
+            _cached_estimate('engine', estimate_engine_displacement,
+                             make, model, variant, year)
+
+
 def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
     """AI-estimate the spec fields a GVG/AI record doesn't carry.
 
@@ -180,9 +206,7 @@ def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
         estimate_engine_displacement,
     )
 
-    missing = [f for f in ('transmission', 'doors', 'fuel_tank_l',
-                           'tow_braked_kg', 'tow_unbraked_kg', 'test_cycle',
-                           'variant')
+    missing = [f for f in SPEC_SHEET_FIELDS
                if getattr(record, f, None) in (None, '')]
     if missing:
         powertrain = getattr(record, 'powertrain_type', '') or ''

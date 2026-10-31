@@ -205,7 +205,7 @@ def estimate_engine_displacement(make: str, model: str, variant: str, year: int)
         variant=variant or '',
         year=year or '',
     )
-    result = _call_grok_json(prompt)
+    result = _call_grok_json(prompt, timeout=12.0)
     engine_l = result.get('engine_l')
     if engine_l is None:
         return None
@@ -222,7 +222,7 @@ def estimate_ancap_rating(make: str, model: str, year: int) -> Optional[int]:
         model=model or '',
         year=year or '',
     )
-    result = _call_grok_json(prompt)
+    result = _call_grok_json(prompt, timeout=12.0)
     rating = result.get('ancap_rating')
     if rating is None:
         return None
