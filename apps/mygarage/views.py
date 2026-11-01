@@ -51,14 +51,32 @@ def _get_overrides(user, current_vehicle=None, garage_vehicle=None):
     )
     return {o.field_name: o.override_value for o in overrides}
 
-def _gvg_est_cost_diff(baseline_cents, total_cents):
+def _category_avg_annual_cost(record, state) -> int:
+    """Median catalogue COO p.a. (cents) for a class+state — the baseline
+    the category-average cost difference compares against."""
+    import statistics
+    from apps.vehicles.models import CoreDialBatch, CoreDialRow
+    batch = CoreDialBatch.objects.filter(is_current=True).first()
+    if not batch:
+        return 0
+    values = [r.coo_pa_cents for r in CoreDialRow.objects.filter(
+        batch=batch, state=(state or 'NSW').upper(),
+        fcai_category__iexact=(record.fcai_category or ''))
+        if r.coo_pa_cents]
+    return int(statistics.median(values)) if values else 0
+
+
+def _gvg_est_cost_diff(baseline_cents, total_cents, comparison_mode="current_vehicle"):
     """Shape-compatible est_cost_difference for non-catalogue (GVG/AI) vehicles.
 
     Mirrors the object calculate_core_rating builds for catalogue vehicles so
     the garage savings UI can consume both identically.
     """
     diff = baseline_cents - total_cents
-    base_disp = f"Est. ${int(round(baseline_cents / 100)):,}/year"
+    if comparison_mode == "current_vehicle":
+        base_disp = f"Est. ${int(round(baseline_cents / 100)):,}/year"
+    else:
+        base_disp = f"Est. ${int(round(baseline_cents / 100)):,}/year\n      (category average)"
     if diff < 0:
         direction, val, bucket = "more_expensive", abs(diff), None
     elif diff > 0:
@@ -75,7 +93,7 @@ def _gvg_est_cost_diff(baseline_cents, total_cents):
         "value_cents": val,
         "value_display": f"Est. ${int(round(val / 100)):,}/year",
         "direction": direction,
-        "comparison_mode": "current_vehicle",
+        "comparison_mode": comparison_mode,
         "baseline_cost": baseline_cents,
         "baseline_cost_display": base_disp,
         "est_5yr_savings": s5,
@@ -174,8 +192,14 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
             engine_data = cost_gvg_current_vehicle(rating_vehicle, state)
             if current_cost is not None:
                 engine_data['est_cost_difference'] = _gvg_est_cost_diff(current_cost, engine_data['total_annual_cost'])
-            if gvg_record is not None:
-                engine_data['tailpipe_co2_g_per_km'] = float(gvg_record.tailpipe_co2_g_per_km or 0)
+            else:
+                # Parity with catalogue vehicles: a GVG/AI current vehicle
+                # compares against its category average (median catalogue
+                # COO p.a. for the class in this state).
+                engine_data['est_cost_difference'] = _gvg_est_cost_diff(
+                    _category_avg_annual_cost(rating_vehicle, state),
+                    engine_data['total_annual_cost'],
+                    comparison_mode="category_avg")
         else:
             engine_data = calculate_core_rating(
                 rating_vehicle,

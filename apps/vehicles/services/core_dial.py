@@ -292,7 +292,38 @@ def cost_gvg_current_vehicle(record, state):
         'band_name': '',
         'band_slug': '',
         'total_annual_cost': sum(parts.values()),
-        'annual_cost_breakdown': parts,
+        'annual_cost_breakdown': _gvg_breakdown_shape(parts),
+        'tailpipe_co2_g_per_km': float(getattr(record, 'tailpipe_co2_g_per_km', None) or 0),
+        'annual_co2_kg': _annual_co2_kg(record, km),
+        'annual_km': km,
         'costing_basis': GVG_COSTING_BASIS,
         'is_estimate': True,
     }
+
+
+def _gvg_breakdown_shape(parts: dict) -> dict:
+    """GVG parts keyed like the catalogue breakdown so the frontend can
+    consume both identically; the legacy part names are kept alongside."""
+    breakdown = dict(parts)
+    total = sum(parts.values())
+    breakdown.update({
+        'fuel_or_energy_annual': parts.get('fuel', 0) + parts.get('electricity', 0),
+        'insurance_annual': parts.get('comprehensive', 0),
+        'ctp_annual': parts.get('ctp', 0),
+        'registration_annual': parts.get('registration', 0),
+        'servicing_annual': parts.get('servicing', 0),
+        'tyres_annual': parts.get('tyres', 0),
+        'ev_levy_annual': parts.get('road_user_charge', 0),
+        'other_annual': 0,
+        'finance_annual': 0,
+        'resale_credit_annual': 0,
+        'total_annual': total,
+    })
+    return breakdown
+
+
+def _annual_co2_kg(record, km: int) -> int:
+    tailpipe = getattr(record, 'tailpipe_co2_g_per_km', None) or 0
+    if not tailpipe:
+        return 0
+    return int(round_half_up(tailpipe * km / 1000, 0))

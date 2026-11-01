@@ -217,3 +217,57 @@ class VehicleCardTests(TestCase):
             _make_ai(fcai_broad="", search_query="camry broad zz"), 'ai')
         self.assertEqual(card['fcai_broad'], 'Passenger Cars')
         self.assertEqual(card['field_sources']['fcai_broad'], 'default')
+
+
+class GvgCurrentVehicleEngineDataTests(TestCase):
+    """GVG/AI current vehicles must expose the same engine_data keys the
+    frontend renders for catalogue vehicles (running costs, CO2 p.a.,
+    km p.a.) — previously only resale came through."""
+
+    def _dial_rows(self, category="Medium", state="NSW"):
+        from apps.vehicles.models import CoreDialBatch, CoreDialRow
+        import uuid
+        batch = CoreDialBatch.objects.create(
+            scoring_version="t", as_at="2026-10-31", is_current=True)
+        for vid, fuel, elec, ctp, ins, reg, srv, tyres in (
+                (1, 300000, 0, 50000, 150000, 40000, 40000, 20000),
+                (2, 340000, 0, 50000, 160000, 40000, 42000, 20000)):
+            CoreDialRow.objects.create(
+                batch=batch, state=state, fcai_category=category,
+                version_id=vid, model_id="abc123", make="Toyota",
+                model="Camry", variant="v", year=2015,
+                fuel_cents=fuel, electricity_cents=elec,
+                ctp_cents=ctp, comprehensive_cents=ins, registration_cents=reg,
+                servicing_cents=srv, tyres_cents=tyres, road_user_charge_cents=0,
+                driveaway_cents=2000000, coo_pa_cents=800000,
+                annual_co2_kg=3000.0, price_score=0.5, emissions_score=0.5)
+        return batch
+
+    def test_engine_data_matches_catalogue_shape(self):
+        from apps.vehicles.services.core_dial import cost_gvg_current_vehicle
+        self._dial_rows()
+        entry = _make_ai(powertrain_type="petrol",
+                         search_query="engine data shape test")
+        ed = cost_gvg_current_vehicle(entry, "NSW")
+        for key in ('total_annual_cost', 'annual_cost_breakdown',
+                    'tailpipe_co2_g_per_km', 'annual_co2_kg', 'annual_km',
+                    'core_rating', 'is_estimate'):
+            self.assertIn(key, ed, key)
+        bd = ed['annual_cost_breakdown']
+        for key in ('fuel_or_energy_annual', 'insurance_annual', 'ctp_annual',
+                    'registration_annual', 'servicing_annual', 'tyres_annual',
+                    'ev_levy_annual', 'total_annual'):
+            self.assertIn(key, bd, key)
+        # CO2 p.a. = g/km * km / 1000, consistent with the reported figures
+        self.assertEqual(ed['annual_co2_kg'],
+                         round(ed['tailpipe_co2_g_per_km'] * ed['annual_km'] / 1000))
+        self.assertEqual(ed['tailpipe_co2_g_per_km'], 123.0)
+
+    def test_card_annual_km_from_category_benchmark(self):
+        from apps.vehicles.models import CategoryAnnualKMBenchmark
+        CategoryAnnualKMBenchmark.objects.create(
+            fcai_category="Medium", est_annual_km=15000)
+        card = build_vehicle_card(
+            _make_ai(search_query="annual km card test"), 'ai')
+        self.assertEqual(card['annual_km'], 15000)
+        self.assertEqual(card['field_sources']['annual_km'], 'default')

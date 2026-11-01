@@ -43,7 +43,7 @@ CARD_FIELDS = (
     'fcai_category', 'fcai_broad', 'test_cycle',
     # technical
     'engine_l', 'battery_kwh', 'ancap_safety_rating',
-    'tow_braked_kg', 'tow_unbraked_kg',
+    'tow_braked_kg', 'tow_unbraked_kg', 'annual_km',
     'fuel_consumption_combined_l_100km', 'electricity_consumption_wh_per_km',
     'electric_range_km', 'tailpipe_co2_g_per_km', 'wltp_range_km',
     'fuel_tank_l', 'range_battery_km', 'range_petrol_km', 'range_total_km',
@@ -63,6 +63,7 @@ _FIELD_ATTRS = {
     'carreb': {
         'make': 'brand', 'fuel_consumption_combined_l_100km': 'fuel_consumption_per_100km',
         'electricity_consumption_wh_per_km': None,  # Vehicle stores kWh/100km
+        'annual_km': 'annual_km_default',
         'spotlight_data': 'spotlight_data', 'research_status': 'research_status',
     },
     'gvg': {
@@ -419,6 +420,15 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
         if broad:
             card['fcai_broad'] = broad
             card['field_sources']['fcai_broad'] = 'default'
+
+    # annual_km: catalogue default, else the category benchmark (sheets).
+    if card['annual_km'] is None and card['fcai_category']:
+        from apps.vehicles.models import CategoryAnnualKMBenchmark
+        km = CategoryAnnualKMBenchmark.get_annual_km_for_category(
+            card['fcai_category'])
+        if km:
+            card['annual_km'] = km
+            card['field_sources']['annual_km'] = 'default'
 
     # Pure combustion cars factually have no battery/electric drivetrain:
     # report 0.0 instead of null so consumers never render "null". These are
