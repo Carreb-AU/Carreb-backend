@@ -47,6 +47,7 @@ CARD_FIELDS = (
     'fuel_consumption_combined_l_100km', 'electricity_consumption_wh_per_km',
     'electric_range_km', 'tailpipe_co2_g_per_km', 'wltp_range_km',
     'fuel_tank_l', 'range_battery_km', 'range_petrol_km', 'range_total_km',
+    'fuel_range_km',
     # media / spotlight
     'image_url', 'spotlight_data', 'research_status',
     # pricing & costs (cents)
@@ -449,9 +450,13 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
     # Pure combustion cars factually have no battery/electric drivetrain:
     # report 0.0 instead of null so consumers never render "null". These are
     # structural truths, not estimates, so field_sources stays untouched.
+    # wltp_range_km is deliberately NOT zeroed: the frontend's fuel-range row
+    # walks wltp_range_km -> fuel_range_km -> ... and a 0.0 short-circuits
+    # that chain (pick() skips null but not 0); null lets fuel_range_km
+    # (below) carry the distance for combustion cars.
     if (record_powertrain(card) in ('petrol', 'diesel')):
         for field in ('battery_kwh', 'electricity_consumption_wh_per_km',
-                      'electric_range_km', 'wltp_range_km', 'range_battery_km'):
+                      'electric_range_km', 'range_battery_km'):
             if card[field] is None:
                 card[field] = 0.0
 
@@ -473,6 +478,18 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
         if legs:
             card['range_total_km'] = sum(legs)
             card['field_sources']['range_total_km'] = 'default'
+
+    # Frontend fuel-range alias: the "Est. fuel range" row resolves
+    # wltp_range_km -> fuel_range_km -> range_km -> range -> fuelRangeKm.
+    # Combustion cars have no WLTP figure, so without this alias the row
+    # would stay empty even though range_total_km is known.
+    if card['fuel_range_km'] is None:
+        for field in ('range_total_km', 'range_petrol_km', 'wltp_range_km'):
+            if card.get(field):
+                card['fuel_range_km'] = card[field]
+                card['field_sources']['fuel_range_km'] = \
+                    card['field_sources'].get(field) or 'default'
+                break
 
     # Driveaway price: state price → scalar estimate → nearest-year twin.
     if card['driveaway_price'] is None:

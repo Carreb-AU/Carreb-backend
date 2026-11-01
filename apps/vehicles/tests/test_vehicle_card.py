@@ -189,14 +189,29 @@ class VehicleCardTests(TestCase):
 
     def test_combustion_car_electric_fields_are_zero_not_null(self):
         """A petrol car factually has no battery: 0.0, not null, and not
-        badged as an estimate (structural truth)."""
+        badged as an estimate (structural truth). WLTP range is excluded:
+        the frontend's fuel-range chain skips null but not 0, so null lets
+        fuel_range_km carry the distance."""
         card = build_vehicle_card(
             _make_ai(powertrain_type="petrol", search_query="camry petrol zz"),
             'ai')
         for field in ('battery_kwh', 'electricity_consumption_wh_per_km',
-                      'electric_range_km', 'wltp_range_km', 'range_battery_km'):
+                      'electric_range_km', 'range_battery_km'):
             self.assertEqual(card[field], 0.0, field)
             self.assertNotIn(field, card['field_sources'])
+        self.assertIsNone(card['wltp_range_km'])
+
+    def test_fuel_range_km_alias_for_frontend_row(self):
+        """The frontend 'Est. fuel range' row reads wltp_range_km ->
+        fuel_range_km -> ...; combustion cars must expose the computed
+        distance under fuel_range_km or the row stays empty."""
+        card = build_vehicle_card(
+            _make_ai(powertrain_type="petrol", fuel_tank_l=60.0,
+                     fuel_consumption_combined_l_100km=7.5,
+                     search_query="camry fuel range alias zz"),
+            'ai')
+        self.assertEqual(card['fuel_range_km'], 800)
+        self.assertEqual(card['field_sources']['fuel_range_km'], 'default')
 
     def test_range_petrol_computed_from_tank_and_consumption(self):
         card = build_vehicle_card(
