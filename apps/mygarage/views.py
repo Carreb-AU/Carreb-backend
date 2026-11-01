@@ -170,7 +170,7 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
     # missing field with its database/default/AI value + field_sources map.
     if card is not None and base_data is not None:
         for key, value in card.items():
-            if key in ('id', 'name'):
+            if key == 'id':
                 continue
             if key not in base_data or base_data.get(key) in (None, ''):
                 base_data[key] = value
