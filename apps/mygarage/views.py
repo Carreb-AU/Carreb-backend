@@ -6,6 +6,7 @@ logger = logging.getLogger(__name__)
 from rest_framework import views, status, generics
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.conf import settings
 from django.utils import timezone
 from django.core.cache import cache
 from django.db import models, connection
@@ -180,6 +181,21 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
                 and card.get('fuel_consumption_combined_l_100km'):
             base_data['fuel_consumption_per_100km'] = \
                 card['fuel_consumption_combined_l_100km']
+
+        # Catalogue rows can lack AI-estimable specs too (ANCAP, tow,
+        # engine size...). Same rule as search: never call Grok inline —
+        # enqueue a fire-and-forget warmer and let the 30-day caches fill
+        # in the card on a later view.
+        warm_rec, warm_src = (catalogue, 'carreb') if catalogue \
+            else (gvg_record, 'gvg') if gvg_record \
+            else (ai_entry, 'ai') if ai_entry else (None, None)
+        if warm_rec is not None \
+                and not getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            from apps.vehicles.services.vehicle_card import record_needs_warm
+            from apps.vehicles.tasks import warm_vehicle_estimates_task
+            _, needs = record_needs_warm(warm_rec, warm_src)
+            if needs:
+                warm_vehicle_estimates_task.delay(str(warm_rec.id), warm_src)
 
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
 
@@ -448,7 +464,7 @@ class CurrentVehicleSearchView(views.APIView):
         from apps.vehicles.services.vehicle_card import record_needs_warm
         from apps.vehicles.tasks import warm_vehicle_estimates_task
         for rec, src in records:
-            if src not in ('gvg', 'ai'):
+            if src not in ('gvg', 'ai', 'carreb'):
                 continue
             _, needs = record_needs_warm(rec, src)
             if needs:

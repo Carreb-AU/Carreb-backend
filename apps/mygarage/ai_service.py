@@ -150,6 +150,7 @@ Vehicle: {year} {make} {model} {variant} ({powertrain})
 Return ONLY a valid JSON object with this exact schema:
 {{
   "transmission": "automatic" | "manual" | "cvt" | "dct" | "",  // most common for this exact variant in Australia
+  "drive": "FWD" | "RWD" | "AWD" | "4WD" | "",  // driven wheels
   "doors": integer or null,  // passenger doors + hatch/tailgate as counted in AU listings (a Camry sedan is 4)
   "fuel_tank_l": float or null,  // usable fuel tank capacity in litres
   "tow_braked_kg": integer or null,  // maximum braked tow rating in kg
@@ -273,6 +274,9 @@ def estimate_spec_sheet(make: str, model: str, variant: str, year: int,
     cycle = str(result.get('test_cycle') or '').strip().upper()
     if cycle in ('NEDC', 'WLTP'):
         out['test_cycle'] = cycle
+    drive = str(result.get('drive') or '').strip().upper()
+    if drive in ('FWD', 'RWD', 'AWD', '4WD', '4X4'):
+        out['drive'] = '4WD' if drive == '4X4' else drive
     variant_name = str(result.get('variant') or '').strip()
     if variant_name:
         out['variant'] = variant_name

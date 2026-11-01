@@ -271,3 +271,60 @@ class GvgCurrentVehicleEngineDataTests(TestCase):
             _make_ai(search_query="annual km card test"), 'ai')
         self.assertEqual(card['annual_km'], 15000)
         self.assertEqual(card['field_sources']['annual_km'], 'default')
+
+    @mock.patch("apps.mygarage.ai_service._call_grok_json")
+    def test_carreb_missing_spec_ai_estimated(self, grok):
+        """Catalogue rows with blank spec columns (all 1829 lack ANCAP/tow)
+        pick up AI estimates from the warm caches, badged 'ai' — the card
+        path itself stays cache-read-only."""
+        grok.return_value = {
+            "transmission": "automatic", "drive": "4WD", "doors": 4,
+            "fuel_tank_l": 80.0, "tow_braked_kg": 3500,
+            "tow_unbraked_kg": 750, "test_cycle": "WLTP",
+            "variant": "XLT",
+            "ancap_rating": 5, "engine_l": 2.4,
+            "confidence": "high", "reasoning": "popular ute",
+        }
+        rec = _make_catalogue(brand="Ford", model="Ranger", year=2026,
+                              variant="XLT", transmission="",
+                              ancap_safety_rating=None, engine_l=None)
+        from apps.vehicles.services.vehicle_card import (
+            record_needs_warm, warm_estimates)
+        _, needs = record_needs_warm(rec, 'carreb')
+        self.assertTrue(needs)
+        # Cold cache: card serves nulls and never calls Grok inline.
+        card = build_vehicle_card(rec, 'carreb')
+        self.assertIsNone(card['ancap_safety_rating'])
+        self.assertEqual(grok.call_count, 0)
+        # Warmer fills the caches; the card picks the values up.
+        warm_estimates("Ford", "Ranger", "XLT", 2026, "diesel",
+                       need_spec=True, need_ancap=True, need_engine=True)
+        card = build_vehicle_card(rec, 'carreb')
+        self.assertEqual(card['ancap_safety_rating'], 5)
+        self.assertEqual(card['field_sources']['ancap_safety_rating'], 'ai')
+        self.assertEqual(card['engine_l'], 2.4)
+        self.assertEqual(card['field_sources']['engine_l'], 'ai')
+        self.assertEqual(card['tow_braked_kg'], 3500)
+        _, needs = record_needs_warm(rec, 'carreb')
+        self.assertFalse(needs)
+
+    @mock.patch("apps.mygarage.ai_service._call_grok_json")
+    def test_spec_sheet_covers_drive(self, grok):
+        """The combined spec-sheet estimator also fills an empty drive."""
+        grok.return_value = {
+            "transmission": "automatic", "drive": "awd",
+            "doors": 4, "fuel_tank_l": 66.0,
+            "tow_braked_kg": 3500, "tow_unbraked_kg": 750,
+            "test_cycle": "WLTP", "variant": "LS-U",
+            "confidence": "high", "reasoning": "popular ute",
+        }
+        from apps.vehicles.services.vehicle_card import warm_estimates
+        warm_estimates("Isuzu", "D-Max", "LS-U", 2025, "diesel",
+                       need_spec=True, need_ancap=False, need_engine=False)
+        self.assertEqual(grok.call_count, 1)
+        rec = _make_catalogue(brand="Isuzu", model="D-Max", year=2025,
+                              variant="LS-U", drive="")
+        card = build_vehicle_card(rec, 'carreb')
+        self.assertEqual(card['drive'], 'AWD')
+        self.assertEqual(card['field_sources']['drive'], 'ai')
+        self.assertEqual(card['tow_braked_kg'], 3500)

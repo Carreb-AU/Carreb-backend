@@ -7,6 +7,7 @@ via fire-and-forget tasks from search endpoints.
 Usage:
     python manage.py warm_vehicle_estimates --source ai
     python manage.py warm_vehicle_estimates --source gvg --limit 500 --workers 8
+    python manage.py warm_vehicle_estimates --source carreb --limit 500
 """
 import logging
 
@@ -18,10 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = "Warm AI estimate caches for GVG/AI vehicle records."
+    help = "Warm AI estimate caches for GVG/AI/catalogue vehicle records."
 
     def add_arguments(self, parser):
-        parser.add_argument('--source', choices=['ai', 'gvg'], default='ai')
+        parser.add_argument('--source', choices=['ai', 'gvg', 'carreb'],
+                            default='ai')
         parser.add_argument('--limit', type=int, default=500,
                             help='max records to warm this run')
         parser.add_argument('--offset', type=int, default=0)

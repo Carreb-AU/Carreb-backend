@@ -1005,3 +1005,45 @@ class FreeRideRevealEntitlementTests(TestCase):
         credit = RideRevealCredit.objects.get(user=self.user)
         self.assertFalse(credit.free_reveal_used)
         self.assertEqual(credit.credits_used, 0)
+
+
+class GarageCapCounterTests(TestCase):
+    """Archived vehicles are hidden history: they must NOT count against the
+    plan vehicle cap. A Full Insight user at 26 active + 4 archived was
+    seeing 'used 30/30' and an upgrade prompt on every add."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        self.user = User.objects.create_user(
+            email="cap@example.com", password="x",
+            subscription_tier="full_insight_pro")
+        self.client.force_authenticate(self.user)
+        self.vehicle = make_vehicle(brand="CapMake")
+
+    def _add(self, i):
+        return GarageVehicle.objects.create(
+            user=self.user, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+
+    def test_cap_counts_active_only(self):
+        from apps.mygarage.services import check_cap_limit, get_cap_counter
+        for _ in range(3):
+            self._add(0)
+        gv = self._add(0)
+        gv.status = "archived"
+        gv.save(update_fields=["status"])
+        cap = get_cap_counter(self.user)
+        self.assertEqual(cap["used"], 3)
+        self.assertEqual(cap["limit"], 30)
+        self.assertTrue(check_cap_limit(self.user))
+
+    def test_garage_list_counter_ignores_archived(self):
+        for _ in range(2):
+            self._add(0)
+        gv = self._add(0)
+        gv.status = "archived"
+        gv.save(update_fields=["status"])
+        resp = self.client.get(reverse("garage-vehicles"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["cap_counter"]["used"], 2)

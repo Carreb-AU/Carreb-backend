@@ -15,11 +15,13 @@ def get_user_garage_limit(user):
 
 def get_cap_counter(user):
     limit = get_user_garage_limit(user)
+    # Archived vehicles are hidden history, not live garage slots — only
+    # ACTIVE rows count against the plan cap.
     current_count = GarageVehicle.objects.filter(
         user=user,
-        status__in=[GarageVehicleStatus.ACTIVE, GarageVehicleStatus.ARCHIVED]
+        status=GarageVehicleStatus.ACTIVE
     ).count()
-    
+
     plan_name = dict(SubscriptionTier.choices).get(user.subscription_tier, "Free Starter")
     return {
         "used": current_count,
@@ -31,7 +33,7 @@ def check_cap_limit(user):
     limit = get_user_garage_limit(user)
     current_count = GarageVehicle.objects.filter(
         user=user,
-        status__in=[GarageVehicleStatus.ACTIVE, GarageVehicleStatus.ARCHIVED]
+        status=GarageVehicleStatus.ACTIVE
     ).count()
     return current_count < limit
 

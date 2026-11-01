@@ -184,7 +184,7 @@ def spec_sheet_for(make, model, variant, year, powertrain: str = '') -> dict:
     return sheet or {}
 
 
-SPEC_SHEET_FIELDS = ('transmission', 'doors', 'fuel_tank_l',
+SPEC_SHEET_FIELDS = ('transmission', 'drive', 'doors', 'fuel_tank_l',
                      'tow_braked_kg', 'tow_unbraked_kg', 'test_cycle',
                      'variant')
 
@@ -211,10 +211,8 @@ def warm_estimates(make, model, variant, year, powertrain: str,
 
 
 def record_needs_warm(rec, source: str) -> tuple:
-    """((job_args...), needs_any) for a GVG/AI record; (None, False) when
+    """((job_args...), needs_any) for any record source; (None, False) when
     nothing is missing or everything is already warm."""
-    if source == 'carreb':
-        return None, False
     make = getattr(rec, 'make', None) or getattr(rec, 'brand', '') or ''
     model = getattr(rec, 'model', '') or ''
     variant = getattr(rec, 'variant', '') or ''
@@ -243,6 +241,8 @@ def warm_cold_records(source: str, limit: int, offset: int = 0,
     from concurrent.futures import ThreadPoolExecutor
     if source == 'ai':
         qs = AIVehicleEntry.objects.order_by('-search_count', '-created_at')
+    elif source == 'carreb':
+        qs = Vehicle.objects.order_by('-year', 'brand', 'model')
     else:
         qs = VehicleIdentity.objects.order_by('-year', 'make', 'model')
     total = qs.count()
@@ -266,14 +266,12 @@ def warm_cold_records(source: str, limit: int, offset: int = 0,
 
 
 def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
-    """Apply AI-estimated spec fields a GVG/AI record doesn't carry, from
-    the 30-day estimate caches. READ-ONLY on the request path: this never
-    calls Grok — warmers (celery tasks, nightly sweep, management command)
-    populate the caches off-request, so card building stays instant.
+    """Apply AI-estimated spec fields a record of any source doesn't carry,
+    from the 30-day estimate caches. READ-ONLY on the request path: this
+    never calls Grok — warmers (celery tasks, nightly sweep, management
+    command) populate the caches off-request, so card building stays instant.
     """
     out = {}
-    if source not in ('gvg', 'ai'):
-        return out
 
     missing = [f for f in SPEC_SHEET_FIELDS
                if getattr(record, f, None) in (None, '')]
@@ -287,15 +285,14 @@ def _ai_spec_fallbacks(record, source: str, make, model, variant, year):
                     value = int(value)
                 out[field] = (value, 'ai')
 
-    if source == 'gvg':
-        if getattr(record, 'ancap_safety_rating', None) is None:
-            rating = _cached_estimate_read('ancap', make, model, variant, year)
-            if rating:
-                out['ancap_safety_rating'] = (rating, 'ai')
-        if getattr(record, 'engine_l', None) is None:
-            engine = _cached_estimate_read('engine', make, model, variant, year)
-            if engine:
-                out['engine_l'] = (engine, 'ai')
+    if getattr(record, 'ancap_safety_rating', None) is None:
+        rating = _cached_estimate_read('ancap', make, model, variant, year)
+        if rating:
+            out['ancap_safety_rating'] = (rating, 'ai')
+    if getattr(record, 'engine_l', None) is None:
+        engine = _cached_estimate_read('engine', make, model, variant, year)
+        if engine:
+            out['engine_l'] = (engine, 'ai')
     return out
 
 
