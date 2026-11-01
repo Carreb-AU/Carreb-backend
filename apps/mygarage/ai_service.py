@@ -198,7 +198,8 @@ def _call_grok_json(prompt: str, timeout: float = 30.0) -> dict:
         return {}
 
 
-def estimate_engine_displacement(make: str, model: str, variant: str, year: int) -> Optional[float]:
+def estimate_engine_displacement(make: str, model: str, variant: str, year: int,
+                                 timeout: float = 12.0) -> Optional[float]:
     """Return estimated engine displacement in litres, or None."""
     prompt = ENGINE_DISPLACEMENT_PROMPT.format(
         make=make or '',
@@ -206,7 +207,7 @@ def estimate_engine_displacement(make: str, model: str, variant: str, year: int)
         variant=variant or '',
         year=year or '',
     )
-    result = _call_grok_json(prompt, timeout=12.0)
+    result = _call_grok_json(prompt, timeout=timeout)
     engine_l = result.get('engine_l')
     if engine_l is None:
         return None
@@ -216,14 +217,15 @@ def estimate_engine_displacement(make: str, model: str, variant: str, year: int)
         return None
 
 
-def estimate_ancap_rating(make: str, model: str, year: int) -> Optional[int]:
+def estimate_ancap_rating(make: str, model: str, year: int,
+                          timeout: float = 12.0) -> Optional[int]:
     """Return estimated ANCAP rating 1-5, or None for pre-ANCAP vehicles."""
     prompt = ANCAP_RATING_PROMPT.format(
         make=make or '',
         model=model or '',
         year=year or '',
     )
-    result = _call_grok_json(prompt, timeout=12.0)
+    result = _call_grok_json(prompt, timeout=timeout)
     rating = result.get('ancap_rating')
     if rating is None:
         return None
@@ -235,17 +237,18 @@ def estimate_ancap_rating(make: str, model: str, year: int) -> Optional[int]:
 
 
 def estimate_spec_sheet(make: str, model: str, variant: str, year: int,
-                        powertrain: str = '') -> dict:
+                        powertrain: str = '', timeout: float = 12.0) -> dict:
     """One combined Grok call filling every card spec field a GVG/AI record
-    may lack: transmission, doors, fuel tank, tow ratings, test cycle and
-    variant. Returns a dict of card-field -> value (only known entries).
+    may lack: transmission, drive, doors, fuel tank, tow ratings, test cycle
+    and variant. Returns a dict of card-field -> value (only known entries).
     Cached 30 days by the caller per make|model|variant|year."""
     prompt = SPEC_SHEET_PROMPT.format(
         make=make or '', model=model or '', variant=variant or '',
         year=year or '', powertrain=powertrain or '')
-    # Short timeout: this estimator runs inline inside search responses, so
-    # it must fail fast rather than push the request past the worker timeout.
-    result = _call_grok_json(prompt, timeout=12.0)
+    # Grok-4.x burns several seconds on reasoning before answering, so the
+    # off-request warmers pass a generous timeout; the one inline caller
+    # (current-vehicle auto-fill) keeps the 12s fail-fast default.
+    result = _call_grok_json(prompt, timeout=timeout)
     out = {}
     transmission = str(result.get('transmission') or '').strip().lower()
     if transmission in ('automatic', 'manual', 'cvt', 'dct'):

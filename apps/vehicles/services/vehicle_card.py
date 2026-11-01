@@ -126,8 +126,13 @@ def cached_spec_sheet(make, model, variant, year, powertrain: str = '') -> dict:
     """Cache-READ-ONLY variant for the request path: never calls Grok, so
     card building can never block a response on the AI. Returns {} when
     cold; a warmer (celery task / sweep / management command) fills the
-    cache off-request."""
+    cache off-request. Falls back to the variant-less sheet of the same
+    model-year-powertrain — specs are overwhelmingly variant-shared, and
+    a tank figure for the right model+powertrain beats a null."""
     sheet = cache.get(spec_sheet_cache_key(make, model, variant, year, powertrain))
+    if not sheet and variant:
+        sheet = cache.get(
+            spec_sheet_cache_key(make, model, '', year, powertrain))
     return sheet or {}
 
 
@@ -144,18 +149,26 @@ def _cached_estimate(kind: str, func, make, model, variant, year):
         value = func(
             make=make or '', model=model or '',
             **({'variant': variant or ''} if kind == 'engine' else {}),
-            year=year or 0)
+            year=year or 0, timeout=45.0)
     except Exception as exc:
         logger.warning("vehicle_card %s estimate failed for %s %s: %s",
                        kind, make, model, exc)
         value = None
-    cache.set(key, value if value is not None else False, ESTIMATE_CACHE_TTL)
+    # Success caches 30 days; failure only one hour so a Grok outage
+    # self-heals on the next warm pass.
+    ttl = ESTIMATE_CACHE_TTL if value is not None else 60 * 60
+    cache.set(key, value if value is not None else False, ttl)
     return value
 
 
 def _cached_estimate_read(kind: str, make, model, variant, year):
-    """Cache-read-only counterpart of _cached_estimate for the request path."""
-    cached = cache.get(_estimate_cache_key(kind, make, model, variant, year))
+    """Cache-read-only counterpart of _cached_estimate for the request path.
+    Falls back to the variant-less key — ANCAP/engine are overwhelmingly
+    variant-shared, and an estimate for the right model beats a null."""
+    key = _estimate_cache_key(kind, make, model, variant, year)
+    cached = cache.get(key)
+    if not cached and variant:
+        cached = cache.get(_estimate_cache_key(kind, make, model, '', year))
     return cached or None
 
 
@@ -168,6 +181,10 @@ def spec_sheet_for(make, model, variant, year, powertrain: str = '') -> dict:
     """Cached spec-sheet estimate for one car (30-day cache). Fetches from
     Grok on a cold cache; returns {} when the AI is unavailable. Pure
     values in/out so callers can run it off-thread without touching the ORM.
+
+    Failures cache for one hour only (not 30 days) so a Grok outage or
+    timeout self-heals on the next warm pass instead of poisoning the car
+    for a month.
     """
     key = spec_sheet_cache_key(make, model, variant, year, powertrain)
     sheet = cache.get(key)
@@ -175,12 +192,14 @@ def spec_sheet_for(make, model, variant, year, powertrain: str = '') -> dict:
         return sheet or {}
     from apps.mygarage.ai_service import estimate_spec_sheet
     try:
-        sheet = estimate_spec_sheet(make, model, variant, year, powertrain)
+        sheet = estimate_spec_sheet(make, model, variant, year, powertrain,
+                                    timeout=45.0)
     except Exception as exc:
         logger.warning("vehicle_card spec-sheet estimate failed for "
                        "%s %s: %s", make, model, exc)
         sheet = {}
-    cache.set(key, sheet or False, ESTIMATE_CACHE_TTL)
+    ttl = ESTIMATE_CACHE_TTL if sheet else 60 * 60
+    cache.set(key, sheet or False, ttl)
     return sheet or {}
 
 

@@ -328,3 +328,47 @@ class GvgCurrentVehicleEngineDataTests(TestCase):
         self.assertEqual(card['drive'], 'AWD')
         self.assertEqual(card['field_sources']['drive'], 'ai')
         self.assertEqual(card['tow_braked_kg'], 3500)
+
+    @mock.patch("apps.mygarage.ai_service._call_grok_json")
+    def test_variant_record_falls_back_to_base_spec_sheet(self, grok):
+        """Cache keys are per-variant; a variant row (e.g. Camry Hybrid)
+        must still be served from the base model's warm sheet instead of
+        staying null forever."""
+        grok.return_value = {
+            "transmission": "automatic", "doors": 4, "fuel_tank_l": 65.0,
+            "tow_braked_kg": 1300, "tow_unbraked_kg": 600,
+            "test_cycle": "WLTP", "variant": "",
+            "confidence": "high", "reasoning": "base",
+        }
+        from apps.vehicles.services.vehicle_card import warm_estimates
+        warm_estimates("Toyota", "Camry", "", 2015, "hybrid",
+                       need_spec=True, need_ancap=False, need_engine=False)
+        self.assertEqual(grok.call_count, 1)
+        rec = _make_ai(variant="Hybrid", powertrain_type="hybrid",
+                       fuel_tank_l=None, search_query="camry hybrid variant zz")
+        card = build_vehicle_card(rec, 'ai')
+        self.assertEqual(card['fuel_tank_l'], 65.0)
+        self.assertEqual(card['field_sources']['fuel_tank_l'], 'ai')
+        self.assertEqual(card['range_total_km'], round(65.0 / 5.3 * 100))
+
+    @mock.patch("apps.mygarage.ai_service._call_grok_json")
+    def test_failed_spec_sheet_retries_instead_of_poisoning_cache(self, grok):
+        """A Grok failure must cache for ~1 hour, not 30 days, so the next
+        warm pass retries (the old behavior left cars null for a month)."""
+        from apps.vehicles.services.vehicle_card import spec_sheet_for
+        grok.side_effect = Exception("timeout")
+        self.assertEqual(spec_sheet_for("Nissan", "Patrol", "Ti", 2024, "petrol"), {})
+        self.assertEqual(grok.call_count, 1)
+        # Same minute: cached failure -> no second call.
+        self.assertEqual(spec_sheet_for("Nissan", "Patrol", "Ti", 2024, "petrol"), {})
+        self.assertEqual(grok.call_count, 1)
+        # Failure TTL is one hour: simulate expiry, then recovery succeeds.
+        from django.core.cache import cache
+        from apps.vehicles.services.vehicle_card import spec_sheet_cache_key
+        cache.delete(spec_sheet_cache_key("Nissan", "Patrol", "Ti", 2024, "petrol"))
+        grok.side_effect = None
+        grok.return_value = {"fuel_tank_l": 140.0, "variant": "Ti",
+                             "confidence": "high", "reasoning": "big 4x4"}
+        sheet = spec_sheet_for("Nissan", "Patrol", "Ti", 2024, "petrol")
+        self.assertEqual(grok.call_count, 2)
+        self.assertEqual(sheet.get("fuel_tank_l"), 140.0)
