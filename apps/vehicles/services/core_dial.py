@@ -287,6 +287,15 @@ def cost_gvg_current_vehicle(record, state):
             # class median fuel cost from the dial rows.
             parts['fuel'] = _median_cents('fuel_cents')
 
+    driveaway = getattr(record, 'driveaway_price_estimate', None)
+    resale = None
+    if driveaway and getattr(record, 'year', None):
+        from apps.mygarage.ai_service import estimate_resale_value
+        resale = estimate_resale_value(
+            driveaway, record.year,
+            powertrain_type=getattr(record, 'powertrain_type', None),
+            brand=getattr(record, 'make', None) or getattr(record, 'brand', None))
+
     return {
         'core_rating': None,
         'band_name': '',
@@ -298,6 +307,7 @@ def cost_gvg_current_vehicle(record, state):
         'annual_km': km,
         'costing_basis': GVG_COSTING_BASIS,
         'is_estimate': True,
+        'resale_value_5yr_estimate': resale,
     }
 
 

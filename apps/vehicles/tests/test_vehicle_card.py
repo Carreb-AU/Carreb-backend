@@ -266,8 +266,11 @@ class GvgCurrentVehicleEngineDataTests(TestCase):
         ed = cost_gvg_current_vehicle(entry, "NSW")
         for key in ('total_annual_cost', 'annual_cost_breakdown',
                     'tailpipe_co2_g_per_km', 'annual_co2_kg', 'annual_km',
-                    'core_rating', 'is_estimate'):
+                    'core_rating', 'is_estimate', 'resale_value_5yr_estimate'):
             self.assertIn(key, ed, key)
+        # Resale derived from the entry's driveaway price (16,500 AUD * a
+        # 2015 retention multiplier) — never null when a price exists.
+        self.assertIsNotNone(ed['resale_value_5yr_estimate'])
         bd = ed['annual_cost_breakdown']
         for key in ('fuel_or_energy_annual', 'insurance_annual', 'ctp_annual',
                     'registration_annual', 'servicing_annual', 'tyres_annual',

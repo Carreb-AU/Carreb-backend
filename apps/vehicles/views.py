@@ -2,7 +2,7 @@ from rest_framework import generics, views, status, pagination
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from django.utils import timezone
-from apps.vehicles.models import Vehicle
+from apps.vehicles.models import Vehicle, VehicleIdentity, AIVehicleEntry
 from apps.vehicles.serializers import (
     VehicleListSerializer, VehicleDetailSerializer,
     CoreRatingRequestSerializer, CoreRatingBatchRequestSerializer,
@@ -56,12 +56,50 @@ class VehicleListView(generics.ListAPIView):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_search_performed', dict(request.query_params))
         return response
 
-class VehicleDetailView(generics.RetrieveAPIView):
-    queryset = Vehicle.objects.all()
-    serializer_class = VehicleDetailSerializer
+class VehicleDetailView(views.APIView):
+    """Polymorphic vehicle detail: Carreb catalogue → GVG → AI search.
+
+    The frontend fetches garage/current-vehicle detail through this single
+    endpoint with whichever id the garage row carries
+    (vehicleCatalogueId || greenVehicleGuideRecordId || aiVehicleEntryId).
+    Carreb ids are served by the ORM serializer unchanged; GVG
+    (``VehicleIdentity``) and AI-search (``AIVehicleEntry``) ids resolve
+    with a catalogue-shaped payload (``catalogue_detail_payload``) so their
+    cards render exactly like catalogue ones. Public, cached 15 min.
+    """
+
     permission_classes = [AllowAny]
-    lookup_field = 'id'
-    lookup_url_kwarg = 'vehicle_id'
+
+    def get(self, request, vehicle_id):
+        from django.core.cache import cache
+        from apps.vehicles.services.vehicle_card import catalogue_detail_payload
+
+        vehicle = Vehicle.objects.filter(id=vehicle_id).first()
+        if vehicle is not None:
+            return Response(VehicleDetailSerializer(vehicle).data)
+
+        state = (request.query_params.get('state') or 'NSW').upper()
+        cache_key = f"vdetail:{vehicle_id}:{state}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            if cached is False:
+                return Response({"detail": "Vehicle not found."},
+                                status=status.HTTP_404_NOT_FOUND)
+            return Response(cached)
+
+        record = VehicleIdentity.objects.filter(id=vehicle_id).first()
+        source = 'gvg'
+        if record is None:
+            record = AIVehicleEntry.objects.filter(id=vehicle_id).first()
+            source = 'ai'
+        if record is None:
+            cache.set(cache_key, False, 60)
+            return Response({"detail": "Vehicle not found."},
+                            status=status.HTTP_404_NOT_FOUND)
+
+        payload = catalogue_detail_payload(record, source, state)
+        cache.set(cache_key, payload, 60 * 15)
+        return Response(payload)
 
 
 class VehicleJsonLdView(views.APIView):

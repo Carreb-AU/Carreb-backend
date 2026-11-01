@@ -552,3 +552,53 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
         card['field_sources']['image_url'] = card['field_sources'].get('image_url') or 'default'
 
     return card
+
+
+def catalogue_detail_payload(record, source: str,
+                             state: Optional[str] = None) -> dict:
+    """Polymorphic ``/api/vehicles/<id>/`` payload for GVG/AI records.
+
+    The frontend fetches garage/current-vehicle details through this one
+    endpoint with whichever id the garage row carries. Carreb ids are served
+    by the ORM serializer; GVG (``VehicleIdentity``) and AI
+    (``AIVehicleEntry``) ids land here. The payload reuses the canonical
+    card and adds the key names / aliases the frontend mappers read on
+    Carreb rows (``brand``, ``seats``, ``annual_km_default``, …) plus the
+    catalogue-shaped ``engine_data`` running-cost block, so GVG/AI vehicle
+    cards render exactly like catalogue ones with zero frontend changes.
+    """
+    card = build_vehicle_card(record, source, state)
+
+    # Resale: no GVG row carries one, so derive it from the driveaway price
+    # with the retention formula (same estimator the auto-fill path uses —
+    # pure arithmetic, no AI tokens).
+    if card['resale_value_5yr_estimate'] is None and card['driveaway_price']:
+        from apps.mygarage.ai_service import estimate_resale_value
+        resale = estimate_resale_value(
+            card['driveaway_price'], card['year'],
+            powertrain_type=card['powertrain_type'], brand=card['make'])
+        if resale:
+            card['resale_value_5yr_estimate'] = resale
+            card['field_sources']['resale_value_5yr_estimate'] = 'default'
+    if card['resale_value_5yr_estimate'] and card['driveaway_price']:
+        card['resale_percent'] = round(
+            card['resale_value_5yr_estimate'] / card['driveaway_price'] * 100, 1)
+        card['resale_value_5yr'] = card['resale_value_5yr_estimate']
+        card['resale_value'] = card['resale_value_5yr_estimate']
+
+    # Aliases the frontend mappers read on Carreb serializer rows.
+    card['brand'] = card['make']
+    card['annual_km_default'] = card['annual_km']
+    card['fuel_type'] = card['powertrain_type']
+    card['seats'] = card['num_seats']
+    card['drive_type'] = card['drive'] or None
+    card['drivetrain'] = card['drive'] or None
+    card['fuel_consumption_l_100km'] = card['fuel_consumption_combined_l_100km']
+    card['combined_fuel_consumption_l_100km'] = \
+        card['fuel_consumption_combined_l_100km']
+    card['battery_capacity_kwh'] = card['battery_kwh'] or None
+    card['ancap_rating'] = card['ancap_safety_rating']
+
+    from apps.vehicles.services.core_dial import cost_gvg_current_vehicle
+    card['engine_data'] = cost_gvg_current_vehicle(record, state or 'NSW')
+    return card
