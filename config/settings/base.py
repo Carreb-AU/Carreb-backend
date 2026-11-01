@@ -329,7 +329,8 @@ CELERY_BEAT_SCHEDULE = {
     },
 
     # Nightly warm of AI estimate caches (spec sheet / ANCAP / engine) for
-    # GVG + AI-search rows; chains itself in bounded chunks until done.
+    # AI-search, GVG and Carreb catalogue rows; chains itself in bounded
+    # chunks until done.
     'sweep-vehicle-estimates': {
         'task': 'apps.vehicles.tasks.sweep_vehicle_estimates_task',
         'schedule': crontab(hour=3, minute=17),
