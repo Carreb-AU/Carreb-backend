@@ -1,0 +1,255 @@
+# Backend Work Log — 27 Oct → 2 Nov 2026
+
+Everything shipped in the last week: every fix, improvement, data import and
+deployment, with commit hashes, timestamps and approximate time taken
+(includes local dev + tests + deploy + live verification).
+
+**Totals:** ~50 commits, 8 production deployments, 2 workbook imports,
+~35 hours of work.
+
+---
+
+## Day-by-day summary
+
+| Date | Commits | Theme | ~Time |
+|---|---|---|---|
+| Thu 27-Oct | 22 | 21-Oct workbook import, image pipeline, Smart Car Match, vehicle lookup, Find a Dealer | ~10 h |
+| Fri 28-Oct | 6 | Finance block, spotlight v2, one-variant-per-model filter | ~4.5 h |
+| Sat 29-Oct | 4 | GVG in My Garage, Grok estimators, favorite color, dealer radius | ~5 h (+2 h data import) |
+| Sun 30-Oct | 4 | Free Match 5 results, AI Smart Match images, Free-tier dial, share card PNG | ~5 h |
+| Mon 31-Oct | 8 | Grok fallback search, AI garage add, vehicle data audit mega-fix | ~8 h |
+| Tue 1-Nov | 8 | Spec backfill, performance/warming, provenance, Full Insight fix | ~6 h |
+| Wed 2-Nov | 5 | Polymorphic vehicle endpoint (GVG/AI cards fix) | ~2.5 h |
+
+---
+
+## Thu 27-Oct — data import + image pipeline + search quality
+
+**21-Oct-26 workbook import (new columns, suppression, verbatim capture)**
+`adc3be7` 03:46 · ~2 h
+Imported the "02 Vehicles & CORE - 21-Oct-26" workbook on the server; added
+the new consolidated-vehicle columns to the DB, row-suppression handling and
+verbatim row capture.
+
+**Image pipeline: Grok-vision classifier, orphan cleanup, allowlist scraper**
+`338b0ad` 05:14 · ~2.5 h
+New curated image scraping with allowlisted sources, a Grok-vision classifier
+to reject non-silhouette/undesirable images, and orphan cleanup so old images
+are wiped (server disk control). Follow-ups: logger fix `8faa87f` 05:30,
+Commons 1200px thumbnails + 429 backoff `5269fec` 06:07, XAI vision model
+default grok-4.3 (`grok-2-vision-1212` retired) `9487cc6` 13:03, curated
+press-site hero set import with old-image wipe `7a5e8ec` 13:21.
+
+**Smart Car Match: named-car boost, multiple variants, min-5 relaxation**
+`e7d6538` 13:43 · `191ae68` 14:06 · `947c6ca` 14:11 · ~2 h
+Budget/core-rating filters relaxed, named cars boosted, third-row and luxury
+intent extraction, unknown-price cars excluded from budget-constrained
+results, cost tie-break. This is the "7-seater SUV returns nothing / always
+Audi" fix.
+
+**Vehicle lookup: digit-token matching, coverage scoring**
+`4a7d277` 14:25 · `47b7ce0` 14:43 · `21889b2` 14:52 · ~1.5 h
+Fixed lookup matching on year coincidences instead of the actual model;
+bare-digit model matches now require the brand.
+
+**Free Match: top 5 matches instead of one**
+`9533519` 16:34 · ~1 h
+
+**Current vehicle: Grok AI spec lookup for cars missing from the DB**
+`f8a27d7` 18:58 · `75ed8ad` 19:05 · ~1.5 h
+The manual-entry pipeline: search falls through Carreb DB → GVG → Grok, and
+the AI result is stored in its own table (no repeated token spend — the table
+doubles as a per-query cache).
+
+**Find a Dealer: migration to New Places API**
+`13b52f2` 19:24 · `76eb654` 03:17(next day UTC) · ~2 h
+Google's New Places API with spec GET route, fail-loud geocode, and
+`locationBias.circle` (locationRestriction turned out to be rectangle-only).
+
+**One variant per model (Smart Match + core search)**
+`8ab7918` 28-Oct 03:35 · `0bb5e6a` 05:09 · ~1 h
+Same model no longer appears as several trims; cheapest variant wins, then
+upgraded to "better-rated trim within +10% of the cheapest price wins".
+
+---
+
+## Fri 28-Oct — finance block + imports
+
+**Finance section in lookup API (FinanceDefaults-driven)**
+`40fb0c3` 05:32 · `e3fd931` 05:55 · ~2 h
+Full finance block: deposit (10% default), loan amount, term (60), interest
+(8.78%, −0.5 pp alt-fuel), balloon, read-only monthly repayment, yearly
+interest + fees in the header. Frontend guide expanded with the worked
+$41,490 → ~$771/month example.
+
+**Spotlight v2 changeset command + GVG CSV import support**
+`73573e7` 18:46 · ~1 h
+
+**Sheet sync: skip annotation rows, widen source text fields**
+`750bf55` 19:59 · ~0.5 h
+
+---
+
+## Sat 29-Oct — garage integration + dealer radius
+
+**GVG vehicles can be added to My Garage**
+`3f33d2b` 03:33 · ~1 h
+`green_vehicle_guide_record_id` accepted end-to-end (garage add + current
+vehicle).
+
+**Spec estimators routed through Grok (xAI)**
+`34aef22` 04:06 · ~0.5 h
+ANCAP rating + engine displacement moved off the dead OpenAI key onto Grok;
+30-day cache per car.
+
+**RideReveal favorite color end-to-end**
+`c6efdf4` 04:17 · ~1 h
+Selected color now captured and returned in the reveal response.
+
+**Find a Dealer 100 km searches**
+`8762613` 04:59 · ~1 h
+Places bias circle clamped to 50 km max; wider radii work via widening the
+query pipeline.
+
+**29-Oct FINAL LAUNCH workbook import (server-side ops, no commit)**
+~2 h
+Diffed "02 Vehicles & CORE - 29-Oct-26 FINAL LAUNCH" against the previous
+sheet, imported all changed tables (vehicles, energy prices, category
+defaults, bounds, etc.), reconciled vehicle counts (removed rows not in the
+new sheet, verified the unique-vehicle count).
+
+---
+
+## Sun 30-Oct — results completeness + tier rules
+
+**Free Match: real price/spec data for all 5 results**
+`118f88e` 03:21 · ~1.5 h
+Bug: results 2–5 had `locked: true` and no data (only the first car
+rendered). All five now carry full data.
+
+**AI Smart Match: image in every result**
+`11bae22` 03:30 · ~0.5 h
+
+**CORE Dial: Free users can view dial matches**
+`bb319c4` 15:19 · ~1 h
+Free tier moved from "matches button hard-403s" to "results visible; upgrade
+prompt only on add-to-garage". Matches endpoint returns vehicles for Free.
+
+**RideReveal share card PNG (headless Chromium)**
+`af95490` 19:27 · ~2 h
+Share renders the full reveal card as an image instead of a bare link.
+
+---
+
+## Mon 31-Oct — the vehicle data audit
+
+**Grok fallback for current-vehicle search**
+`1d397a6` 18:40 · ~1.5 h
+
+**AI vehicle entries accepted in garage add / current vehicle**
+`02c982b` 18:56 · `71af6e2` 19:03 · ~1 h
+
+**First garage add becomes current vehicle automatically**
+`beffd7c` 19:10 · ~0.5 h
+
+**Auto-route GVG/AI ids mis-sent as vehicle_catalogue_id**
+`bcf64c8` 19:22 · ~0.5 h
+
+**Garage AI/GVG cards: full spec + image fallback**
+`1cd41b1` 19:39 · `7640268` 19:58 · ~2.5 h
+AI/GVG garage rows got the complete card; AI entries get all cost fields
+from the Data & Assumptions sheet defaults at creation; silhouettes for
+images.
+
+**Complete vehicle data audit (the big one)**
+`2118fc3` 23:32 · ~4 h
+Canonical `build_vehicle_card` service: every surface (lookup, AI search,
+Smart Car Finder, AI Smart Match, garage, current vehicle, public API)
+answers with the same complete schema; per-field `field_sources` provenance
+(`db`/`default`/`ai`); DB → sheet-defaults → AI fallback hierarchy; garage
+add dedupe; **one free RideReveal** entitlement for free tier with
+failure-refund; 202 tests green.
+
+---
+
+## Tue 1-Nov — backfill, performance, honesty
+
+**Fill null spec fields on AI/GVG cards**
+`b6556a9` 03:43 · ~1 h
+
+**AI estimate warming moved off the request path**
+`2ba4dab` 03:54 · `4d7bfc0` 04:01 · `76688fb` 04:18 · ~2 h
+Cold Grok calls no longer block user requests; fire-and-forget warmers with
+concurrency, 45 s timeouts, and failure caching of 1 h (not 30 days) so
+outages self-heal.
+
+**Honest provenance for AI cost fields; integer tow ratings**
+`bf26436` 04:41 · ~1 h
+AI-entry cost fields are sheet-sourced, not AI-sourced — badges now say so.
+
+**GVG/AI current vehicles expose full engine_data**
+`e497076` 05:12 · ~1 h
+Running costs, CO₂ p.a., km p.a. — same shape as catalogue cars.
+
+**Full Insight upgrade prompt bug + Carreb spec backfill**
+`52e279b` 05:41 · `065996c` 05:46 · ~1.5 h
+Archived cars no longer count against the vehicle cap; nightly sweep now
+also covers Carreb rows.
+
+**AI spec estimator: longer timeout, failure retry, variant fallback**
+`e409540` 16:01 · ~1 h
+
+**fuel_range_km alias**
+`d5abb68` 16:18 · ~0.5 h
+"Est. fuel range" row fills for combustion cars (walks
+wltp → fuel_range → range chain).
+
+**Ops:** purged 239 poisoned 30-day cache keys live on the server (cached
+failures from the Grok outage that made ANCAP/engine estimates look
+permanently unavailable).
+
+---
+
+## Wed 2-Nov — GVG/AI vehicle cards (the last open bug)
+
+**Polymorphic `/api/vehicles/<id>/`** — `f56030a` 03:47 · ~2.5 h
+GVG/AI garage & current-vehicle cards showed no details because the detail
+endpoint 404'd for non-catalogue ids. It now resolves Carreb → GVG → AI and
+returns a catalogue-shaped payload (all mapper aliases + `engine_data`),
+cached 15 min. **No frontend changes needed.**
+
+Supporting fixes, same task:
+- `2f60f98` 03:52 — engine_data resale prefers the record's stored estimate
+  (killed a 550000 vs 67500 self-inconsistency on the live AI Camry).
+- `56196d0` 04:03 — frontend guide: `Frontend API Guide — GVG & AI Vehicle
+  Details via Vehicle API (Nov 2026).md`.
+- `e103880` 04:08 — garage/current-vehicle detail `name: null` fix.
+- `2d77a09` 04:15 — resale derivation moved into the canonical card so every
+  surface gets it.
+
+Live-verified: GVG 2015 Corolla garage card → name, $1,850 resale, 902 km
+fuel range, image; AI 2015 Camry → name, $5,500 resale (consistent in both
+places), 897 km; Carreb endpoint byte-identical.
+
+---
+
+## Deployments (all production, all live-verified after)
+
+| When | What |
+|---|---|
+| 27-Oct | Search/lookup/dealer batch + image pipeline |
+| 28-Oct | Finance block + one-variant filter |
+| 29-Oct | GVG garage + Grok estimators + dealer radius |
+| 30-Oct | 5-result fixes + Free dial matches + share PNG |
+| 31-Oct | Vehicle data audit + Grok fallback + garage integration |
+| 1-Nov (2×) | Backfill/perf/provenance batch, then fuel_range alias + estimator fixes |
+| 2-Nov (3×) | Polymorphic endpoint batch (incl. the two follow-up consistency fixes) |
+
+## Still open (known, not yet done)
+
+1. RideReveal `favorite_color` — captured end-to-end (`c6efdf4`) but the
+   user reported it null in one live response; needs one reproduction pass.
+2. 17 duplicate `AIVehicleEntry` rows for "toyota camry 2015" phrasings —
+   cache is keyed by exact normalized query; cosmetic + minor token waste.
+3. Carreb catalogue enrichment could also use the new aliases (works today;
+   would simplify the mapper long-term).
