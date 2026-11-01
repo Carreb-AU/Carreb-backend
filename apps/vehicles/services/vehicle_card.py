@@ -512,6 +512,18 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
     card['driveaway_price_display'] = (
         f"${card['driveaway_price'] // 100:,}" if card['driveaway_price'] else None)
 
+    # Resale: records that carry none (every GVG row) get the retention
+    # formula off the resolved driveaway price — the same estimator the
+    # my-garage auto-fill path uses; pure arithmetic, no AI tokens.
+    if card['resale_value_5yr_estimate'] is None and card['driveaway_price']:
+        from apps.mygarage.ai_service import estimate_resale_value
+        resale = estimate_resale_value(
+            card['driveaway_price'], year,
+            powertrain_type=card['powertrain_type'], brand=make)
+        if resale:
+            card['resale_value_5yr_estimate'] = resale
+            card['field_sources']['resale_value_5yr_estimate'] = 'default'
+
     # Sheet-default cost fallbacks for records missing them.
     if not card['ctp_by_state'] or not card['insurance_estimate_by_state'] \
             or not card['registration_by_state']:
@@ -569,17 +581,8 @@ def catalogue_detail_payload(record, source: str,
     """
     card = build_vehicle_card(record, source, state)
 
-    # Resale: no GVG row carries one, so derive it from the driveaway price
-    # with the retention formula (same estimator the auto-fill path uses —
-    # pure arithmetic, no AI tokens).
-    if card['resale_value_5yr_estimate'] is None and card['driveaway_price']:
-        from apps.mygarage.ai_service import estimate_resale_value
-        resale = estimate_resale_value(
-            card['driveaway_price'], card['year'],
-            powertrain_type=card['powertrain_type'], brand=card['make'])
-        if resale:
-            card['resale_value_5yr_estimate'] = resale
-            card['field_sources']['resale_value_5yr_estimate'] = 'default'
+    # Resale aliases (the card itself now derives resale_value_5yr_estimate
+    # for records that carry none).
     if card['resale_value_5yr_estimate'] and card['driveaway_price']:
         card['resale_percent'] = round(
             card['resale_value_5yr_estimate'] / card['driveaway_price'] * 100, 1)
