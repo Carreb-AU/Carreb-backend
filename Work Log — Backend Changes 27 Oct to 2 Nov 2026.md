@@ -282,3 +282,30 @@ generated, `share_image_url` absolute + publicly reachable, 200 image/png):
 2. **Ride Reveal share flow** — diagnosed 2-Nov (see above); needs the
    share-token + public endpoint + OG-tagged URL work, plus the frontend
    copy-button fix. This is the only functional gap.
+
+## 2-Nov late — Ride Reveal generate response fixes
+
+**Ride Reveal `first_name` missing + `share_image_url` null on completion**
+· commits `ff2c902` (code) + `b6295be` (guide) · ~45 min
+
+Two reported bugs from the My Garage reveal flow, both backend root causes:
+
+1. *First name lost* — the frontend already POSTed `first_name` in the
+   generate body (`buildGenerateRideRevealBody`), but
+   `RideRevealGenerateSerializer` never declared it, so it was silently
+   dropped; the share card fell back to the account profile name. Fix:
+   `first_name` accepted by the serializer, stored on `RideRevealJob` and
+   `RideRevealResult` (migration `0015`), returned in result/job responses,
+   and preferred over the profile name on the share card.
+2. *`share_image_url` null on completed jobs* — the celery task marked the
+   job COMPLETE and saved **before** rendering the share-card PNG, so any
+   poll landing in that window got `status: complete` with
+   `share_image_url: null`. Fix: PNG render now runs before the job is
+   marked complete, so a completed job's result always carries the URL
+   (render failure still never blocks the reveal — returns False, logged).
+
+Verified: 59/59 mygarage tests green (3 new: job stores first_name, result
+serializer returns it, share card prefers it). Frontend guide section 4
+added; no frontend code change needed (it already sends/reads the fields).
+Deployed 2-Nov (4th deploy of the day); live check: generate → poll →
+completed job carries `first_name` + non-null `share_image_url`.
