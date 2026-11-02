@@ -309,3 +309,46 @@ serializer returns it, share card prefers it). Frontend guide section 4
 added; no frontend code change needed (it already sends/reads the fields).
 Deployed 2-Nov (4th deploy of the day); live check: generate → poll →
 completed job carries `first_name` + non-null `share_image_url`.
+
+## 2-Nov — Uncosted catalogue vehicle cost fill (MyGarage issue #1)
+
+**315 workbook vehicles had no cost data → wrong "Est. Cost Difference"**
+· commit `e8a9f2c` · ~3 h
+
+Root cause: the FINAL LAUNCH workbook ships blank cost columns for 315 of
+1,829 vehicles (all Aston Martin, Bentley, Ferrari, Lamborghini,
+Rolls-Royce, Maserati, Lotus + scattered vans/SUVs). With no stored
+`mode_coo_pa`, `calculate_core_rating` fell back to a category-average
+baseline, so garage cards showed e.g. "saving $38,925/yr" against a
+$58,626 made-up peer average while the "Current vehicle" radio looked
+selected (user's current vehicle = 2025 Aston Martin Vantage, itself
+uncosted → $0/yr).
+
+Fix: `apps/vehicles/services/uncosted_estimates.py` — re-implements the
+workbook Formulas tab step-for-step (§1-9) on top of the already-imported
+platform tables (fuel/elec prices, CTP, insurance, rego, maintenance,
+tyres, km, finance, depreciation L1-L3, CategoryScoringBounds latest
+version) plus sheet constants only the workbook carries (FUELEF 2.9/3.39
+kg/L scope 1+3, grid scope-3 factors, CO₂ cap 315/250/190, 0.8/0.2
+weights). Fallbacks, per the DB → defaults hierarchy: sibling-variant
+driveaway when the row has no price (65 vehicles), tailpipe-derived or
+category-median fuel consumption (103 vehicles), 18 kWh/100km platform
+flat for missing EV consumption. Every filled mode dict is marked
+`costing_basis: sheet_defaults_v6.4` and the vehicle's `assumption_fills`
+records what was estimated.
+
+Command: `fill_uncosted_vehicle_estimates [--commit] [--limit N]
+[--vehicle-id]`. Run on prod 2-Nov: **177 filled, 138 skipped** (no price
+anywhere in the catalogue — Sprinter/Continental GT/Vito/Crafter/Iveco
+etc.), 0 failed; idempotent (second run = no-op). 8 new tests; vehicles
+suite 170 green.
+
+Live verified (carreb1@yopmail.com): Aston Martin Vantage now rates
+2.0★ The Detour™ Pure Cost $5,991/yr / 3.0★ True Value $48,241/yr;
+ZEEKR 009 card diff = **"Est. $28,539/yr saving, comp: current_vehicle"**
+vs Aston — was $38,925 vs category average.
+
+Still open (investigated, not approved for change): CORE dial arc
+min/max from `CategoryScoringBounds` (dataset API exposure + frontend
+needle), and priority slider having no effect on stored workbook scores
+(`rating_engine` line ~413 discards it by design).
