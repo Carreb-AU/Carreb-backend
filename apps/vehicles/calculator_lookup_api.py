@@ -215,12 +215,27 @@ def find_vehicle_by_name(query: str) -> Optional[Tuple[str, Any]]:
         best_v = _best_scored(
             Vehicle.objects.filter(veh_q).only('brand', 'model', 'variant', 'year'),
             ('brand', 'model', 'variant', 'year'), tokens, year)
-        if best_v:
-            return ('vehicle', best_v)
-
         best_i = _best_scored(
             VehicleIdentity.objects.filter(id_q).only('make', 'model', 'variant', 'year'),
             ('make', 'model', 'variant', 'year'), tokens, year)
+
+        # With an explicit query year, the two sources compete on the same
+        # ranking: model coverage/score first (a CX-5 beats a same-year CX-3),
+        # then year. Without this, the catalogue always won when it had ANY
+        # match — so "2015 toyota camry" returned the 2025 catalogue Camry
+        # even though the GVG dataset holds a far closer Camry (exact 2015
+        # Corolla, or nearest-year 2014). Yearless queries keep the old
+        # catalogue-first order (newest-data preference).
+        if year and best_v and best_i:
+            kv = _rank_key(best_v.brand, best_v.model, best_v.variant,
+                           best_v.year, tokens, year)
+            ki = _rank_key(best_i.make, best_i.model, best_i.variant,
+                           best_i.year, tokens, year)
+            if ki > kv:
+                return ('identity', best_i)
+            return ('vehicle', best_v)
+        if best_v:
+            return ('vehicle', best_v)
         if best_i:
             return ('identity', best_i)
 

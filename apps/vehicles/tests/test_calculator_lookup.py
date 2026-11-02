@@ -253,6 +253,50 @@ class VehicleCalculatorLookupAPITestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()['vehicle_found']['model'], 'V80')
 
+    def _make_identity(self, make, model, year, variant='', **overrides):
+        defaults = dict(
+            body_style='sedan', fcai_category='Medium',
+            powertrain_type=PowertrainType.PETROL, fuel_type_raw='petrol',
+            driveaway_price_estimate=2000000,
+        )
+        defaults.update(overrides)
+        return VehicleIdentity.objects.create(
+            make=make, model=model, year=year, variant=variant, **defaults)
+
+    def test_lookup_brandless_exact_year_beats_catalogue_newer_year(self):
+        """Regression (prod): '2015 corolla' returned the 2025 catalogue Corolla
+        because the catalogue always won when it had any match. The GVG row
+        with the exact query year must win."""
+        self._make_vehicle('Toyota', 'Corolla', 2025, 'Ascent Sport')
+        self._make_vehicle('Toyota', 'Corolla', 2026, 'Ascent Sport')
+        self._make_identity('Toyota', 'Corolla', 2015)
+
+        url = '/api/v1/vehicles/lookup/?name=2015%20corolla&state=NSW'
+        response = self.client.get(url, HTTP_HOST='localhost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        vf = response.json()['vehicle_found']
+        self.assertEqual(vf['brand'], 'Toyota')
+        self.assertEqual(vf['model'], 'Corolla')
+        self.assertEqual(vf['year'], 2015)
+
+    def test_lookup_brandless_nearest_year_across_sources(self):
+        """Regression (prod): GVG holds no 2015 Camry (nearest is 2014) and the
+        catalogue only has 2025/2026. '2015 camry' must return the GVG 2014
+        Camry, not the decade-away 2025 catalogue car."""
+        self._make_vehicle('Toyota', 'Camry', 2025, 'SX')
+        self._make_vehicle('Toyota', 'Camry', 2026, 'SX')
+        self._make_identity('Toyota', 'Camry', 2014)
+
+        url = '/api/v1/vehicles/lookup/?name=2015%20camry&state=NSW'
+        response = self.client.get(url, HTTP_HOST='localhost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        vf = response.json()['vehicle_found']
+        self.assertEqual(vf['brand'], 'Toyota')
+        self.assertEqual(vf['model'], 'Camry')
+        self.assertEqual(vf['year'], 2014)
+
     def test_lookup_successful_vehicle_exact_name(self):
         url = '/api/v1/vehicles/lookup/?name=2025%20LDV%20V80%20High%20Roof&state=NSW'
         response = self.client.get(url, HTTP_HOST='localhost')
