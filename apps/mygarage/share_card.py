@@ -69,7 +69,7 @@ def _color_hex(label):
 def build_share_card_context(result):
     user = result.user
     vehicle = result.vehicle_catalogue
-    display_name = (user.first_name or '').strip() or 'You'
+    display_name = (getattr(result, 'first_name', None) or user.first_name or '').strip() or 'You'
     traits = getattr(result, 'traits', None) or []
     return {
         'display_name': display_name,

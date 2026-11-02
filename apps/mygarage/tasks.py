@@ -115,6 +115,7 @@ User Priority: {priority_label}
             vehicle_catalogue=vehicle,
             custom_plate=job.custom_plate,
             favorite_color=job.favorite_color,
+            first_name=job.first_name,
             archetype_name=data['archetype_name'],
             archetype_tagline=data['archetype_tagline'],
             self_insight_text=data['self_insight_text'],
@@ -127,15 +128,17 @@ User Priority: {priority_label}
             credit_type=credit_type
         )
         
+        # Social share card PNG (headless Chromium). Render BEFORE the job is
+        # marked complete so a completed job's result always carries
+        # share_image_url. Failure never blocks the reveal (returns False,
+        # logged inside) — the frontend falls back to link-only sharing.
+        from apps.mygarage.share_card import generate_share_card_png
+        generate_share_card_png(result)
+
         job.status = RideRevealJobStatus.COMPLETE
         job.result = result
         job.completed_at = timezone.now()
         job.save()
-
-        # Social share card PNG (headless Chromium). Failure never blocks the
-        # reveal — the frontend falls back to link-only sharing.
-        from apps.mygarage.share_card import generate_share_card_png
-        generate_share_card_png(result)
 
         emit_analytics_event.delay(
             user_id=job.user.id,

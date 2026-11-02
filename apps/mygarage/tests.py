@@ -642,6 +642,34 @@ class RideRevealFavoriteColorTests(TestCase):
         job = RideRevealJob.objects.get(user=self.user)
         self.assertIsNone(job.favorite_color)
 
+    @mock.patch("apps.mygarage.tasks.generate_ridereveal_content")
+    def test_generate_stores_first_name_on_job(self, m_task):
+        resp = self.client.post(
+            reverse("ridereveal-generate"),
+            {"garage_vehicle_id": str(self.gv.id),
+             "first_name": "Stephen"}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        job = RideRevealJob.objects.get(user=self.user)
+        self.assertEqual(job.first_name, "Stephen")
+        m_task.delay.assert_called_once()
+
+    def test_result_serializer_returns_first_name(self):
+        from apps.mygarage.models import (
+            RideRevealResult, RideRevealCreditType)
+        from apps.mygarage.serializers import RideRevealResultSerializer
+        result = RideRevealResult.objects.create(
+            user=self.user, garage_vehicle=self.gv,
+            vehicle_catalogue=self.vehicle,
+            first_name="Stephen",
+            archetype_name="Steady Optimist",
+            archetype_tagline="Calm confidence",
+            self_insight_text="x", social_perception_text="y",
+            did_you_know_fact="z", share_caption="c",
+            ai_model_version="gpt-4o-mini", generation_duration_ms=100,
+            credit_type=RideRevealCreditType.PLAN_INCLUDED)
+        data = RideRevealResultSerializer(result).data
+        self.assertEqual(data["first_name"], "Stephen")
+
     def test_result_serializer_returns_favorite_color(self):
         from apps.mygarage.models import (
             RideRevealResult, RideRevealCreditType)
@@ -698,6 +726,13 @@ class RideRevealShareCardTests(TestCase):
         self.assertEqual(ctx["favorite_color_hex"], "#1a2744")
         self.assertTrue(ctx["vehicle_image_url"].startswith("http"))
         self.assertEqual(ctx["traits"], [])
+
+    def test_context_prefers_result_first_name_over_profile(self):
+        from apps.mygarage.share_card import build_share_card_context
+        self.result.first_name = "Stephen"
+        ctx = build_share_card_context(self.result)
+        self.assertEqual(ctx["display_name"], "Stephen")
+        self.assertEqual(ctx["avatar_initial"], "S")
 
     def test_context_color_without_known_name_has_no_hex(self):
         from apps.mygarage.share_card import build_share_card_context

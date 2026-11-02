@@ -1705,8 +1705,9 @@ class RideRevealGenerateView(views.APIView):
         garage_vehicle_id = serializer.validated_data['garage_vehicle_id']
         custom_plate = serializer.validated_data.get('custom_plate')
         favorite_color = serializer.validated_data.get('favorite_color')
+        first_name = serializer.validated_data.get('first_name')
 
-        result = trigger_ridereveal_generation(request.user, garage_vehicle_id, custom_plate, favorite_color)
+        result = trigger_ridereveal_generation(request.user, garage_vehicle_id, custom_plate, favorite_color, first_name)
         
         status_code = result.pop('status_code')
         return Response(result, status=status_code)

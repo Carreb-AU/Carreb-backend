@@ -168,6 +168,7 @@ class RideRevealGenerateSerializer(serializers.Serializer):
     garage_vehicle_id = serializers.UUIDField(required=True)
     custom_plate = serializers.CharField(max_length=7, required=False, allow_blank=True, allow_null=True)
     favorite_color = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
+    first_name = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
 
     def validate_custom_plate(self, value):
         if value:
@@ -187,7 +188,8 @@ class RideRevealResultSerializer(serializers.ModelSerializer):
         fields = [
             'archetype_name', 'archetype_tagline', 'self_insight_text',
             'social_perception_text', 'did_you_know_fact', 'share_caption',
-            'disclaimer', 'custom_plate', 'favorite_color', 'generated_at', 'vehicle',
+            'disclaimer', 'custom_plate', 'favorite_color', 'first_name',
+            'generated_at', 'vehicle',
             'share_image_url'
         ]
 

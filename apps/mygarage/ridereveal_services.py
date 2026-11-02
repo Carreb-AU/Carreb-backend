@@ -58,7 +58,7 @@ def get_ridereveal_credits(user):
         "free_reveal_used": credits.free_reveal_used,
     }
 
-def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, favorite_color=None):
+def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, favorite_color=None, first_name=None):
     from apps.mygarage.tasks import generate_ridereveal_content
     
     try:
@@ -139,6 +139,7 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, fa
             garage_vehicle=garage_vehicle,
             custom_plate=custom_plate,
             favorite_color=favorite_color,
+            first_name=(first_name or '').strip() or None,
             status=RideRevealJobStatus.PENDING
         )
         
