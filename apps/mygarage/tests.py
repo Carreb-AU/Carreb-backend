@@ -1114,6 +1114,28 @@ class GarageCapCounterTests(TestCase):
         self.assertEqual(cap["limit"], 30)
         self.assertTrue(check_cap_limit(self.user))
 
+    def test_free_plan_allows_five_vehicles(self):
+        """Agreed Free plan: 1 current vehicle + up to 5 vehicles in My
+        Garage (the current vehicle occupies one garage slot). Regression:
+        the cap was 1, so a free user who set their current vehicle was
+        blocked from adding any other vehicle."""
+        free_user = User.objects.create_user(
+            email="freecap@example.com", password="x",
+            subscription_tier="free")
+        from apps.mygarage.services import check_cap_limit, get_cap_counter
+        self.assertEqual(get_cap_counter(free_user)["limit"], 5)
+        for i in range(4):
+            GarageVehicle.objects.create(
+                user=free_user, vehicle_catalogue=self.vehicle,
+                source=GarageVehicleSource.VEHICLE_LOOKUP)
+            self.assertTrue(check_cap_limit(free_user),
+                            f"add #{i + 1} should be allowed")
+        GarageVehicle.objects.create(
+            user=free_user, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+        self.assertEqual(get_cap_counter(free_user)["used"], 5)
+        self.assertFalse(check_cap_limit(free_user))
+
     def test_garage_list_counter_ignores_archived(self):
         for _ in range(2):
             self._add(0)

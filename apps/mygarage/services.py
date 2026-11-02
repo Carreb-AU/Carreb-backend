@@ -3,8 +3,10 @@ from apps.users.models import SubscriptionTier
 from apps.vehicles.models import Vehicle
 from apps.vehicles.services.rating_engine import calculate_core_rating
 
+# Free plan: 1 current vehicle + up to 5 vehicles in My Garage (the
+# current vehicle itself occupies one garage slot, so 5 total).
 PLAN_LIMITS = {
-    SubscriptionTier.FREE: 1,
+    SubscriptionTier.FREE: 5,
     SubscriptionTier.CAR_BUYING_SPRINT: 3,
     SubscriptionTier.CORE_ADVANTAGE: 10,
     SubscriptionTier.FULL_INSIGHT_PRO: 30
