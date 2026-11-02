@@ -406,11 +406,15 @@ class CurrentVehicleSearchView(views.APIView):
         year = int(year_match.group()) if year_match else None
         words = [w for w in re.sub(r'\b(19|20)\d{2}\b', ' ', query).split() if w]
 
-        def text_filter(qs, brand_field='brand', model_field='model'):
+        def text_filter(qs, brand_field='brand', model_field='model', variant_field='variant'):
+            # Variant is searched too: Vehicle Lookup sends the picked trim
+            # (e.g. "Bentayga Azure"), and without it one unknown word zeroes
+            # the queryset and the whole response was replaced by AI guesses.
             for w in words:
                 qs = qs.filter(
                     models.Q(**{f'{brand_field}__icontains': w}) |
-                    models.Q(**{f'{model_field}__icontains': w})
+                    models.Q(**{f'{model_field}__icontains': w}) |
+                    models.Q(**{f'{variant_field}__icontains': w})
                 )
             return qs
 
@@ -473,12 +477,28 @@ class CurrentVehicleSearchView(views.APIView):
         results = [self._normalize_result(rec, src) for rec, src in records]
 
         # 3. Nothing in the DB *strictly* matches the query (e.g. an older
-        #    car absent from both catalogue and GVG) -> fall back to the AI
+        #    car absent from both catalogue and GVG) -> bring in the AI
         #    (Grok) lookup, served from the AIVehicleEntry cache when possible.
+        #    AI results are APPENDED to any DB rows, never a replacement:
+        #    discarding real catalogue/GVG rows in favour of an AI guess
+        #    produced wrong source/price/rating cards (e.g. a catalogue
+        #    Bentley Bentayga shown as an un-rated $405K "AI estimate").
         if not self._strict_matches(results, words):
             ai_results = self._ai_fallback(query, year, words, request)
-            if ai_results is not None:
-                return Response(ai_results)
+            if ai_results:
+                for card in ai_results:
+                    key = identity_key(
+                        card.get('make'), card.get('model'),
+                        card.get('variant'), card.get('year'),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    results.append(card)
+                return Response(results)
+            if not results:
+                # DB found nothing at all and AI could not help either.
+                return Response([])
 
         return Response(results)
 

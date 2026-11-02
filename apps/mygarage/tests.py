@@ -820,6 +820,47 @@ class CurrentVehicleSearchAIFallbackTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         m_ai.assert_not_called()
 
+    @mock.patch("apps.mygarage.views.search_ai_vehicles")
+    def test_variant_word_matches_catalogue_row(self, m_ai):
+        """Vehicle Lookup sends the picked trim (e.g. 'Bentayga Azure');
+        the trim word must match the variant field so a real catalogue row
+        is returned instead of falling through to the AI fallback."""
+        make_vehicle(brand="Bentley", model="Bentayga",
+                     variant="Bentayga Azure", year=2026)
+        resp = self.client.post(self.ENDPOINT,
+                                {"query": "2026 Bentley Bentayga Azure"},
+                                format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(any(r["source"] == "carreb" for r in resp.data))
+        self.assertEqual(resp.data[0]["make"], "Bentley")
+        m_ai.assert_not_called()
+
+    @mock.patch("apps.mygarage.views.get_vehicle_image_url",
+                 return_value="https://img.example/fallback.jpg")
+    @mock.patch("apps.mygarage.views.search_ai_vehicles")
+    def test_ai_appended_after_db_rows_never_replaces(self, m_ai, _img):
+        """AI guesses are appended after DB rows, not swapped in. When the
+        DB returns loose rows (prod GVG trigram matches) and no row covers
+        every query word, the real catalogue row must still lead the list
+        with any AI card behind it."""
+        make_vehicle(brand="Bentley", model="Bentayga",
+                     variant="Bentayga V8", year=2026)
+        from apps.mygarage.views import CurrentVehicleSearchView
+        m_ai.return_value = ([self._ai_entry(
+            search_query="2026 bentley bentayga azure",
+            make="Bentley", model="Bentayga", year=2026,
+            variant="Bentayga Azure")], False)
+        with mock.patch.object(CurrentVehicleSearchView, "_strict_matches",
+                               return_value=False):
+            resp = self.client.post(
+                self.ENDPOINT, {"query": "2026 Bentley Bentayga V8"},
+                format="json")
+        self.assertEqual(resp.status_code, 200)
+        sources = [r["source"] for r in resp.data]
+        self.assertEqual(sources[0], "carreb")
+        self.assertIn("ai", sources)
+        self.assertLess(sources.index("carreb"), sources.index("ai"))
+
 
 class GarageAddAIEntryTests(TestCase):
     """Garage accepts AIVehicleEntry rows (cars missing from catalogue+GVG)."""
