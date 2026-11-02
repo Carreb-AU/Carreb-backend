@@ -282,8 +282,3 @@ generated, `share_image_url` absolute + publicly reachable, 200 image/png):
 2. **Ride Reveal share flow** — diagnosed 2-Nov (see above); needs the
    share-token + public endpoint + OG-tagged URL work, plus the frontend
    copy-button fix. This is the only functional gap.
-3. Duplicate `AIVehicleEntry` rows — down to 11 duplicate queries (~15 extra
-   rows, e.g. "1980" × 5); cache is keyed by exact normalized query.
-   Cosmetic + minor token waste.
-4. Carreb catalogue enrichment could also use the new aliases (works today;
-   would simplify the mapper long-term). Optional.
