@@ -5,7 +5,7 @@ deployment, with commit hashes, timestamps and approximate time taken
 (includes local dev + tests + deploy + live verification).
 
 **Totals:** ~50 commits, 8 production deployments, 2 workbook imports,
-~35 hours of work.
+~37 hours of work.
 
 ---
 
@@ -231,6 +231,35 @@ Live-verified: GVG 2015 Corolla garage card → name, $1,850 resale, 902 km
 fuel range, image; AI 2015 Camry → name, $5,500 resale (consistent in both
 places), 897 km; Carreb endpoint byte-identical.
 
+**Free Plan requirements E2E verification (no code change — audit +
+live test with a fresh free account `free_e2e_…@example.com`)** · ~1 h
+- **One current vehicle:** set → 200 with full engine_data; second garage
+  add → 403 `"Plan limit reached… allows 1 vehicles"` with cap_counter
+  `{used: 1, limit: 1}`.
+- **Five matches:** `POST /api/free-match/calculate/` → `result_count: 5`,
+  all five with image, annual cost and resale populated.
+- **One Ride Reveal:** `free_reveal_available: true` → trigger → job
+  completed with real Grok content → `free_reveal_used: true`; second
+  attempt → 402 `insufficient_credits` with purchase options; endpoint
+  hammered 3× — no leak, credits unchanged. All three requirements
+  confirmed working as specified.
+
+**Ride Reveal sharing — investigation only (no code change)** · ~1 h
+Diagnosed three reported issues; backend verified healthy (share PNGs
+generated, `share_image_url` absolute + publicly reachable, 200 image/png):
+1. *WhatsApp preview shows no image* — WhatsApp crawls the shared URL for
+   `og:image` meta tags; the frontend shares the bare SPA origin, which
+   serves generic HTML. Architectural, needs per-URL OG tags (backend-served
+   OG page or Vercel edge function).
+2. *Copy button copies no reveal link* — confirmed in
+   `frontend/src/utils/rideRevealShare.js`: `shareUrl` is
+   `window.location.origin`; `resultId` is captured but never used in a URL.
+   No reveal-specific URL scheme exists at all.
+3. *Recipient flow doesn't exist* — result endpoint is authenticated +
+   owner-scoped; no share token or public view. Proposal delivered:
+   `share_token` + public `GET /api/ridereveal/share/<token>/` + OG-tagged
+   share URL + public viewer page. Awaiting go-ahead.
+
 ---
 
 ## Deployments (all production, all live-verified after)
@@ -245,11 +274,16 @@ places), 897 km; Carreb endpoint byte-identical.
 | 1-Nov (2×) | Backfill/perf/provenance batch, then fuel_range alias + estimator fixes |
 | 2-Nov (3×) | Polymorphic endpoint batch (incl. the two follow-up consistency fixes) |
 
-## Still open (known, not yet done)
+## Still open (verified against production, 2-Nov)
 
-1. RideReveal `favorite_color` — captured end-to-end (`c6efdf4`) but the
-   user reported it null in one live response; needs one reproduction pass.
-2. 17 duplicate `AIVehicleEntry` rows for "toyota camry 2015" phrasings —
-   cache is keyed by exact normalized query; cosmetic + minor token waste.
-3. Carreb catalogue enrichment could also use the new aliases (works today;
-   would simplify the mapper long-term).
+1. ~~RideReveal `favorite_color` null~~ — **DONE, verified.** 6 results on
+   prod carry a color (e.g. 'Red'), jobs receive it, and the serializer
+   returns it end-to-end. The earlier null report predates the fix.
+2. **Ride Reveal share flow** — diagnosed 2-Nov (see above); needs the
+   share-token + public endpoint + OG-tagged URL work, plus the frontend
+   copy-button fix. This is the only functional gap.
+3. Duplicate `AIVehicleEntry` rows — down to 11 duplicate queries (~15 extra
+   rows, e.g. "1980" × 5); cache is keyed by exact normalized query.
+   Cosmetic + minor token waste.
+4. Carreb catalogue enrichment could also use the new aliases (works today;
+   would simplify the mapper long-term). Optional.
