@@ -386,3 +386,21 @@ price type "n/a, no Australian price published"). The $438K the user
 sees must be in a newer Drive version; re-export + re-import would bring
 the real price. The 65 sibling-priced rows from the 2-Nov fill are kept
 (so costing works) but flagged in `assumption_fills`.
+
+## 3-Nov — Free plan garage cap corrected to 5 vehicles
+
+**Free users were blocked from adding a 2nd vehicle to My Garage**
+· commit `f3ec8ae` · ~30 min
+
+Root cause: `PLAN_LIMITS[FREE] = 1` in `apps/mygarage/services.py`. Setting
+a current vehicle also creates a garage row, so a new free user hit the
+cap with their first vehicle and every further add returned 403 "allows
+1 vehicles". Agreed Free plan = 1 current vehicle + up to 5 vehicles in
+My Garage (current vehicle occupies one of the 5 slots).
+
+Fix: FREE limit 1 → 5. This one table drives both the garage add
+endpoint and the Free Match save cap, so both now agree. New regression
+test: 5 adds succeed, 6th refused; mygarage suite 62/62 green. Deployed
+and live-verified on prod with a throwaway free account (temp rows
+deleted): current vehicle 200, second garage add 201, cap_counter
+`used 2 / limit 5 / Free`.
