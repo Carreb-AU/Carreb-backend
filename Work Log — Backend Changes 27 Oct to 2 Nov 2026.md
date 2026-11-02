@@ -352,3 +352,37 @@ Still open (investigated, not approved for change): CORE dial arc
 min/max from `CategoryScoringBounds` (dataset API exposure + frontend
 needle), and priority slider having no effect on stored workbook scores
 (`rating_engine` line ~413 discards it by design).
+
+## 3-Nov — Vehicle Lookup showed catalogue cars as "AI Estimate"
+
+**2026 Bentley Bentayga (and any trim-searched car) came back source=ai,
+wrong price, CORE 0.0** · commit `282d073` · ~1.5 h
+
+Root cause: Vehicle Lookup sends the picked trim in the search query
+(`2026 Bentley Bentayga Azure`), but `CurrentVehicleSearchView`'s text
+filter only matched brand/model. One trim word ("Azure") zeroed the
+catalogue queryset → the strict-match check failed → the Grok fallback
+**replaced** the entire response with an AI guess card. The AI card
+carries no rating (0.0) and its price was inherited from a row that
+itself borrowed the 2025 Bentayga Hybrid's $405K during the 2-Nov
+uncosted fill (sibling fallback; flagged in `assumption_fills`).
+
+Fix (`apps/mygarage/views.py`):
+- `text_filter` now also ORs the `variant` field into each query word.
+- When strict matching fails, AI cards are **appended after** any
+  catalogue/GVG rows (deduped by make/model/variant/year identity key)
+  instead of replacing them. DB-empty behaviour unchanged (AI still
+  answers "toyota camry 2015"-style queries).
+
+Tests: 2 new in `CurrentVehicleSearchAIFallbackTests`
+(trim-word query → catalogue row, AI never called; AI appended behind DB
+rows, never in front). mygarage suite 61/61 green. Live-verified in the
+prod container before deploy: "2026 Bentley Bentayga Azure" → carreb
+Bentayga Azure first; "toyota camry 2015" → GVG rows + AI appended.
+
+Data note for next sheet refresh: the imported 29-Oct FINAL LAUNCH
+workbook deliberately carries **no** Bentayga price (data rule 4.2 —
+price type "n/a, no Australian price published"). The $438K the user
+sees must be in a newer Drive version; re-export + re-import would bring
+the real price. The 65 sibling-priced rows from the 2-Nov fill are kept
+(so costing works) but flagged in `assumption_fills`.
