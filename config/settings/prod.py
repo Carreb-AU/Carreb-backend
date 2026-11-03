@@ -29,6 +29,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://carreb-web.netlify.app",
     "https://www.carreb.com.au",
     "https://carreb.com.au",
+    "https://carreb-developement.vercel.app",
+    "https://www.carreb-developement.vercel.app",
 ]
 
 # CORS settings
