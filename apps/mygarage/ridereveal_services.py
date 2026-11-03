@@ -84,16 +84,54 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, fa
             "message": "RideReveal is not available for hydrogen vehicles at this time."
         }
         
-    try:
-        existing_result = RideRevealResult.objects.get(user=user, garage_vehicle=garage_vehicle)
+    existing_result = RideRevealResult.objects.filter(
+        user=user, garage_vehicle=garage_vehicle).first()
+    if existing_result:
+        plate_changed = (custom_plate or None) != existing_result.custom_plate
+        color_changed = (favorite_color or None) != existing_result.favorite_color
+        new_name = (first_name or '').strip() or None
+        name_changed = new_name is not None and new_name != existing_result.first_name
+
+        if not (plate_changed or color_changed or name_changed):
+            from apps.mygarage.serializers import RideRevealResultSerializer
+            return {
+                "status_code": 200,
+                "already_generated": True,
+                "result": RideRevealResultSerializer(existing_result).data
+            }
+
+        # Edit path (B-17): apply the new plate/colour/name without
+        # consuming a credit. Plate or colour changes alter the generated
+        # content, so the profile is regenerated for free; a name-only
+        # change just re-renders the share card.
+        if name_changed:
+            existing_result.first_name = new_name
+            existing_result.save(update_fields=['first_name'])
+        if plate_changed or color_changed:
+            job = RideRevealJob.objects.create(
+                user=user,
+                garage_vehicle=garage_vehicle,
+                custom_plate=custom_plate,
+                favorite_color=favorite_color,
+                first_name=existing_result.first_name,
+                status=RideRevealJobStatus.PENDING
+            )
+            generate_ridereveal_content.delay(job.id, None)
+            return {
+                "status_code": 200,
+                "job_id": str(job.id),
+                "status": "pending",
+                "regenerating": True,
+                "credits_remaining": _get_or_create_credits(user).credits_available
+            }
+        from apps.mygarage.share_card import generate_share_card_png
+        generate_share_card_png(existing_result)
         from apps.mygarage.serializers import RideRevealResultSerializer
         return {
             "status_code": 200,
             "already_generated": True,
             "result": RideRevealResultSerializer(existing_result).data
         }
-    except RideRevealResult.DoesNotExist:
-        pass
 
     credits = _get_or_create_credits(user)
     is_unlimited = credits.plan == SubscriptionTier.FULL_INSIGHT_PRO

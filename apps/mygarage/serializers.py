@@ -189,7 +189,7 @@ class RideRevealResultSerializer(serializers.ModelSerializer):
             'archetype_name', 'archetype_tagline', 'self_insight_text',
             'social_perception_text', 'did_you_know_fact', 'share_caption',
             'disclaimer', 'custom_plate', 'favorite_color', 'first_name',
-            'generated_at', 'vehicle',
+            'traits', 'generated_at', 'vehicle',
             'share_image_url'
         ]
 

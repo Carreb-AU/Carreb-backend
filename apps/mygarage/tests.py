@@ -1280,3 +1280,171 @@ class GarageCapCounterTests(TestCase):
         resp = self.client.get(reverse("garage-vehicles"))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["cap_counter"]["used"], 2)
+
+
+class RideRevealGuardAndEditTests(TestCase):
+    """B-16/17/18: banned-content guard with one retry; plate/colour/name
+    edit path without consuming credits; traits exposed by the serializer."""
+
+    def setUp(self):
+        from apps.users.models import SubscriptionTier
+        self.user = User.objects.create_user(
+            email="rrguard@example.com", password="x",
+            subscription_tier=SubscriptionTier.FULL_INSIGHT_PRO)
+        self.vehicle = make_vehicle()
+        self.gv = GarageVehicle.objects.create(
+            user=self.user, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+
+    def _make_result(self, **kwargs):
+        from apps.mygarage.models import (
+            RideRevealCreditType, RideRevealResult)
+        defaults = dict(
+            user=self.user, garage_vehicle=self.gv,
+            vehicle_catalogue=self.vehicle,
+            archetype_name="Steady Optimist",
+            archetype_tagline="Calm confidence",
+            self_insight_text="You value calm confidence.",
+            social_perception_text="Others see you as assured.",
+            did_you_know_fact="Fact.", share_caption="Caption",
+            ai_model_version="gpt-4o-mini", generation_duration_ms=100,
+            credit_type=RideRevealCreditType.PLAN_INCLUDED)
+        defaults.update(kwargs)
+        return RideRevealResult.objects.create(**defaults)
+
+    # -- B-18: traits ---------------------------------------------------------
+    def test_serializer_exposes_traits(self):
+        from apps.mygarage.serializers import RideRevealResultSerializer
+        result = self._make_result(traits=["Practical", "Calm", "Loyal",
+                                           "Focused", "Grounded"])
+        data = RideRevealResultSerializer(result).data
+        self.assertEqual(data["traits"],
+                         ["Practical", "Calm", "Loyal", "Focused", "Grounded"])
+
+    # -- B-16: guard ----------------------------------------------------------
+    def test_guard_flags_register_banned_wording(self):
+        from apps.mygarage.tasks import _guard_violations
+        clean = {
+            "self_insight_text": "You value calm confidence on the road.",
+            "social_perception_text": "Others see you as assured.",
+            "did_you_know_fact": "The HiLux has topped Australian sales.",
+            "share_caption": "Your ride, your story.",
+        }
+        self.assertEqual(_guard_violations(clean), [])
+        flagged = dict(clean, self_insight_text="Research indicates you value calm confidence.")
+        self.assertTrue(any("research claim" in h for h in _guard_violations(flagged)))
+        flagged = dict(clean, social_perception_text="Individuals choosing this car seem practical.")
+        self.assertTrue(any("third person" in h for h in _guard_violations(flagged)))
+        flagged = dict(clean, did_you_know_fact="It has lower emissions than rivals.")
+        self.assertTrue(any("emissions claim" in h for h in _guard_violations(flagged)))
+        flagged = dict(clean, share_caption="You should buy this car now.")
+        self.assertTrue(any("purchase advice" in h for h in _guard_violations(flagged)))
+
+    def _run_task(self, payloads):
+        """Run generate_ridereveal_content with a mocked OpenAI client that
+        returns each payload in turn."""
+        import json as _json
+        from apps.mygarage.models import (
+            RideRevealCreditType, RideRevealJob, RideRevealJobStatus,
+            RideRevealResult)
+        from apps.mygarage import tasks as rr_tasks
+
+        job = RideRevealJob.objects.create(
+            user=self.user, garage_vehicle=self.gv,
+            status=RideRevealJobStatus.PENDING)
+
+        def _completion(payload):
+            m = mock.Mock()
+            m.choices = [mock.Mock()]
+            m.choices[0].message.content = _json.dumps(payload)
+            return m
+
+        client = mock.Mock()
+        client.chat.completions.create.side_effect = [
+            _completion(p) for p in payloads]
+
+        with mock.patch.object(rr_tasks, "OPENAI_API_KEY", "test-key"), \
+             mock.patch.object(rr_tasks.openai, "OpenAI", return_value=client), \
+             mock.patch("apps.vehicles.services.rating_engine.calculate_core_rating",
+                        return_value={"core_rating": 3.5, "band_name": "Good Choice"}), \
+             mock.patch("apps.mygarage.share_card.generate_share_card_png",
+                        return_value=False), \
+             mock.patch.object(rr_tasks, "emit_analytics_event") as m_analytics:
+            m_analytics.delay = mock.Mock()
+            rr_tasks.generate_ridereveal_content(job.id, RideRevealCreditType.PLAN_INCLUDED)
+        job.refresh_from_db()
+        return job, RideRevealResult.objects.filter(garage_vehicle=self.gv).first()
+
+    GOOD = {
+        "archetype_name": "Steady Optimist",
+        "archetype_tagline": "Calm confidence",
+        "self_insight_text": "You value calm confidence on the road.",
+        "social_perception_text": "Others see you as assured.",
+        "did_you_know_fact": "The HiLux has topped Australian sales.",
+        "share_caption": "Your ride, your story.",
+        "traits": ["Practical", "Calm", "Loyal", "Focused", "Grounded"],
+    }
+
+    def test_guard_retries_once_then_succeeds(self):
+        from apps.mygarage.models import RideRevealJobStatus
+        bad = dict(self.GOOD,
+                   self_insight_text="Research indicates you value calm.")
+        job, result = self._run_task([bad, self.GOOD])
+        self.assertEqual(job.status, RideRevealJobStatus.COMPLETE)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.traits, ["Practical", "Calm", "Loyal",
+                                         "Focused", "Grounded"])
+
+    def test_guard_fails_after_second_trip_and_refunds(self):
+        from apps.mygarage.models import (
+            RideRevealCredit, RideRevealJobStatus)
+        RideRevealCredit.objects.create(user=self.user, plan="full_insight_pro",
+                                        credits_included=4, credits_used=1)
+        bad = dict(self.GOOD,
+                   self_insight_text="Research indicates you value calm.")
+        job, result = self._run_task([bad, bad])
+        self.assertEqual(job.status, RideRevealJobStatus.FAILED)
+        self.assertIsNone(result)
+        self.assertIn("Content guard", job.error_message)
+        # The consumed plan credit must be refunded.
+        credits = RideRevealCredit.objects.get(user=self.user)
+        self.assertEqual(credits.credits_used, 0)
+
+    # -- B-17: edit path ------------------------------------------------------
+    def test_same_params_returns_existing_result(self):
+        self._make_result()
+        from apps.mygarage.ridereveal_services import trigger_ridereveal_generation
+        out = trigger_ridereveal_generation(self.user, self.gv.id)
+        self.assertEqual(out["status_code"], 200)
+        self.assertTrue(out["already_generated"])
+
+    def test_name_only_edit_updates_without_regeneration(self):
+        from apps.mygarage.models import RideRevealResult
+        from apps.mygarage.ridereveal_services import trigger_ridereveal_generation
+        result = self._make_result(first_name="Stephen")
+        with mock.patch("apps.mygarage.share_card.generate_share_card_png",
+                        return_value=False) as m_card:
+            out = trigger_ridereveal_generation(
+                self.user, self.gv.id, first_name="Steve")
+        self.assertEqual(out["status_code"], 200)
+        self.assertTrue(out["already_generated"])
+        result.refresh_from_db()
+        self.assertEqual(result.first_name, "Steve")
+        m_card.assert_called_once()
+        # No regeneration job, no credit consumed.
+        self.assertFalse(out.get("regenerating"))
+
+    def test_plate_edit_regenerates_without_credit(self):
+        from apps.mygarage.models import RideRevealJob
+        from apps.mygarage.ridereveal_services import trigger_ridereveal_generation
+        self._make_result(custom_plate="OLD123")
+        with mock.patch("apps.mygarage.tasks.generate_ridereveal_content") as m_task:
+            m_task.delay = mock.Mock()
+            out = trigger_ridereveal_generation(
+                self.user, self.gv.id, custom_plate="NEW456")
+        self.assertEqual(out["status_code"], 200)
+        self.assertTrue(out["regenerating"])
+        # Regeneration is free: credit_type None, no credit touched.
+        self.assertIsNone(m_task.delay.call_args[0][1])
+        job = RideRevealJob.objects.get(id=out["job_id"])
+        self.assertEqual(job.custom_plate, "NEW456")

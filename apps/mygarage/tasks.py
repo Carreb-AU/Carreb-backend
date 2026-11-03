@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import openai
 from django.conf import settings
 from django.utils import timezone
@@ -23,8 +24,41 @@ self_insight_text: 2-3 sentences exploring the psychological motivations behind 
 social_perception_text: 2-3 sentences about how others might perceive this vehicle choice
 did_you_know_fact: 1 interesting fact about this vehicle type or ownership profile
 share_caption: max 280 characters, suitable for social media
+traits: a JSON array of exactly 5 short personality trait labels (2-3 words each) for the card's trait pills
+Write every text field in second person, addressing the vehicle's owner directly as "you" / "your" — never "individuals", "people who", "owners who" or other third-person phrasing.
 If an Owner's Favorite Color is provided in the input, weave it naturally into the archetype_tagline or social_perception_text.
-All outputs are for entertainment and educational purposes only. Do not include financial advice, purchase recommendations, statements of fact about actual vehicle performance, or emissions claims. Return ONLY a valid JSON object with these six fields. No preamble. No markdown."""
+All outputs are for entertainment and educational purposes only. Do not include financial advice, purchase recommendations, statements of fact about actual vehicle performance, or emissions claims. Return ONLY a valid JSON object with these seven fields. No preamble. No markdown."""
+
+# Banned-content guard (B-16): the disclaimer alone was not enough — the
+# model still produced "Research indicates…" and purchase-advice wording.
+# These patterns trip a retry with an explicit warning; a second trip fails
+# the job (and refunds any consumed credit).
+_BANNED_PATTERNS = [
+    (re.compile(r'\bresearch (indicates|shows|suggests|proves|demonstrates|finds)\b', re.I), 'research claim'),
+    (re.compile(r'\bstudies (show|suggest|indicate|find)\b', re.I), 'research claim'),
+    (re.compile(r'\bscientists (say|found|agree)\b', re.I), 'research claim'),
+    (re.compile(r'\bexperts? (say|recommend|agree)\b', re.I), 'research claim'),
+    (re.compile(r'\byou should (buy|choose|get|purchase)\b', re.I), 'purchase advice'),
+    (re.compile(r'\b(you ought to|we recommend|it is recommended)\b', re.I), 'purchase advice'),
+    (re.compile(r'\b(smart purchase|good investment|great value for money|worth every dollar)\b', re.I), 'purchase advice'),
+    (re.compile(r'\bindividuals\b', re.I), 'third person'),
+    (re.compile(r'\bpeople who (choose|drive|buy|own)\b', re.I), 'third person'),
+    (re.compile(r'\b(owners|drivers) who (choose|drive|buy|own)\b', re.I), 'third person'),
+    (re.compile(r'\b(those|someone|anyone) who (choose|drives?|buys?|owns?)\b', re.I), 'third person'),
+    (re.compile(r'\b(emissions?|carbon footprint|co2|co₂)\b', re.I), 'emissions claim'),
+]
+
+
+def _guard_violations(data: dict) -> list:
+    """Human-readable list of banned-content violations in a generated profile."""
+    hits = []
+    for field, value in data.items():
+        if not isinstance(value, str):
+            continue
+        for pattern, label in _BANNED_PATTERNS:
+            if pattern.search(value):
+                hits.append(f"{field}: {label}")
+    return hits
 
 @shared_task(time_limit=30, soft_time_limit=25)
 def generate_ridereveal_content(job_id, credit_type):
@@ -85,30 +119,68 @@ User Priority: {priority_label}
 {custom_plate_info}
 {favorite_color_info}
 """
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"},
-            timeout=20.0
-        )
-        
-        content = response.choices[0].message.content
-        data = json.loads(content)
-        
+
+        # Generate with a banned-content guard: one retry with an explicit
+        # warning when the output trips the register's banned list
+        # (research claims, purchase advice, third person, emissions
+        # claims); a second trip fails the job below.
+        data = None
+        last_violations = []
+        for attempt in (1, 2):
+            prompt = user_prompt
+            if last_violations:
+                prompt += (
+                    "\n\nIMPORTANT: your previous draft was rejected for: "
+                    + "; ".join(last_violations)
+                    + ". Rewrite removing every one of those issues."
+                )
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                timeout=20.0
+            )
+            content = response.choices[0].message.content
+            data = json.loads(content)
+            last_violations = _guard_violations(data)
+            if not last_violations:
+                break
+            logger.info(
+                "RideReveal guard tripped (attempt %d, job %s): %s",
+                attempt, job_id, "; ".join(last_violations),
+            )
+        if last_violations:
+            raise Exception(
+                "Content guard: banned wording persisted after retry: "
+                + "; ".join(last_violations))
+
         required_fields = [
             'archetype_name', 'archetype_tagline', 'self_insight_text',
             'social_perception_text', 'did_you_know_fact', 'share_caption'
         ]
-        
+
         for field in required_fields:
             if field not in data or not data[field]:
                 raise Exception(f"Missing required field: {field}")
-                
+
+        traits = data.get('traits')
+        if isinstance(traits, str):
+            traits = [t.strip() for t in traits.split(',') if t.strip()]
+        if not isinstance(traits, list):
+            traits = None
+        if traits is not None:
+            traits = [str(t) for t in traits if str(t).strip()][:5]
+
         duration_ms = int((timezone.now() - start_time).total_seconds() * 1000)
-        
+
+        # A regeneration (plate/colour edit) replaces the previous result so
+        # exactly one result exists per garage vehicle.
+        RideRevealResult.objects.filter(
+            user=job.user, garage_vehicle=job.garage_vehicle).delete()
+
         result = RideRevealResult.objects.create(
             user=job.user,
             garage_vehicle=job.garage_vehicle,
@@ -122,10 +194,11 @@ User Priority: {priority_label}
             social_perception_text=data['social_perception_text'],
             did_you_know_fact=data['did_you_know_fact'],
             share_caption=data['share_caption'],
+            traits=traits,
             disclaimer="for entertainment and educational purposes only",
             ai_model_version="gpt-4o-mini",
             generation_duration_ms=duration_ms,
-            credit_type=credit_type
+            credit_type=credit_type or RideRevealCreditType.PLAN_INCLUDED
         )
         
         # Social share card PNG (headless Chromium). Render BEFORE the job is
@@ -167,16 +240,18 @@ User Priority: {priority_label}
     # Refund credit — only when it was actually consumed. The free sign-up
     # entitlement never touched credits_used, so refunding it means clearing
     # the flag again; paid/plan credits get their counter decremented.
-    try:
-        credits = RideRevealCredit.objects.get(user=job.user)
-        if credit_type == RideRevealCreditType.FREE_SIGNUP:
-            credits.free_reveal_used = False
-            credits.save(update_fields=['free_reveal_used'])
-        else:
-            credits.credits_used = max(0, credits.credits_used - 1)
-            credits.save(update_fields=['credits_used'])
-    except RideRevealCredit.DoesNotExist:
-        pass
+    # Regenerations (credit_type=None) consumed nothing, so no refund.
+    if credit_type:
+        try:
+            credits = RideRevealCredit.objects.get(user=job.user)
+            if credit_type == RideRevealCreditType.FREE_SIGNUP:
+                credits.free_reveal_used = False
+                credits.save(update_fields=['free_reveal_used'])
+            else:
+                credits.credits_used = max(0, credits.credits_used - 1)
+                credits.save(update_fields=['credits_used'])
+        except RideRevealCredit.DoesNotExist:
+            pass
         
     vehicle = job.garage_vehicle.vehicle_catalogue
     emit_analytics_event.delay(

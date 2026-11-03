@@ -192,6 +192,9 @@ class RideRevealResult(models.Model):
     generated_at = models.DateTimeField(auto_now_add=True)
     credit_type = models.CharField(max_length=50, choices=RideRevealCreditType.choices)
     share_image = models.ImageField(upload_to='ride_reveal_shares/', null=True, blank=True)
+    # Five personality trait pills for the card (spec §3.4), generated with
+    # the rest of the profile.
+    traits = models.JSONField(null=True, blank=True)
 
     def __str__(self):
         return f"RideReveal {self.archetype_name} for {self.garage_vehicle}"
