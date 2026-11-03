@@ -227,12 +227,16 @@ GVG_FIXED_PARTS = ('ctp', 'comprehensive', 'registration', 'servicing', 'tyres',
                    'road_user_charge')
 
 
-def cost_gvg_current_vehicle(record, state):
+def cost_gvg_current_vehicle(record, state, annual_km=None):
     """Pure Cost COO p.a. (integer cents) for a Green Vehicle Guide current car.
 
     Fixed costs are class medians rebuilt from the Mode B dial rows, by class
     and state; fuel/electricity is the car's own GVG consumption through the
     standard cost formulas, at its class kilometres and the state's prices.
+
+    ``annual_km`` overrides the class benchmark — the current-vehicle path
+    passes a figure derived from the owner's odometer and purchase date (B-02)
+    so the card reflects the real car, not the class average.
     """
     from apps.vehicles.models import (
         CategoryAnnualKMBenchmark,
@@ -254,17 +258,29 @@ def cost_gvg_current_vehicle(record, state):
         values = [getattr(r, field) for r in rows]
         parts[part] = int(round_half_up(statistics.median(values), 0)) if values else 0
 
-    km = CategoryAnnualKMBenchmark.get_annual_km_for_category(record.fcai_category or '')
+    km = annual_km or CategoryAnnualKMBenchmark.get_annual_km_for_category(
+        record.fcai_category or '')
     prices = StateEnergyPrice.get_price_for_state(state)
     parts['fuel'] = 0
     parts['electricity'] = 0
     powertrain = (record.powertrain_type or '').lower()
 
-    def _median_cents(field):
+    def _median_cents(field, scale_km=False):
         # Only rows that actually incur this cost — BEVs have fuel_cents=0 and
         # petrol cars electricity_cents=0, which would corrupt the median.
         values = [getattr(r, field) for r in rows if getattr(r, field)]
-        return int(round_half_up(statistics.median(values), 0)) if values else 0
+        if not values:
+            return 0
+        median = int(round_half_up(statistics.median(values), 0))
+        if scale_km and annual_km:
+            # The dial rows were costed at the class benchmark km, so a
+            # km override has to rescale the median to stay consistent
+            # with the consumption-based branch above.
+            benchmark_km = CategoryAnnualKMBenchmark.get_annual_km_for_category(
+                record.fcai_category or '')
+            if benchmark_km:
+                median = int(round_half_up(median * annual_km / benchmark_km, 0))
+        return median
 
     if powertrain == 'bev':
         wh_per_km = getattr(record, 'electricity_consumption_wh_per_km', None)
@@ -274,7 +290,7 @@ def cost_gvg_current_vehicle(record, state):
         if not parts['electricity']:
             # Consumption unknown (e.g. AI-searched car): fall back to the
             # class median energy cost from the dial rows.
-            parts['electricity'] = _median_cents('electricity_cents')
+            parts['electricity'] = _median_cents('electricity_cents', scale_km=True)
     else:
         consumption = getattr(record, 'fuel_consumption_combined_l_100km', None)
         if consumption and prices:
@@ -285,7 +301,7 @@ def cost_gvg_current_vehicle(record, state):
         if not parts['fuel']:
             # Consumption unknown (e.g. AI-searched car): fall back to the
             # class median fuel cost from the dial rows.
-            parts['fuel'] = _median_cents('fuel_cents')
+            parts['fuel'] = _median_cents('fuel_cents', scale_km=True)
 
     # Resale: prefer the record's own stored estimate; only derive one from
     # the retention formula when the record carries none (GVG rows never do).
@@ -306,7 +322,7 @@ def cost_gvg_current_vehicle(record, state):
         'total_annual_cost': sum(parts.values()),
         'annual_cost_breakdown': _gvg_breakdown_shape(parts),
         'tailpipe_co2_g_per_km': float(getattr(record, 'tailpipe_co2_g_per_km', None) or 0),
-        'annual_co2_kg': _annual_co2_kg(record, km),
+        'annual_co2_kg': _annual_co2_kg(record, km, state),
         'annual_km': km,
         'costing_basis': GVG_COSTING_BASIS,
         'is_estimate': True,
@@ -335,8 +351,67 @@ def _gvg_breakdown_shape(parts: dict) -> dict:
     return breakdown
 
 
-def _annual_co2_kg(record, km: int) -> int:
+def _annual_co2_kg(record, km: int, state: str = None) -> int:
+    """Energy-cycle annual CO2 (kg).
+
+    Combustion cars report tailpipe emissions (the Guide's published basis).
+    BEVs have no tailpipe figure — report energy-cycle instead (grid scope 2
+    + scope 3 from the same NGA factors the v6.4 sheets use) so an EV never
+    renders "~0 kg" (B-04).
+    """
+    powertrain = (getattr(record, 'powertrain_type', None) or '').lower()
     tailpipe = getattr(record, 'tailpipe_co2_g_per_km', None) or 0
+
+    if powertrain == 'bev':
+        wh_per_km = getattr(record, 'electricity_consumption_wh_per_km', None)
+        if wh_per_km and km:
+            from apps.vehicles.models import NGAEmissionFactor
+            from apps.vehicles.services.uncosted_estimates import (
+                GRID_REGION, GRID_SCOPE3)
+            grid = GRID_REGION.get(state, state) if state else 'National'
+            nga = (NGAEmissionFactor.objects.filter(grid=grid).first()
+                   or NGAEmissionFactor.objects.filter(grid='National').first())
+            s2 = float(nga.scope2_factor_kgco2e_per_kwh) if nga else 0.59
+            s3 = GRID_SCOPE3.get(grid, GRID_SCOPE3['National'])
+            # kg/kWh is numerically g/Wh, so Wh/km x (s2+s3) is g/km.
+            g_per_km = wh_per_km * (s2 + s3)
+            return int(round_half_up(g_per_km * km / 1000, 0))
+        return 0
+
     if not tailpipe:
         return 0
     return int(round_half_up(tailpipe * km / 1000, 0))
+
+
+# Minimum ownership history before annualising an odometer reading: under
+# ~3 months the rate extrapolates to noise.
+MIN_OWNERSHIP_YEARS = 0.25
+# Guard rails for annualised odometer rates (km/yr). Within this range the
+# owner's real usage is trusted; outside it the class benchmark wins —
+# an absurd rate nearly always means a wrong purchase date.
+KM_RATE_FLOOR = 3_000
+KM_RATE_CEIL = 60_000
+
+
+def annual_km_from_odometer(odometer_reading, purchase_date, today=None):
+    """Annualised km from the owner's odometer + purchase date (B-02).
+
+    Returns None when the inputs can't produce a trustworthy rate (missing
+    either value, purchase date in the future, under 3 months of ownership,
+    or a rate outside the guard rails) — callers fall back to the class
+    benchmark.
+    """
+    if not odometer_reading or not purchase_date:
+        return None
+    from datetime import date
+    today = today or date.today()
+    days = (today - purchase_date).days
+    if days <= 0:
+        return None
+    years = days / 365.25
+    if years < MIN_OWNERSHIP_YEARS:
+        return None
+    rate = round(odometer_reading / years / 100) * 100
+    if rate < KM_RATE_FLOOR or rate > KM_RATE_CEIL:
+        return None
+    return rate

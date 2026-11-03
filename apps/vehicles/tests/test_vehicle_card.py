@@ -290,6 +290,61 @@ class GvgCurrentVehicleEngineDataTests(TestCase):
         self.assertEqual(card['annual_km'], 15000)
         self.assertEqual(card['field_sources']['annual_km'], 'default')
 
+    def test_annual_km_override_scales_fuel_and_co2(self):
+        # B-02: an owner-derived km figure (odometer ÷ years owned) replaces
+        # the class benchmark and scales variable costs + CO2.
+        from apps.vehicles.models import CategoryAnnualKMBenchmark
+        from apps.vehicles.services.core_dial import cost_gvg_current_vehicle
+        CategoryAnnualKMBenchmark.objects.create(
+            fcai_category="Medium", est_annual_km=15000)
+        self._dial_rows()
+        entry = _make_ai(search_query="odometer km test")
+        ed_default = cost_gvg_current_vehicle(entry, "NSW")
+        ed_8k = cost_gvg_current_vehicle(entry, "NSW", annual_km=8000)
+        self.assertEqual(ed_default['annual_km'], 15000)
+        self.assertEqual(ed_8k['annual_km'], 8000)
+        self.assertLess(ed_8k['annual_cost_breakdown']['fuel_or_energy_annual'],
+                        ed_default['annual_cost_breakdown']['fuel_or_energy_annual'])
+        self.assertEqual(ed_8k['annual_co2_kg'],
+                         round(ed_8k['tailpipe_co2_g_per_km'] * 8000 / 1000))
+
+    def test_bev_uses_energy_cycle_co2(self):
+        # B-04: a BEV has no tailpipe CO2 — report energy-cycle (grid scope 2
+        # + scope 3) instead of ~0.
+        from apps.vehicles.models import (
+            CategoryAnnualKMBenchmark, NGAEmissionFactor)
+        from apps.vehicles.services.core_dial import cost_gvg_current_vehicle
+        CategoryAnnualKMBenchmark.objects.create(
+            fcai_category="Medium", est_annual_km=15000)
+        NGAEmissionFactor.objects.create(
+            grid="NSW/ACT", states_covered="NSW, ACT",
+            scope2_factor_kgco2e_per_kwh=0.64)
+        self._dial_rows()
+        entry = _make_ai(powertrain_type="bev",
+                         electricity_consumption_wh_per_km=180.0,
+                         fuel_consumption_combined_l_100km=None,
+                         tailpipe_co2_g_per_km=0,
+                         search_query="bev co2 test")
+        ed = cost_gvg_current_vehicle(entry, "NSW")
+        # g/km = 180 Wh/km x (0.64 scope2 + 0.07 scope3) = 127.8
+        self.assertEqual(ed['annual_co2_kg'], round(127.8 * 15000 / 1000))
+
+    def test_annual_km_from_odometer_guard_rails(self):
+        from datetime import date
+        from apps.vehicles.services.core_dial import annual_km_from_odometer
+        today = date(2026, 11, 3)
+        # 20,000 km over 2 years -> 10,000 km/yr (rounded to 100).
+        self.assertEqual(
+            annual_km_from_odometer(20_000, date(2024, 11, 3), today), 10_000)
+        self.assertIsNone(annual_km_from_odometer(None, date(2024, 11, 3), today))
+        self.assertIsNone(annual_km_from_odometer(20_000, None, today))
+        # Future / very recent purchase dates can't annualise.
+        self.assertIsNone(annual_km_from_odometer(2_000, date(2026, 10, 1), today))
+        self.assertIsNone(annual_km_from_odometer(500, date(2027, 1, 1), today))
+        # Absurd rates (wrong date entry) fall back to the benchmark.
+        self.assertIsNone(annual_km_from_odometer(300_000, date(2026, 9, 1), today))
+        self.assertIsNone(annual_km_from_odometer(200, date(2010, 1, 1), today))
+
     @mock.patch("apps.mygarage.ai_service._call_grok_json")
     def test_carreb_missing_spec_ai_estimated(self, grok):
         """Catalogue rows with blank spec columns (all 1829 lack ANCAP/tow)

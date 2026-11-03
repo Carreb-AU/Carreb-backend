@@ -215,7 +215,18 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
             # Non-catalogue car (GVG or AI-searched): fixed class medians from
             # the Mode B rows plus the car's own consumption. Used both for
             # the current vehicle (spec section 8) and GVG garage vehicles.
-            engine_data = cost_gvg_current_vehicle(rating_vehicle, state)
+            # A current vehicle with odometer + purchase date is costed at its
+            # own annualised kilometres (B-02), not the class benchmark.
+            derived_km = None
+            if is_current_vehicle:
+                from apps.vehicles.services.core_dial import annual_km_from_odometer
+                derived_km = annual_km_from_odometer(
+                    vehicle_instance.odometer_reading,
+                    vehicle_instance.purchase_date)
+            engine_data = cost_gvg_current_vehicle(
+                rating_vehicle, state, annual_km=derived_km)
+            if derived_km:
+                engine_data['annual_km_basis'] = 'odometer'
             if current_cost is not None:
                 engine_data['est_cost_difference'] = _gvg_est_cost_diff(current_cost, engine_data['total_annual_cost'])
             else:
