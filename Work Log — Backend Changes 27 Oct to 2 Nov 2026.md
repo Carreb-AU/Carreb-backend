@@ -404,3 +404,27 @@ test: 5 adds succeed, 6th refused; mygarage suite 62/62 green. Deployed
 and live-verified on prod with a throwaway free account (temp rows
 deleted): current vehicle 200, second garage add 201, cap_counter
 `used 2 / limit 5 / Free`.
+
+## 3-Nov — Current vehicle showed "—" costs when no state saved (NSW fallback)
+
+**2025 Aston Martin Vantage card: empty running costs, garage diff stuck at
+"$38,925 vs average"** · commit `3005047` · ~1 h
+
+Root cause: the current-vehicle response needs a state to compute figures
+(priority_state.state, else cv.state). This account had neither, so
+`engine_data` was empty — every cost row rendered "—" — and garage cards
+fell back to category-average cost differences, producing the recurring
+"$38,925 vs average" figure. The 2-Nov cost fill was fine: both Vantage
+rows carry all four modes (B/C/E/F) × 8 states.
+
+Fix: state now falls back to NSW (same default the garage-card path
+always used), and `meta` gains `state` + `state_defaulted` so the
+frontend can still offer the eight-state picker. Note: the current
+vehicle always rates in Pure Cost mode by spec; the other three modes
+(COOL Choice, Value Later, Full Picture) apply to garage vehicles, and
+their data is present in the DB.
+
+Tests: 2 new; mygarage suite 64/64 green. Live-verified on prod
+(carreb1@yopmail.com): Vantage current vehicle = $5,991/yr, 2.0★ The
+Detour™; all six garage cards compare against `current_vehicle`
+baseline ($5,991), no category-average fallback.
