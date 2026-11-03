@@ -73,16 +73,19 @@ def get_freematch_candidates_base() -> QuerySet[Vehicle]:
 
 def get_freematch_candidates_relaxed(session: FreeMatchSession) -> QuerySet[Vehicle]:
     """
-    Returns candidates with relaxed constraints (drops budget, ANCAP, towing).
-    Keeps fundamental requirements: body style, seating (if possible), and fuel type.
+    Attempt-2 relaxation, downward only: drops the budget FLOOR (a car
+    cheaper than budget_min is still a fine suggestion) but keeps the
+    budget CEILING — never suggest cars above budget_max. ANCAP and
+    seating floors relax only when nothing matches with them. Keeps the
+    fundamental requirements: body style and fuel type.
     """
     qs = Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV).filter(is_suppressed=False)
-    
+
     # Fuel Preference
     fuel_pref = session.fuel_type_preference
     if fuel_pref and fuel_pref != FuelTypePreference.NO_PREFERENCE:
         qs = qs.filter(powertrain_type=fuel_pref)
-        
+
     # Style / Shape
     if session.style_preference:
         qs = qs.filter(body_style__icontains=session.style_preference)
@@ -93,12 +96,17 @@ def get_freematch_candidates_relaxed(session: FreeMatchSession) -> QuerySet[Vehi
             for style in body_styles:
                 q |= Q(body_style__icontains=style)
             qs = qs.filter(q)
-            
+
     # Seating (only enforce if there is at least one vehicle that meets it)
     if session.seating_preference:
         if qs.filter(num_seats__gte=session.seating_preference).exists():
             qs = qs.filter(num_seats__gte=session.seating_preference)
-            
+
+    # Budget ceiling is kept: budget_max still applies, only the floor drops.
+    state = session.state or "NSW"
+    if session.budget_max is not None:
+        qs = qs.filter(**{f"driveaway_price_by_state__{state}__lte": session.budget_max * 100})
+
     return qs
 
 def get_freematch_candidates_fuel_only(fuel_pref: Optional[str]) -> QuerySet[Vehicle]:

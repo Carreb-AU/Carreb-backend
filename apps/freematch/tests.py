@@ -74,3 +74,86 @@ class MatchResponseTests(TestCase):
             self.assertEqual(veh["driveaway_price_estimate"]["value"], 50_000_00)
             self.assertFalse(veh["resale_value_5yr_estimate"]["locked"])
             self.assertEqual(veh["image_url"], "/media/test.jpg")
+
+
+class RelaxedSelectorKeepsBudgetCeilingTests(TestCase):
+    """B-14: relaxation must be downward-only. Dropping the budget floor is
+    fine (cheaper-than-asked is a good suggestion) but cars ABOVE
+    budget_max must never appear in suggested matches."""
+
+    def test_relaxed_keeps_budget_ceiling(self):
+        from apps.freematch.selectors import get_freematch_candidates_relaxed
+        Vehicle.objects.create(
+            brand="CheapMake", model="A", year=2026, powertrain_type="petrol",
+            driveaway_price_by_state={"NSW": 20_000_00})
+        Vehicle.objects.create(
+            brand="MidMake", model="B", year=2026, powertrain_type="petrol",
+            driveaway_price_by_state={"NSW": 45_000_00})
+        Vehicle.objects.create(
+            brand="PriceyMake", model="C", year=2026, powertrain_type="petrol",
+            driveaway_price_by_state={"NSW": 90_000_00})
+        session = FreeMatchSession.objects.create(
+            state="NSW", budget_min=40_000, budget_max=50_000)
+        brands = set(
+            get_freematch_candidates_relaxed(session)
+            .values_list("brand", flat=True))
+        # Floor relaxed: the $20k car is allowed. Ceiling kept: the $90k
+        # car is not.
+        self.assertEqual(brands, {"CheapMake", "MidMake"})
+
+    def test_relaxed_without_budget_returns_all(self):
+        from apps.freematch.selectors import get_freematch_candidates_relaxed
+        Vehicle.objects.create(
+            brand="AnyMake", model="A", year=2026, powertrain_type="petrol",
+            driveaway_price_by_state={"NSW": 90_000_00})
+        session = FreeMatchSession.objects.create(state="NSW")
+        self.assertEqual(get_freematch_candidates_relaxed(session).count(), 1)
+
+
+class BudgetProximityOrderingTests(TestCase):
+    """B-14: with equal CORE ratings, matches sort by proximity to the
+    asked budget window — not cheapest-first."""
+
+    def _vehicle(self, brand, price_cents):
+        return Vehicle.objects.create(
+            brand=brand, model="M", year=2026, powertrain_type="petrol",
+            driveaway_price_by_state={"NSW": price_cents})
+
+    def test_equal_ratings_sort_by_budget_proximity(self):
+        from apps.freematch.services import _score_and_rank
+        from unittest import mock
+
+        cheap = self._vehicle("CheapMake", 20_000_00)   # $30k under the floor
+        on_target = self._vehicle("TargetMake", 48_000_00)  # inside 45-50k
+        with mock.patch("apps.freematch.services.calculate_core_rating") as calc:
+            calc.return_value = {
+                "core_rating": 4.0, "band_name": "b", "band_slug": "s",
+                "total_annual_cost": 10_000_00, "est_cost_difference": None,
+            }
+            entries = _score_and_rank(
+                [cheap, on_target], "NSW", 3,
+                budget_min=45_000, budget_max=50_000)
+        self.assertEqual([e["vehicle"].brand for e in entries],
+                         ["TargetMake", "CheapMake"])
+
+    def test_relaxation_metadata_returned(self):
+        from unittest import mock
+        from apps.freematch.services import match_vehicle_for_wizard
+        self._vehicle("AnyMake", 550_000_00)  # inside 500-600k window
+        session = FreeMatchSession.objects.create(
+            state="NSW", budget_min=500_000, budget_max=600_000,
+            ancap_5_star_only=True)
+        with mock.patch("apps.freematch.services.get_freematch_candidates") as strict, \
+             mock.patch("apps.freematch.selectors.get_freematch_candidates_relaxed") as relaxed, \
+             mock.patch("apps.freematch.services.calculate_core_rating") as calc:
+            strict.return_value = Vehicle.objects.none()
+            relaxed.return_value = list(Vehicle.objects.all())
+            calc.return_value = {
+                "core_rating": 4.0, "band_name": "b", "band_slug": "s",
+                "total_annual_cost": 10_000_00, "est_cost_difference": None,
+            }
+            entries, is_suggested, relaxed_filters = \
+                match_vehicle_for_wizard(session)
+        self.assertTrue(is_suggested)
+        self.assertIn("budget_min", relaxed_filters)
+        self.assertIn("ancap_5_star_only", relaxed_filters)

@@ -45,12 +45,32 @@ PRIORITY_TO_SLIDER = {
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _score_and_rank(candidates, state: str, priority_slider: int) -> list[dict]:
+def _budget_distance_cents(driveaway_cents, budget_min, budget_max) -> float:
+    """Distance outside the budget window (0 = inside or no budget set).
+
+    With equal CORE ratings the wizard should surface the car closest to
+    what the user asked to spend, not simply the cheapest car — a $20k
+    runabout must not outrank a $48k match for a $50k budget.
+    """
+    if driveaway_cents is None:
+        return float('inf')
+    lo = budget_min * 100 if budget_min is not None else None
+    hi = budget_max * 100 if budget_max is not None else None
+    if lo is not None and driveaway_cents < lo:
+        return lo - driveaway_cents
+    if hi is not None and driveaway_cents > hi:
+        return driveaway_cents - hi
+    return 0
+
+
+def _score_and_rank(candidates, state: str, priority_slider: int,
+                    budget_min=None, budget_max=None) -> list[dict]:
     """
     Score each candidate with the CORE Rating Engine and return the top
     MAX_MATCH_RESULTS entries, best rating first. One entry per
     (brand, model, year) so the user sees distinct model lines. Ties break
-    by annual cost, then name, so results are deterministic.
+    by budget proximity (cars inside the asked window first), then annual
+    cost, then name, so results are deterministic.
     """
     if not candidates:
         return []
@@ -87,8 +107,12 @@ def _score_and_rank(candidates, state: str, priority_slider: int) -> list[dict]:
         except Exception:
             logger.exception("CORE Rating Engine error for vehicle %s — skipping", vehicle.id)
 
+    def _driveaway(vehicle):
+        return (vehicle.driveaway_price_by_state or {}).get(state)
+
     scored.sort(key=lambda e: (
         -(e["core_rating"] or 0),
+        _budget_distance_cents(_driveaway(e["vehicle"]), budget_min, budget_max),
         e["total_annual_cost"] if e["total_annual_cost"] is not None else float("inf"),
         e["vehicle"].brand, e["vehicle"].model, e["vehicle"].variant or "",
     ))
@@ -97,11 +121,14 @@ def _score_and_rank(candidates, state: str, priority_slider: int) -> list[dict]:
 
 # ── Match Logic ──────────────────────────────────────────────────────────────
 
-def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[list[dict], bool]:
+def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[list[dict], bool, list[str]]:
     """
     Run the Free Match Wizard matching algorithm.
-    Returns a tuple of (scored_entries, is_suggested) with up to
-    MAX_MATCH_RESULTS entries, best CORE rating first.
+    Returns a tuple of (scored_entries, is_suggested, relaxed_filters) with
+    up to MAX_MATCH_RESULTS entries, best CORE rating first.
+    ``relaxed_filters`` names the constraints loosened to get results
+    (e.g. ["budget_min", "ancap_5_star_only"]) so the response can tell the
+    frontend exactly what was relaxed.
     """
     state = session.state or WIZARD_DEFAULT_STATE
     priority_slider = PRIORITY_TO_SLIDER.get(session.priority, 3)
@@ -110,26 +137,33 @@ def match_vehicle_for_wizard(session: FreeMatchSession) -> tuple[list[dict], boo
     candidates = list(get_freematch_candidates(session))
 
     if candidates:
-        entries = _score_and_rank(candidates, state, priority_slider)
+        entries = _score_and_rank(candidates, state, priority_slider,
+                                  session.budget_min, session.budget_max)
         if entries:
-            return entries, False
+            return entries, False, []
 
-    # ── Attempt 2: relax budget and nice-to-have features ───────────────────
+    # ── Attempt 2: relax downward only ──────────────────────────────────────
+    # Drop the budget floor and the ANCAP/seating nice-to-haves, but keep
+    # the budget ceiling — never suggest a car above budget_max.
     logger.info(
-        "Free match wizard: no results with specific filters — relaxing budget & ANCAP (session %s)",
+        "Free match wizard: no results with specific filters — relaxing budget floor & ANCAP (session %s)",
         session.session_token[:8],
     )
     from apps.freematch.selectors import get_freematch_candidates_relaxed
     candidates = list(get_freematch_candidates_relaxed(session))
 
     if candidates:
-        entries = _score_and_rank(candidates, state, priority_slider)
+        entries = _score_and_rank(candidates, state, priority_slider,
+                                  session.budget_min, session.budget_max)
         if entries:
-            return entries, True
+            relaxed = ["budget_min"]
+            if session.ancap_5_star_only:
+                relaxed.append("ancap_5_star_only")
+            return entries, True, relaxed
 
     # ── No acceptable match ───────────────────────────────────────────────────
     logger.warning(
-        "Free match wizard: no candidates even with relaxed budget/ANCAP (session %s)",
+        "Free match wizard: no candidates even with relaxed budget floor/ANCAP (session %s)",
         session.session_token[:8],
     )
     raise NoMatchFoundError(
@@ -193,7 +227,8 @@ def _build_match_vehicle_entry(entry: dict, state: str) -> dict:
     return out
 
 
-def build_match_response(entries: list, session: FreeMatchSession, is_suggested: bool = False) -> dict:
+def build_match_response(entries: list, session: FreeMatchSession, is_suggested: bool = False,
+                         relaxed_filters: list | None = None) -> dict:
     from django.utils import timezone
 
     state = session.state or WIZARD_DEFAULT_STATE
@@ -211,6 +246,11 @@ def build_match_response(entries: list, session: FreeMatchSession, is_suggested:
         "vehicles": vehicles,
         "result_count": len(vehicles),
         "is_suggested": is_suggested,
+        # Which constraints were loosened to produce these suggestions
+        # (e.g. ["budget_min", "ancap_5_star_only"]) — empty for strict
+        # matches. Frontend shows the "based on what you told us" note when
+        # this is non-empty.
+        "relaxed_filters": relaxed_filters or [],
         "session_token": session.session_token,
         "meta": {
             "calculated_at": timezone.now().isoformat(),
@@ -344,14 +384,14 @@ def process_free_match(payload: dict) -> dict:
         
     session.save()
     
-    entries, is_suggested = match_vehicle_for_wizard(session)
+    entries, is_suggested, relaxed_filters = match_vehicle_for_wizard(session)
     if not entries:
         raise RuntimeError("No match could be found.")
-        
+
     session.matched_vehicle = entries[0]["vehicle"]
     session.save(update_fields=["matched_vehicle"])
-    
-    return build_match_response(entries, session, is_suggested)
+
+    return build_match_response(entries, session, is_suggested, relaxed_filters)
 
 
 @transaction.atomic
