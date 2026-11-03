@@ -38,7 +38,8 @@ ESTIMATE_CACHE_TTL = 60 * 60 * 24 * 30  # 30 days
 CARD_FIELDS = (
     # identity
     'id', 'source', 'name',
-    'make', 'model', 'year', 'variant', 'body_style', 'powertrain_type',
+    'make', 'model', 'year', 'variant', 'model_year', 'body_style',
+    'powertrain_type',
     'fuel_type_raw', 'drive', 'transmission', 'num_seats', 'doors',
     'fcai_category', 'fcai_broad', 'test_cycle',
     # technical

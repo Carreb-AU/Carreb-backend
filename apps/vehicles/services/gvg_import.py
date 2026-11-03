@@ -698,8 +698,28 @@ IDENTITY_UPDATE_FIELDS = [
     'fuel_consumption_extra_urban_l_100km', 'electricity_consumption_wh_per_km',
     'electric_range_km', 'tailpipe_co2_g_per_km', 'annual_fuel_cost',
     'is_current_model', 'model_end_year', 'test_cycle',
-    'raw_data', 'provenance', 'search_text',
+    'model_year', 'raw_data', 'provenance', 'search_text',
 ]
+
+
+def model_year_from_label(label):
+    """Extract the 4-digit year from an MY label ("MY25" -> 2025)."""
+    from apps.vehicles.models import model_year_from_label as _impl
+    return _impl(label)
+
+
+def identity_search_text(year, make, model, variant, model_year='') -> str:
+    """Lower-cased search text for a GVG identity row.
+
+    Includes the MY label and its derived 4-digit year so a query like
+    "zeekr 009 2025" finds the row stored as year=2024, MY=MY25 (B-01).
+    """
+    parts = [str(year or ''), make or '', model or '', variant or '',
+             model_year or '']
+    my_year = model_year_from_label(model_year)
+    if my_year and my_year != year:
+        parts.append(str(my_year))
+    return ' '.join(p for p in parts if p).lower()
 
 
 def _upsert_identities(records: list, dataset: str) -> Dict[str, int]:
@@ -790,12 +810,14 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
         powertrain = map_powertrain(fuel_type_raw)
 
         test_cycle = _safe_str(row.get('Test Cycle')) or 'ADR'
+        model_year = _safe_str(row.get('ModelReleaseVersion'))
         record = VehicleIdentity(
             source=source,
             make=make,
             model=model,
             year=year,
             variant=variant,
+            model_year=model_year,
             body_style=body_style,
             fcai_category=fcai_category,
             fcai_broad=fcai_broad,
@@ -817,7 +839,7 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
             source_dataset='GVG-CURRENT',
             raw_data=_plain_dict_from_row(row),
             provenance=_build_record_provenance(source, test_cycle),
-            search_text=' '.join(p for p in [str(year), make, model, variant] if p).lower(),
+            search_text=identity_search_text(year, make, model, variant, model_year),
         )
 
         records.append(record)
@@ -892,7 +914,7 @@ def import_old_fuel_consumption_csv(filepath: str, source: Optional[DataSource] 
             source_dataset='GVG-OLDER-8603',
             raw_data=_plain_dict_from_row(row),
             provenance=_build_record_provenance(source, test_cycle),
-            search_text=' '.join(p for p in [str(year), make, model] if p).lower(),
+            search_text=identity_search_text(year, make, model, ''),
         )
 
         records.append(record)

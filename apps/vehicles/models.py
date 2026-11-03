@@ -1,7 +1,23 @@
 import uuid
+import re
 from django.db import models
 from django.contrib.postgres.indexes import GinIndex
 from django.utils.translation import gettext_lazy as _
+
+_MY_YEAR_RE = re.compile(r'^MY\s*(\d{2,4})$', re.I)
+
+
+def model_year_from_label(label):
+    """Extract the 4-digit year from an MY label ("MY25" -> 2025)."""
+    m = _MY_YEAR_RE.match((label or '').strip())
+    if not m:
+        return None
+    digits = m.group(1)
+    if len(digits) == 2:
+        return 2000 + int(digits)
+    if len(digits) == 4:
+        return int(digits)
+    return None
 
 class PowertrainType(models.TextChoices):
     PETROL = 'petrol', 'Petrol'
@@ -150,6 +166,10 @@ class VehicleIdentity(models.Model):
     model = models.CharField(max_length=100)
     year = models.IntegerField()
     variant = models.CharField(max_length=255, blank=True)
+    # Model-year label from the source (e.g. "MY25") — the GVG release
+    # version can differ from the release year (year=2024, MY=MY25), and
+    # owners search by it (B-01).
+    model_year = models.CharField(max_length=20, blank=True, default='')
 
     # Specs
     body_style = models.CharField(max_length=100, blank=True)
@@ -227,7 +247,15 @@ class VehicleIdentity(models.Model):
         ]
 
     def build_search_text(self):
-        return ' '.join(p for p in [str(self.year), self.make, self.model, self.variant] if p).lower()
+        # Mirrors identity_search_text() in gvg_import — keep both in sync.
+        # The MY label and its derived year are included so a query like
+        # "zeekr 009 2025" finds the row stored as year=2024, MY=MY25 (B-01).
+        parts = [str(self.year), self.make, self.model, self.variant,
+                 self.model_year or '']
+        my_year = model_year_from_label(self.model_year)
+        if my_year and my_year != self.year:
+            parts.append(str(my_year))
+        return ' '.join(p for p in parts if p).lower()
 
     def save(self, *args, **kwargs):
         self.search_text = self.build_search_text()

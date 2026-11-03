@@ -483,12 +483,19 @@ class CurrentVehicleSearchView(views.APIView):
                     sim=TrigramSimilarity('search_text', needle)
                 ).filter(sim__gt=0.05).order_by('-sim', '-year')
                 if year:
-                    gvg_qs = gvg_qs.filter(year=year)
+                    # B-01: the MY label can differ from the release year
+                    # (year=2024, MY=MY25) — match the MY-derived year in
+                    # search_text as well as the release year itself.
+                    gvg_qs = gvg_qs.filter(
+                        models.Q(year=year)
+                        | models.Q(search_text__icontains=str(year)))
             else:
                 # Fallback for SQLite/development
                 gvg_qs = text_filter(gvg_qs, brand_field='make', model_field='model')
                 if year:
-                    gvg_qs = gvg_qs.filter(year=year)
+                    gvg_qs = gvg_qs.filter(
+                        models.Q(year=year)
+                        | models.Q(search_text__icontains=str(year)))
                 gvg_qs = gvg_qs.order_by('make', 'model', '-year')
 
             for r in gvg_qs[:20]:
