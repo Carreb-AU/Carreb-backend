@@ -21,8 +21,8 @@ from apps.vehicles.models import (
     CategoryAnnualKMBenchmark, CoreDialBatch, CoreDialRow, Vehicle,
     VehicleIdentity)
 from apps.vehicles.services.core_dial import (
-    GARAGE_KM_DEFAULT, cost_gvg_current_vehicle, garage_km_copy_line,
-    resolve_garage_km)
+    GARAGE_KM_DEFAULT, annual_km_from_odometer, cost_gvg_current_vehicle,
+    garage_km_copy_line, resolve_garage_km)
 from apps.vehicles.services.rating_engine import (
     calculate_core_rating, calculate_vehicle_cost_breakdown)
 
@@ -75,6 +75,25 @@ class ResolveGarageKmTests(TestCase):
         cv = _ns(odometer_reading=None, purchase_date=None)
         self.assertEqual(resolve_garage_km(None, cv),
                          (GARAGE_KM_DEFAULT, 'default'))
+
+    def test_cv_overrides_fill_empty_model_fields(self):
+        # The Edit Vehicle modal saves odometer/purchase_date via the
+        # override endpoint, leaving the CV record empty — the overrides
+        # must still drive the km derivation (string values included).
+        cv = _ns(odometer_reading=None, purchase_date=None)
+        inputs = {'odometer_reading': '25000', 'purchase_date': '06/2023'}
+        km, source = resolve_garage_km(None, cv, inputs)
+        expected = annual_km_from_odometer(25000, datetime.date(2023, 6, 1))
+        self.assertEqual((km, source), (expected, 'odometer'))
+
+    def test_model_fields_win_over_overrides(self):
+        today = datetime.date.today()
+        cv = _ns(odometer_reading=20000,
+                 purchase_date=today - datetime.timedelta(days=730))
+        inputs = {'odometer_reading': '99000'}
+        km, source = resolve_garage_km(None, cv, inputs)
+        self.assertEqual(source, 'odometer')
+        self.assertNotEqual(km, 99000)
 
     def test_copy_line_variants(self):
         self.assertEqual(
@@ -316,6 +335,35 @@ class GarageKmApiTests(TestCase):
             self.assertEqual(card['engine_data']['costed_km'], 25000)
             diff = card['engine_data']['est_cost_difference']
             self.assertEqual(diff['comparison_mode'], 'current_vehicle')
+
+    def test_odometer_override_drives_costed_km_without_cv_post(self):
+        """The current Edit Vehicle modal saves odometer/purchase_date as
+        field overrides via /details/ — those must reach costed_km (and
+        every garage card) with no frontend change."""
+        # CV saved without odometer/purchase (the FE's normal path) — the
+        # modal later saves them as overrides.
+        self._post_cv(odometer_reading=None, purchase_date=None)
+        for field, value in (('odometer_reading', '25000'),
+                             ('purchase_date', '06/2023')):
+            resp = self.client.patch('/api/my-garage/current-vehicle/details/',
+                                     {'field_name': field, 'override_value': value},
+                                     format='json')
+            self.assertEqual(resp.status_code, 200)
+
+        expected = annual_km_from_odometer(25000, datetime.date(2023, 6, 1))
+        resp = self.client.get('/api/my-garage/current-vehicle/')
+        engine = resp.data['engine_data']
+        self.assertEqual(engine['costed_km'], expected)
+        self.assertEqual(engine['costed_km_source'], 'odometer')
+        self.assertTrue(engine['personalised_estimate'])
+
+        # Garage cards pick up the CV's odometer override too.
+        GarageVehicle.objects.create(
+            user=self.user, vehicle_catalogue=self.vehicle,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+        resp = self.client.get('/api/my-garage/vehicles/')
+        self.assertEqual(resp.data['vehicles'][0]['engine_data']['costed_km'],
+                         expected)
 
     def test_garage_km_guard_rails(self):
         self._post_cv()

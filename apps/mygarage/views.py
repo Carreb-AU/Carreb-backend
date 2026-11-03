@@ -216,7 +216,17 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
     # and stars are untouched (km moves the dollars only, D29/D30).
     cv_for_km = vehicle_instance if is_current_vehicle \
         else getattr(user, 'current_vehicle', None)
-    garage_km, garage_km_source = resolve_garage_km(priority_state, cv_for_km)
+    cv_inputs = user_inputs if is_current_vehicle else None
+    if not is_current_vehicle and cv_for_km is not None:
+        # The Edit Vehicle modal saves odometer/purchase_date as CV
+        # overrides (not on the CV record), so garage cards must read them
+        # too or an odometer update would never reach their costed_km.
+        cv_inputs = {
+            o.field_name: o.override_value for o in
+            VehicleOverride.objects.filter(user=user, current_vehicle=cv_for_km)
+        }
+    garage_km, garage_km_source = resolve_garage_km(
+        priority_state, cv_for_km, cv_inputs)
 
     engine_data = None
     if rating_vehicle and state:

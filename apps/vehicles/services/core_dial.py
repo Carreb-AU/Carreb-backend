@@ -464,7 +464,28 @@ GARAGE_KM_MIN = KM_RATE_FLOOR
 GARAGE_KM_MAX = KM_RATE_CEIL
 
 
-def resolve_garage_km(priority_state, current_vehicle):
+def _coerce_purchase_date(value):
+    """Best-effort parse of a purchase-date override.
+
+    The Edit Vehicle field is labelled MM/YY but older clients send ISO or
+    other shapes; all are accepted. Returns a date or None.
+    """
+    from datetime import date, datetime
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    if not s:
+        return None
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%m/%Y', '%m/%y',
+                '%Y/%m/%d'):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def resolve_garage_km(priority_state, current_vehicle, cv_inputs=None):
     """The km/yr every garage and current-vehicle card is costed at (B-21).
 
     Precedence:
@@ -472,6 +493,12 @@ def resolve_garage_km(priority_state, current_vehicle):
       2. odometer ÷ years since purchase date, live from the current vehicle
          (rounded to 100, with the B-02 guard rails)
       3. the ABS 2020 national default of 12,100 km/yr
+
+    ``cv_inputs`` are the current vehicle's field overrides (the Edit
+    Vehicle modal saves odometer/purchase_date through the override
+    endpoint, not the CV record) — they fill in whichever model field is
+    empty, so an odometer update flows into every card without a frontend
+    change.
 
     Returns (km, source) where source is 'user', 'odometer' or 'default' —
     the copy line under the card dollars depends on it.
@@ -481,8 +508,17 @@ def resolve_garage_km(priority_state, current_vehicle):
             return priority_state.garage_km, 'user'
         return priority_state.garage_km, 'odometer'
     if current_vehicle is not None:
-        derived = annual_km_from_odometer(
-            current_vehicle.odometer_reading, current_vehicle.purchase_date)
+        odometer = current_vehicle.odometer_reading
+        purchase_date = current_vehicle.purchase_date
+        if cv_inputs:
+            if odometer is None and cv_inputs.get('odometer_reading') is not None:
+                try:
+                    odometer = int(float(cv_inputs['odometer_reading']))
+                except (TypeError, ValueError):
+                    odometer = None
+            if purchase_date is None and cv_inputs.get('purchase_date'):
+                purchase_date = _coerce_purchase_date(cv_inputs['purchase_date'])
+        derived = annual_km_from_odometer(odometer, purchase_date)
         if derived:
             return derived, 'odometer'
     return GARAGE_KM_DEFAULT, 'default'
