@@ -40,7 +40,8 @@ from apps.mygarage.ai_service import (
     estimate_resale_value,
 )
 from apps.vehicles.services.rating_engine import calculate_core_rating, _get_state_cents
-from apps.vehicles.services.core_dial import AU_STATES, cost_gvg_current_vehicle
+from apps.vehicles.services.core_dial import (
+    AU_STATES, cost_gvg_current_vehicle, resolve_garage_km, garage_km_copy_line)
 from apps.vehicles.services.ai_vehicle_search import AIVehicleSearchError, search_ai_vehicles
 from apps.vehicles.tasks import emit_analytics_event
 
@@ -209,24 +210,26 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
 
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
 
+    # B-21: every card in the garage (current vehicle included) is costed at
+    # the user's garage km — their Edit Vehicle setting, else the current
+    # vehicle's annualised odometer, else the ABS 2020 default. CORE ratings
+    # and stars are untouched (km moves the dollars only, D29/D30).
+    cv_for_km = vehicle_instance if is_current_vehicle \
+        else getattr(user, 'current_vehicle', None)
+    garage_km, garage_km_source = resolve_garage_km(priority_state, cv_for_km)
+
     engine_data = None
     if rating_vehicle and state:
         if not catalogue:
             # Non-catalogue car (GVG or AI-searched): fixed class medians from
-            # the Mode B rows plus the car's own consumption. Used both for
-            # the current vehicle (spec section 8) and GVG garage vehicles.
-            # A current vehicle with odometer + purchase date is costed at its
-            # own annualised kilometres (B-02), not the class benchmark.
-            derived_km = None
-            if is_current_vehicle:
-                from apps.vehicles.services.core_dial import annual_km_from_odometer
-                derived_km = annual_km_from_odometer(
-                    vehicle_instance.odometer_reading,
-                    vehicle_instance.purchase_date)
+            # the Mode B rows plus the car's own consumption, costed at the
+            # garage km (B-21). The odometer-derived/user-set km arrives via
+            # resolve_garage_km, which falls back to the ABS 2020 default —
+            # never silently to the class benchmark.
             engine_data = cost_gvg_current_vehicle(
-                rating_vehicle, state, annual_km=derived_km)
-            if derived_km:
-                engine_data['annual_km_basis'] = 'odometer'
+                rating_vehicle, state, annual_km=garage_km)
+            if garage_km_source != 'default':
+                engine_data['annual_km_basis'] = garage_km_source
             if current_cost is not None:
                 engine_data['est_cost_difference'] = _gvg_est_cost_diff(current_cost, engine_data['total_annual_cost'])
             else:
@@ -244,12 +247,14 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
                 priority,
                 mode,
                 user_inputs,
-                current_vehicle_annual_cost=current_cost
+                current_vehicle_annual_cost=current_cost,
+                costed_km=garage_km
             )
             if is_current_vehicle:
                 # Per-mode annual costs let the frontend switch CORE modes
                 # without a refetch and let same-mode cost differences be
-                # computed against the matching mode (B-13).
+                # computed against the matching mode (B-13). Every mode is
+                # costed at the same garage km (B-21).
                 engine_data['mode_annual_costs'] = {}
                 for m in CoreMode.values:
                     if m == mode:
@@ -258,11 +263,18 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
                         continue
                     try:
                         res = calculate_core_rating(
-                            rating_vehicle, state, priority, m, user_inputs)
+                            rating_vehicle, state, priority, m, user_inputs,
+                            costed_km=garage_km)
                         engine_data['mode_annual_costs'][m] = \
                             res.get('total_annual_cost')
                     except Exception:
                         engine_data['mode_annual_costs'][m] = None
+
+    if engine_data:
+        engine_data['costed_km'] = garage_km
+        engine_data['costed_km_source'] = garage_km_source
+        engine_data['costed_km_copy'] = garage_km_copy_line(garage_km, garage_km_source)
+        engine_data['personalised_estimate'] = garage_km_source != 'default'
 
     return {
         "vehicle_data": base_data,
@@ -273,6 +285,8 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
             "is_estimate": True,
             "state": state,
             "state_defaulted": state_defaulted,
+            "costed_km": garage_km,
+            "costed_km_source": garage_km_source,
             "disclaimer": "All figures are estimates only."
         }
     }
@@ -378,7 +392,15 @@ class CurrentVehicleView(views.APIView):
         state = getattr(request.user, 'priority_state', None)
         if not state:
             state = UserPriorityState.objects.create(user=request.user)
-            
+
+        # B-21: an explicit garage_km in the Edit Vehicle payload is the
+        # user's one km setting — it locks against odometer re-derivation;
+        # explicit null reverts to automatic.
+        if 'garage_km' in data:
+            state.garage_km = data['garage_km']
+            state.garage_km_user_set = data['garage_km'] is not None
+            state.save(update_fields=['garage_km', 'garage_km_user_set', 'updated_at'])
+
         resp = _build_calculated_vehicle_response(request.user, cv, state, is_current_vehicle=True)
         cache.delete(f"spotlights_{request.user.id}")
         return Response(resp)

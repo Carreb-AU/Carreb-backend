@@ -315,6 +315,18 @@ def cost_gvg_current_vehicle(record, state, annual_km=None):
                 powertrain_type=getattr(record, 'powertrain_type', None),
                 brand=getattr(record, 'make', None) or getattr(record, 'brand', None))
 
+    # B-21: the class-median parts were costed at the class benchmark km, so
+    # a km override rescales the km-dependent ones (servicing, tyres, road
+    # user charge). CTP/comprehensive/registration are fixed ownership costs
+    # and stay as medians; fuel/electricity above is already at `km`.
+    if annual_km:
+        benchmark_km = CategoryAnnualKMBenchmark.get_annual_km_for_category(
+            record.fcai_category or '')
+        if benchmark_km:
+            factor = annual_km / benchmark_km
+            for part in ('servicing', 'tyres', 'road_user_charge'):
+                parts[part] = int(round_half_up(parts[part] * factor, 0))
+
     return {
         'core_rating': None,
         'band_name': '',
@@ -322,6 +334,7 @@ def cost_gvg_current_vehicle(record, state, annual_km=None):
         'total_annual_cost': sum(parts.values()),
         'annual_cost_breakdown': _gvg_breakdown_shape(parts),
         'tailpipe_co2_g_per_km': float(getattr(record, 'tailpipe_co2_g_per_km', None) or 0),
+        'co2_energy_cycle_g_per_km': _co2_g_per_km(record, state),
         'annual_co2_kg': _annual_co2_kg(record, km, state),
         'annual_km': km,
         'costing_basis': GVG_COSTING_BASIS,
@@ -351,6 +364,38 @@ def _gvg_breakdown_shape(parts: dict) -> dict:
     return breakdown
 
 
+def _co2_g_per_km(record, state: str = None) -> float:
+    """Energy-cycle CO2 intensity (g/km) for the g/km card row.
+
+    Same basis as _annual_co2_kg: tailpipe for combustion cars, grid
+    scope 2 + scope 3 for BEVs — so the g/km row never shows "~0" for an
+    electric car while the kg p.a. row shows a real figure.
+    """
+    powertrain = (getattr(record, 'powertrain_type', None) or '').lower()
+    if powertrain == 'bev':
+        return _bev_g_per_km(record, state)
+    return float(getattr(record, 'tailpipe_co2_g_per_km', None) or 0)
+
+
+def _bev_g_per_km(record, state: str = None) -> float:
+    """Grid (scope 2 + scope 3) g/km for a BEV from its Wh/km consumption."""
+    # GVG/AI rows carry electricity_consumption_wh_per_km; the catalogue
+    # Vehicle names the same figure energy_consumption_wh_km.
+    wh_per_km = (getattr(record, 'electricity_consumption_wh_per_km', None)
+                 or getattr(record, 'energy_consumption_wh_km', None))
+    if not wh_per_km:
+        return 0.0
+    from apps.vehicles.models import NGAEmissionFactor
+    from apps.vehicles.services.uncosted_estimates import GRID_REGION, GRID_SCOPE3
+    grid = GRID_REGION.get(state, state) if state else 'National'
+    nga = (NGAEmissionFactor.objects.filter(grid=grid).first()
+           or NGAEmissionFactor.objects.filter(grid='National').first())
+    s2 = float(nga.scope2_factor_kgco2e_per_kwh) if nga else 0.59
+    s3 = GRID_SCOPE3.get(grid, GRID_SCOPE3['National'])
+    # kg/kWh is numerically g/Wh, so Wh/km x (s2+s3) is g/km.
+    return wh_per_km * (s2 + s3)
+
+
 def _annual_co2_kg(record, km: int, state: str = None) -> int:
     """Energy-cycle annual CO2 (kg).
 
@@ -363,18 +408,8 @@ def _annual_co2_kg(record, km: int, state: str = None) -> int:
     tailpipe = getattr(record, 'tailpipe_co2_g_per_km', None) or 0
 
     if powertrain == 'bev':
-        wh_per_km = getattr(record, 'electricity_consumption_wh_per_km', None)
-        if wh_per_km and km:
-            from apps.vehicles.models import NGAEmissionFactor
-            from apps.vehicles.services.uncosted_estimates import (
-                GRID_REGION, GRID_SCOPE3)
-            grid = GRID_REGION.get(state, state) if state else 'National'
-            nga = (NGAEmissionFactor.objects.filter(grid=grid).first()
-                   or NGAEmissionFactor.objects.filter(grid='National').first())
-            s2 = float(nga.scope2_factor_kgco2e_per_kwh) if nga else 0.59
-            s3 = GRID_SCOPE3.get(grid, GRID_SCOPE3['National'])
-            # kg/kWh is numerically g/Wh, so Wh/km x (s2+s3) is g/km.
-            g_per_km = wh_per_km * (s2 + s3)
+        g_per_km = _bev_g_per_km(record, state)
+        if g_per_km and km:
             return int(round_half_up(g_per_km * km / 1000, 0))
         return 0
 
@@ -415,3 +450,47 @@ def annual_km_from_odometer(odometer_reading, purchase_date, today=None):
     if rate < KM_RATE_FLOOR or rate > KM_RATE_CEIL:
         return None
     return rate
+
+
+# B-21 garage-level km normalisation ------------------------------------------
+# ABS Survey of Motor Vehicle Use 2020, all vehicles, Australia (file 16,
+# Section B). The garage default when no current-vehicle odometer yields a
+# trustworthy rate.
+GARAGE_KM_DEFAULT = 12_100
+
+# Whole km/yr the user may set in Edit Vehicle; matches the odometer guard
+# rails so a typed value can't be more optimistic than a derived one.
+GARAGE_KM_MIN = KM_RATE_FLOOR
+GARAGE_KM_MAX = KM_RATE_CEIL
+
+
+def resolve_garage_km(priority_state, current_vehicle):
+    """The km/yr every garage and current-vehicle card is costed at (B-21).
+
+    Precedence:
+      1. the user's own Edit Vehicle setting (locks out re-derivation)
+      2. odometer ÷ years since purchase date, live from the current vehicle
+         (rounded to 100, with the B-02 guard rails)
+      3. the ABS 2020 national default of 12,100 km/yr
+
+    Returns (km, source) where source is 'user', 'odometer' or 'default' —
+    the copy line under the card dollars depends on it.
+    """
+    if priority_state is not None and priority_state.garage_km:
+        if priority_state.garage_km_user_set:
+            return priority_state.garage_km, 'user'
+        return priority_state.garage_km, 'odometer'
+    if current_vehicle is not None:
+        derived = annual_km_from_odometer(
+            current_vehicle.odometer_reading, current_vehicle.purchase_date)
+        if derived:
+            return derived, 'odometer'
+    return GARAGE_KM_DEFAULT, 'default'
+
+
+def garage_km_copy_line(km: int, source: str) -> str:
+    """Card copy under the dollars (spec §B-21.5)."""
+    if source == 'default':
+        return (f"Costed at {km:,} km/yr (ABS 2020). "
+                f"Change in Edit Vehicle.")
+    return f"Costed at {km:,} km/yr, your setting."

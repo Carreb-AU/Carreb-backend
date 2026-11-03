@@ -5,7 +5,20 @@ import statistics
 from django.utils import timezone
 from apps.vehicles.models import Vehicle, PowertrainType
 from apps.vehicles.selectors import get_vehicles_by_fcai_category
-from apps.vehicles.services.core_dial import round_half_up
+from apps.vehicles.services.core_dial import round_half_up, _co2_g_per_km
+
+
+def _energy_cycle_g_per_km(vehicle, state: str) -> float:
+    """Energy-cycle CO2 intensity for the g/km card row.
+
+    Prefers the workbook column; falls back to computing it (grid scope 2+3
+    for BEVs from Wh/km, tailpipe otherwise) so even rows the ETL left blank
+    agree with their kg p.a. figure.
+    """
+    stored = getattr(vehicle, 'co2_energy_cycle_g_per_km', None)
+    if stored:
+        return float(stored)
+    return _co2_g_per_km(vehicle, state)
 
 # Trademarked Band Names
 BAND_NAMES = {
@@ -279,11 +292,23 @@ def calculate_vehicle_cost_breakdown(
     vehicle: Vehicle,
     state: str,
     core_mode: str,
-    user_inputs: Dict[str, Any]
+    user_inputs: Dict[str, Any],
+    costed_km: Optional[int] = None
 ) -> Dict[str, Any]:
 
     state = (state or 'NSW').upper()
     annual_km = user_inputs.get('annual_km', vehicle.annual_km_default or 13300)
+
+    # B-21 garage km normalisation: when the card is costed at a km figure
+    # other than the vehicle's category km, scale only the km-dependent
+    # lines (fuel/energy, servicing, tyres, EV road-user levy — the levy is
+    # a per-km charge). Rego, CTP, insurance, finance and depreciation are
+    # fixed ownership costs and never scale.
+    km_factor = None
+    if costed_km:
+        base_km = vehicle.annual_km_default or 13300
+        if base_km > 0 and costed_km != base_km:
+            km_factor = costed_km / base_km
 
     driveaway = user_inputs.get('driveaway_override')
     if not driveaway:
@@ -306,8 +331,16 @@ def calculate_vehicle_cost_breakdown(
     servicing_annual = _estimate_to_cents(getattr(vehicle, 'servicing_5yr_estimate', 0), 'servicing_5yr_estimate') // 5
     tyres_annual = _estimate_to_cents(getattr(vehicle, 'tyre_replacement_estimate', 0), 'tyre_replacement_estimate') // 5
 
+    if km_factor:
+        fuel_or_energy_annual = int(round_half_up(fuel_or_energy_annual * km_factor, 0))
+        servicing_annual = int(round_half_up(servicing_annual * km_factor, 0))
+        tyres_annual = int(round_half_up(tyres_annual * km_factor, 0))
+        ev_levy = int(round_half_up(ev_levy * km_factor, 0))
+
     # 4. If we have no component data, fall back to a canonical 5-year aggregate.
-    if not any([fuel_or_energy_annual, insurance, ctp, rego, servicing_annual, tyres_annual, ev_levy]):
+    # Skipped under km scaling: the aggregate lumps fixed and km-dependent
+    # costs together, so scaling it would corrupt the fixed lines.
+    if not km_factor and not any([fuel_or_energy_annual, insurance, ctp, rego, servicing_annual, tyres_annual, ev_levy]):
         total_5yr = _get_state_cents(getattr(vehicle, 'total_5yr_cost_of_ownership_by_state', None), state)
         if total_5yr:
             annual_aggregate = total_5yr // 5
@@ -397,7 +430,8 @@ def calculate_core_rating(
     budget_min: Optional[int] = None,
     budget_max: Optional[int] = None,
     current_vehicle_annual_cost: Optional[int] = None,
-    category_metrics_cache: Optional[Dict[str, Dict[str, list]]] = None
+    category_metrics_cache: Optional[Dict[str, Dict[str, list]]] = None,
+    costed_km: Optional[int] = None
 ) -> dict:
 
     if vehicle.powertrain_type == PowertrainType.FCEV:
@@ -417,7 +451,7 @@ def calculate_core_rating(
 
     # Target vehicle breakdown and stored workbook data.
     stored_target = _get_stored_mode_data(vehicle, state, core_mode)
-    breakdown = calculate_vehicle_cost_breakdown(vehicle, state, core_mode, user_inputs)
+    breakdown = calculate_vehicle_cost_breakdown(vehicle, state, core_mode, user_inputs, costed_km=costed_km)
     total_cost = breakdown['total_annual']
 
     # Load / cache peers for distribution and fallback scoring.
@@ -455,8 +489,18 @@ def calculate_core_rating(
             vehicle.tailpipe_co2_g_per_km
         )
         core_rating = float(core_rating)
-        total_annual_cost = int(round_half_up(stored_target['mode_coo_pa'] * 100, 0))
-        annual_co2_kg = int(round_half_up(stored_target['annual_co2_kg'], 0))
+        if costed_km:
+            # B-21: km moves the dollars only. Card Mode COO = the scaled
+            # km-dependent lines + the unscaled fixed lines (breakdown
+            # total), never the stored dataset total. Rating/stars stay
+            # exactly as the workbook scored them (D29/D30).
+            total_annual_cost = breakdown['total_annual']
+            base_km = vehicle.annual_km_default or 13300
+            annual_co2_kg = int(round_half_up(
+                stored_target['annual_co2_kg'] * (costed_km / base_km), 0))
+        else:
+            total_annual_cost = int(round_half_up(stored_target['mode_coo_pa'] * 100, 0))
+            annual_co2_kg = int(round_half_up(stored_target['annual_co2_kg'], 0))
 
     else:
         # ----- NON-CATALOGUE PATH (GVG / legacy / manual entry) -----
@@ -466,7 +510,7 @@ def calculate_core_rating(
         co2_cap_threshold = None
         total_annual_cost = total_cost
 
-        annual_km = user_inputs.get('annual_km', vehicle.annual_km_default or 13300)
+        annual_km = costed_km or user_inputs.get('annual_km', vehicle.annual_km_default or 13300)
         tailpipe_co2 = vehicle.tailpipe_co2_g_per_km or 0
         annual_co2_kg = int((tailpipe_co2 * annual_km) / 1000)
 
@@ -607,6 +651,10 @@ def calculate_core_rating(
         "total_annual_cost": total_annual_cost,
         "est_cost_difference": est_cost_difference,
         "tailpipe_co2_g_per_km": float(vehicle.tailpipe_co2_g_per_km or 0),
+        # Energy-cycle basis (tailpipe for combustion, grid scope 2+3 for
+        # BEVs) so the g/km card row agrees with the kg p.a. row — a BEV
+        # shows its real ~130 g/km, not "~0" from a missing tailpipe figure.
+        "co2_energy_cycle_g_per_km": float(_energy_cycle_g_per_km(vehicle, state) or 0),
         "annual_co2_kg": annual_co2_kg,
         "peer_band_distribution": peer_distribution,
         "peer_band_medians": peer_band_medians,

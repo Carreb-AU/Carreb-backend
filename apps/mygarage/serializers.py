@@ -36,8 +36,26 @@ class UserPriorityStateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UserPriorityState
-        fields = ['state', 'budget_min', 'budget_max', 'priority_slider_position', 'active_core_mode', 'updated_at']
-        read_only_fields = ['updated_at']
+        fields = ['state', 'budget_min', 'budget_max', 'priority_slider_position',
+                  'active_core_mode', 'garage_km', 'garage_km_user_set', 'updated_at']
+        read_only_fields = ['updated_at', 'garage_km_user_set']
+
+    def validate_garage_km(self, value):
+        # B-21: whole km/yr within the same guard rails as the odometer
+        # derivation; null reverts to automatic (odometer/default).
+        if value is None:
+            return None
+        from apps.vehicles.services.core_dial import GARAGE_KM_MIN, GARAGE_KM_MAX
+        if value < GARAGE_KM_MIN or value > GARAGE_KM_MAX:
+            raise serializers.ValidationError("invalid_garage_km")
+        return value
+
+    def update(self, instance, validated_data):
+        # Any explicit garage_km write (value or null) is a user edit: a real
+        # value locks it against odometer re-derivation; null unlocks it.
+        if 'garage_km' in validated_data:
+            instance.garage_km_user_set = validated_data['garage_km'] is not None
+        return super().update(instance, validated_data)
 
     def validate_priority_slider_position(self, value):
         if value is None:
@@ -64,6 +82,16 @@ class CurrentVehicleCreateSerializer(serializers.Serializer):
     licence_plate = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     odometer_reading = serializers.IntegerField(required=False, allow_null=True)
     state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    garage_km = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate_garage_km(self, value):
+        # B-21: same guard rails as the priority-state endpoint.
+        if value is None:
+            return None
+        from apps.vehicles.services.core_dial import GARAGE_KM_MIN, GARAGE_KM_MAX
+        if value < GARAGE_KM_MIN or value > GARAGE_KM_MAX:
+            raise serializers.ValidationError("invalid_garage_km")
+        return value
 
     def validate_state(self, value):
         if value in (None, ''):
