@@ -139,19 +139,26 @@ class BreakdownScalingTests(TestCase):
 
 class CoreRatingKmScalingTests(TestCase):
 
-    def test_card_total_uses_scaled_lines_not_stored_total(self):
+    def test_card_total_reconciles_stored_total_with_variable_lines(self):
         v = _catalogue()
         unscaled = calculate_core_rating(v, 'NSW', 3, 'pure_cost', {})
         # Stored workbook total is untouched without costed_km.
         self.assertEqual(unscaled['total_annual_cost'], 500000)
 
+        # At double the km: stored total + variable lines x (factor - 1).
+        # Variable lines at category km: fuel 200000 + servicing 200000
+        # + tyres 300000 = 700000 cents.
         scaled = calculate_core_rating(
             v, 'NSW', 3, 'pure_cost', {}, costed_km=30000)
-        expected_total = calculate_vehicle_cost_breakdown(
-            v, 'NSW', 'pure_cost', {}, costed_km=30000)['total_annual']
-        self.assertEqual(scaled['total_annual_cost'], expected_total)
-        self.assertNotEqual(scaled['total_annual_cost'],
-                            unscaled['total_annual_cost'])
+        self.assertEqual(scaled['total_annual_cost'], 500000 + 700000)
+        # At exactly the category km the card equals the dataset figure.
+        same_km = calculate_core_rating(
+            v, 'NSW', 3, 'pure_cost', {}, costed_km=15000)
+        self.assertEqual(same_km['total_annual_cost'], 500000)
+        # And it is lower at fewer km.
+        low_km = calculate_core_rating(
+            v, 'NSW', 3, 'pure_cost', {}, costed_km=7500)
+        self.assertEqual(low_km['total_annual_cost'], 500000 - 350000)
 
     def test_rating_and_stars_stay_on_dataset_values(self):
         v = _catalogue()

@@ -271,21 +271,20 @@ def _get_state_cents(json_field: dict, state: str, default_val=0) -> int:
 
 
 def _estimate_to_cents(value, field_name: str) -> int:
-    """Handle the 5-year estimate fields which may be stored as int dollars."""
+    """5-year estimate fields (servicing, tyres) are integer CENTS.
+
+    Every current writer stores cents: the Oct-26 ETL rebatch/audit and
+    consolidated import both run the sheet dollars through _dollars_to_cents
+    before x5, and apply_estimates does the same. The old "small ints are
+    dollars" heuristic inflated rows 100x (a $688 5yr tyre bill became
+    $68,800/yr) and is removed — prod data is uniformly cents.
+    """
     if value is None or value == '':
         return 0
     if isinstance(value, float):
+        # A float can only be a legacy dollars figure.
         return int(round_half_up(value * 100, 0))
-    if isinstance(value, int):
-        # The old Carreb ETL stored these as int dollars; anything under $10k
-        # for 5 years of servicing/tyres is almost certainly dollars.
-        if field_name in ('servicing_5yr_estimate', 'tyre_replacement_estimate') and 0 < value < 1_000_000:
-            return value * 100
-        return value
-    try:
-        return int(round_half_up(float(value) * 100, 0))
-    except (TypeError, ValueError):
-        return 0
+    return int(value)
 
 
 def calculate_vehicle_cost_breakdown(
@@ -489,17 +488,30 @@ def calculate_core_rating(
             vehicle.tailpipe_co2_g_per_km
         )
         core_rating = float(core_rating)
+        stored_total = int(round_half_up(stored_target['mode_coo_pa'] * 100, 0))
         if costed_km:
-            # B-21: km moves the dollars only. Card Mode COO = the scaled
-            # km-dependent lines + the unscaled fixed lines (breakdown
-            # total), never the stored dataset total. Rating/stars stay
-            # exactly as the workbook scored them (D29/D30).
-            total_annual_cost = breakdown['total_annual']
+            # B-21: km moves the dollars only, and only the km-dependent
+            # part. The stored Mode COO is the dataset truth at the category
+            # km (it also carries workbook components we don't store as
+            # lines), so the card total is the stored total with just the
+            # variable lines re-based: stored + variable x (factor - 1).
+            # At factor 1 this is exactly the dataset figure. Rating/stars
+            # stay as the workbook scored them (D29/D30).
             base_km = vehicle.annual_km_default or 13300
+            factor = costed_km / base_km
+            unscaled = calculate_vehicle_cost_breakdown(
+                vehicle, state, core_mode, user_inputs)
+            variable_cents = (
+                unscaled['fuel_or_energy_annual']
+                + unscaled['servicing_annual']
+                + unscaled['tyres_annual']
+                + unscaled['ev_levy_annual'])
+            total_annual_cost = int(round_half_up(
+                stored_total + variable_cents * (factor - 1), 0))
             annual_co2_kg = int(round_half_up(
-                stored_target['annual_co2_kg'] * (costed_km / base_km), 0))
+                stored_target['annual_co2_kg'] * factor, 0))
         else:
-            total_annual_cost = int(round_half_up(stored_target['mode_coo_pa'] * 100, 0))
+            total_annual_cost = stored_total
             annual_co2_kg = int(round_half_up(stored_target['annual_co2_kg'], 0))
 
     else:
