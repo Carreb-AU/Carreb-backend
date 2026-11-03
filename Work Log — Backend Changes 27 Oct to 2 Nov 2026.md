@@ -428,3 +428,48 @@ Tests: 2 new; mygarage suite 64/64 green. Live-verified on prod
 (carreb1@yopmail.com): Vantage current vehicle = $5,991/yr, 2.0★ The
 Detour™; all six garage cards compare against `current_vehicle`
 baseline ($5,991), no category-average fallback.
+
+## 3-Nov — Carreb v6.4 Launch Bug Register (B-01…B-20) backend fixes
+
+Investigation verdicts: `Backend Investigation — Bug Register 3-Nov-26 (B-01 to B-20).md`.
+Six commits, all 162 tests green. Fixes in priority order:
+
+**B-12 — Held (suppressed) listings visible everywhere** · commit `e377da5`
+`is_suppressed=False` added to every user-facing catalogue path (vehicle list/dropdowns,
+CORE search, dial dataset + matches, current-vehicle search, Smart Match, free-match
+selectors, garage services, nearest-twin price). Type-ahead cache key bumped to
+`cv_typeahead_v2_` to bypass 24h stale Redis entries.
+
+**B-13 — Est. Cost Difference mixed CORE modes** · commit `e377da5`
+Garage cards subtracted the CV's Pure Cost baseline from a card costed in the user's
+selected mode. CV now costs in the active mode (priority_state) and catalogue CV rows
+carry `engine_data.mode_annual_costs` for all four modes.
+
+**B-02 + B-04 — CV km + BEV CO₂** · commit `7ea9940`
+Odometer ÷ years-owned annual km (guard rails 0.25y min, 3,000–60,000 km/y band) passed
+as an override to `cost_gvg_current_vehicle`; class-median fallbacks rescaled by the same
+ratio. BEVs now report energy-cycle CO₂ (Wh/km × grid scope 2 + scope 3) instead of ~0.
+
+**B-20 + B-15 — Card ratings + badge arcs** · commit `15d2a6a`
+Card now exposes `core_ratings` (per-mode rating/stars/band for the card's state), a
+top-level `core_rating` (Pure Cost), and `core_arcs` — cost arc (mode COO vs
+cat_min/max_coo) and CO₂ arc (energy-cycle g/km vs cat_min/max_co2) with precomputed
+needles ((value−min)/(max−min), clamped), km_pa_used, and the same bounds version
+priority as the rating engine.
+
+**B-14 — Free-match relaxation downward-only** · commit `02eae36`
+Relaxed pass keeps the budget ceiling (drops only the floor); equal ratings sort by
+budget proximity before annual cost; response gains `relaxed_filters`.
+
+**B-16/17/18 — RideReveal guard, edit path, traits** · commit `bdc8c1a`
+Banned-content guard (research claims, purchase advice, third person, emissions) with
+one warning retry then fail + refund. Prompt demands second person. Re-posting with a
+new plate/colour regenerates for free (no credit); name-only edit updates + re-renders
+the share card. `RideRevealResult.traits` (5 pills) added (migration 0016) and
+serialized — the share card already read it.
+
+**B-01 — GVG model-year (MY) not searchable** · commit `a1a6542`
+`VehicleIdentity.model_year` column (migration 0038) from ModelReleaseVersion;
+`build_search_text()` includes the MY label + derived year (also fixes the latent
+save() overwrite bug); year-token search matches year OR MY-derived year; card exposes
+`model_year`. After deploy run `backfill_gvg_model_year` on the server.
