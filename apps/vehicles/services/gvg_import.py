@@ -810,7 +810,7 @@ def import_gvg_xlsx(filepath: str, source: Optional[DataSource] = None, clear: b
         powertrain = map_powertrain(fuel_type_raw)
 
         test_cycle = _safe_str(row.get('Test Cycle')) or 'ADR'
-        model_year = _safe_str(row.get('ModelReleaseVersion'))
+        model_year = _safe_str(row.get('ModelReleaseVersion'))[:50]
         record = VehicleIdentity(
             source=source,
             make=make,

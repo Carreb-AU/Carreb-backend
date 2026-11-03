@@ -168,8 +168,9 @@ class VehicleIdentity(models.Model):
     variant = models.CharField(max_length=255, blank=True)
     # Model-year label from the source (e.g. "MY25") — the GVG release
     # version can differ from the release year (year=2024, MY=MY25), and
-    # owners search by it (B-01).
-    model_year = models.CharField(max_length=20, blank=True, default='')
+    # owners search by it (B-01). 50 chars covers annotated labels like
+    # "MY26 (From CW17/2026 Production)".
+    model_year = models.CharField(max_length=50, blank=True, default='')
 
     # Specs
     body_style = models.CharField(max_length=100, blank=True)

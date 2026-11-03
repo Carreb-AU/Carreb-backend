@@ -23,7 +23,7 @@ class Command(BaseCommand):
         updated = 0
         for rec in VehicleIdentity.objects.all().iterator(chunk_size=500):
             label = (rec.raw_data or {}).get('ModelReleaseVersion') or ''
-            label = str(label).strip()
+            label = str(label).strip()[:50]
             new_text = identity_search_text(
                 rec.year, rec.make, rec.model, rec.variant, label)
             if label == rec.model_year and new_text == rec.search_text:
