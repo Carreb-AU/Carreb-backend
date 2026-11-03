@@ -375,6 +375,101 @@ def _service_cost_fallback(record, field: str):
     return None, None
 
 
+def _arc_block(value, lo, hi) -> dict:
+    """Arc position data per Decision E: needle = (value − min)/(max − min),
+    clamped 0–1; None when any input is missing or the bounds are degenerate.
+    ``value``/``min``/``max`` are in the same unit (COO $ p.a. or CO₂ g/km)."""
+    arc = {'value': value, 'min': lo, 'max': hi, 'needle': None}
+    if value is not None and lo is not None and hi is not None and hi > lo:
+        arc['needle'] = min(1.0, max(0.0, (value - lo) / (hi - lo)))
+    return arc
+
+
+def _core_scoring_block(card: dict, record, source: str,
+                        state: Optional[str]) -> None:
+    """Attach per-mode CORE ratings and category-bounds arc data to the card.
+
+    B-20: search/lookup cards carried no rating keys, so the frontend modal
+    rendered CORE™ 0.0 with five default stars. Catalogue records carry
+    ``mode_data_by_state``; we expose it plus a per-mode ``core_ratings``
+    summary for the card's state, and a top-level ``core_rating`` resolved
+    to Pure Cost (the free, always-available mode) so existing mappers have
+    a truthful value to show.
+
+    B-15: the CORE badge arcs were never data-driven because no payload
+    exposed ``CategoryScoringBounds``. We add ``core_arcs`` — per mode, the
+    cost arc (value = mode COO p.a. vs cat_min/max_coo) and the CO₂ arc
+    (value = energy-cycle g/km vs cat_min/max_co2), each with a precomputed
+    needle fraction, plus ``km_pa_used`` so annual-kg displays can convert.
+    """
+    mode_data = getattr(record, 'mode_data_by_state', None) \
+        if source == 'carreb' else None
+    if mode_data:
+        card['mode_data_by_state'] = mode_data
+        resolved_state = state if state in mode_data else \
+            ('NSW' if 'NSW' in mode_data else next(iter(mode_data), None))
+        state_block = mode_data.get(resolved_state) or {}
+        ratings = {}
+        for mode in ('B', 'E', 'C', 'F'):
+            m = state_block.get(mode) or {}
+            ratings[mode] = {
+                'core_rating_1dp': m.get('core_rating_1dp'),
+                'stars': m.get('stars'),
+                'band_name': m.get('band_name'),
+                'mode_coo_pa': m.get('mode_coo_pa'),
+                'annual_co2_kg': m.get('annual_co2_kg'),
+            }
+        card['core_ratings'] = {'state': resolved_state, 'modes': ratings}
+        pure_cost = ratings.get('B') or {}
+        card['core_rating'] = pure_cost.get('core_rating_1dp')
+        card['core_rating_1dp'] = pure_cost.get('core_rating_1dp')
+        card['stars'] = pure_cost.get('stars')
+        card['core_mode'] = 'pure_cost'
+        card['field_sources']['core_rating'] = 'db'
+
+    category = card.get('fcai_category') or \
+        getattr(record, 'cost_category', None)
+    if not category:
+        return
+    from apps.vehicles.models import (
+        CategoryAnnualKMBenchmark, CategoryScoringBounds)
+    from apps.vehicles.services.uncosted_estimates import BOUNDS_VERSION_PRIORITY
+
+    # Same version priority the rating engine uses, so the arcs line up
+    # with the stars.
+    bounds: dict = {}
+    for version in BOUNDS_VERSION_PRIORITY:
+        for row in CategoryScoringBounds.objects.filter(
+                scoring_version=version, fcai_category__iexact=category):
+            bounds.setdefault(row.core_mode, row)
+        if bounds:
+            break
+
+    state_block = {}
+    if mode_data:
+        resolved_state = state if state in mode_data else \
+            ('NSW' if 'NSW' in mode_data else next(iter(mode_data), None))
+        state_block = (mode_data.get(resolved_state) or {})
+
+    arcs = {'km_pa_used': CategoryAnnualKMBenchmark
+            .get_annual_km_for_category(category), 'modes': {}}
+    for mode in ('B', 'E', 'C', 'F'):
+        b = bounds.get(mode)
+        m = state_block.get(mode) or {}
+        coo = m.get('mode_coo_pa')
+        fuel = m.get('co2_fuel_g_km')
+        grid = m.get('co2_grid_g_km')
+        co2 = round((fuel or 0) + (grid or 0), 1) \
+            if (fuel is not None or grid is not None) else None
+        arcs['modes'][mode] = {
+            'cost_arc': _arc_block(
+                coo, b.cat_min_coo if b else None, b.cat_max_coo if b else None),
+            'co2_arc': _arc_block(
+                co2, b.cat_min_co2 if b else None, b.cat_max_co2 if b else None),
+        }
+    card['core_arcs'] = arcs
+
+
 def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict:
     """Build the complete, provenance-tagged vehicle card for any record.
 
@@ -563,6 +658,8 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
                 make, model, year=year, fcai_category=card['fcai_category'],
                 body_style=card['body_style'], drive=card['drive'])
         card['field_sources']['image_url'] = card['field_sources'].get('image_url') or 'default'
+
+    _core_scoring_block(card, record, source, state)
 
     return card
 

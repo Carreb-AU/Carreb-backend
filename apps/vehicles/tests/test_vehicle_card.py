@@ -445,3 +445,81 @@ class GvgCurrentVehicleEngineDataTests(TestCase):
         sheet = spec_sheet_for("Nissan", "Patrol", "Ti", 2024, "petrol")
         self.assertEqual(grok.call_count, 2)
         self.assertEqual(sheet.get("fuel_tank_l"), 140.0)
+
+
+class CoreScoringBlockTests(TestCase):
+    """B-20/B-15: the card must carry per-mode ratings and the
+    category-bounds arc data the CORE badge draws from — otherwise the
+    frontend modal renders CORE™ 0.0 with five default stars and both
+    badge arcs at fixed lengths."""
+
+    def _mode_data(self):
+        return {
+            "NSW": {
+                "B": {"stars": 4.0, "band_name": "Great Choice",
+                      "core_rating_1dp": 3.8, "mode_coo_pa": 9000.0,
+                      "annual_co2_kg": 2500.0,
+                      "co2_fuel_g_km": 150.0, "co2_grid_g_km": 0.0},
+                "E": {"stars": 3.0, "band_name": "Good Choice",
+                      "core_rating_1dp": 2.9, "mode_coo_pa": 11500.0,
+                      "annual_co2_km": 2600.0,
+                      "co2_fuel_g_km": 150.0, "co2_grid_g_km": 0.0},
+            }
+        }
+
+    def _bounds(self, category="Ute"):
+        from apps.vehicles.models import CategoryScoringBounds
+        CategoryScoringBounds.objects.create(
+            fcai_category=category, core_mode="B", vehicle_count=10,
+            cat_min_coo=6000.0, cat_max_coo=12000.0,
+            cat_min_co2=100.0, cat_max_co2=300.0,
+            scoring_version="v6.4-audit-29Oct26")
+
+    def test_catalogue_card_exposes_ratings_and_arcs(self):
+        self._bounds()
+        vehicle = _make_catalogue(mode_data_by_state=self._mode_data())
+        card = build_vehicle_card(vehicle, 'carreb', state='NSW')
+
+        # B-20: per-mode ratings for the card's state + a truthful top-level
+        # Pure Cost rating for existing mappers.
+        self.assertEqual(card['core_ratings']['state'], 'NSW')
+        self.assertEqual(
+            card['core_ratings']['modes']['B']['core_rating_1dp'], 3.8)
+        self.assertEqual(card['core_rating'], 3.8)
+        self.assertEqual(card['stars'], 4.0)
+        self.assertEqual(card['core_mode'], 'pure_cost')
+        self.assertIn('mode_data_by_state', card)
+
+        # B-15: cost arc value/bounds/needle from CategoryScoringBounds.
+        cost_arc = card['core_arcs']['modes']['B']['cost_arc']
+        self.assertEqual(cost_arc['value'], 9000.0)
+        self.assertEqual(cost_arc['min'], 6000.0)
+        self.assertEqual(cost_arc['max'], 12000.0)
+        self.assertAlmostEqual(cost_arc['needle'], 0.5)
+
+        # CO2 arc: energy-cycle g/km vs category bounds (150 of 100–300).
+        co2_arc = card['core_arcs']['modes']['B']['co2_arc']
+        self.assertEqual(co2_arc['value'], 150.0)
+        self.assertAlmostEqual(co2_arc['needle'], 0.25)
+
+    def test_arc_needle_clamps_above_max(self):
+        self._bounds()
+        mode_data = self._mode_data()
+        mode_data["NSW"]["B"]["mode_coo_pa"] = 20000.0  # above cat_max
+        vehicle = _make_catalogue(mode_data_by_state=mode_data)
+        card = build_vehicle_card(vehicle, 'carreb', state='NSW')
+        self.assertEqual(
+            card['core_arcs']['modes']['B']['cost_arc']['needle'], 1.0)
+
+    def test_gvg_card_carries_bounds_but_no_rating(self):
+        # GVG/AI rows are never scored: arcs expose the category bounds
+        # (so the badge can draw its scale) but ratings stay absent.
+        self._bounds(category="Small")
+        card = build_vehicle_card(_make_gvg(), 'gvg', state='NSW')
+        self.assertNotIn('core_rating', card)
+        self.assertNotIn('core_ratings', card)
+        cost_arc = card['core_arcs']['modes']['B']['cost_arc']
+        self.assertIsNone(cost_arc['value'])
+        self.assertEqual(cost_arc['min'], 6000.0)
+        self.assertEqual(cost_arc['max'], 12000.0)
+        self.assertIsNone(cost_arc['needle'])
