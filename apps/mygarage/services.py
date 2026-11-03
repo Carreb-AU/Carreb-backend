@@ -78,7 +78,7 @@ def calculate_spotlights(active_garage_vehicles, user_priority_state, state='NSW
     budget = user_priority_state.budget_max if user_priority_state else None
     
     for cat, gvs in by_category.items():
-        peers = list(Vehicle.objects.filter(fcai_category=cat))
+        peers = list(Vehicle.objects.filter(fcai_category=cat, is_suppressed=False))
         ranges = sorted([p.wltp_range_km for p in peers if p.wltp_range_km is not None], reverse=True)
         
         peer_costs = []

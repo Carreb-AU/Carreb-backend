@@ -11,6 +11,7 @@ GET /api/core-dial-matches/             — the green button. All tiers: viewing
                                         "search"-scoped throttle 20/min.
 """
 from django.http import HttpResponseNotModified
+from django.db.models import Q
 from rest_framework import views, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -72,6 +73,7 @@ class CoreDialDatasetView(views.APIView):
         rows = (
             CoreDialRow.objects
             .filter(batch=batch, state=state)
+            .filter(Q(vehicle__isnull=True) | Q(vehicle__is_suppressed=False))
             .order_by('version_id')
         )
         payload = {
@@ -128,7 +130,11 @@ class CoreDialMatchesView(views.APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        rows = CoreDialRow.objects.filter(batch=batch, state=state)
+        rows = CoreDialRow.objects.filter(
+            batch=batch, state=state,
+        ).filter(
+            Q(vehicle__isnull=True) | Q(vehicle__is_suppressed=False)
+        )
         bands = compute_bands(rows, budget, stop)
         band_data = bands[band]
 

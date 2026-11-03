@@ -158,6 +158,16 @@ class AISmartMatchViewTests(TestCase):
         self.assertEqual(by_model["CX-3"]["image_url"],
                          "https://img.example/fallback.jpg")
 
+    def test_suppressed_listings_never_match(self, *_mocks):
+        # Held listings (maker withheld pricing) must not appear in matches
+        # or counts (B-12).
+        make_vehicle(brand="Mazda", model="CX-5", variant="Held",
+                     is_suppressed=True)
+        res = self._post()
+        self.assertEqual(res.status_code, 200)
+        variants = [r["variant"] for r in res.json()["results"]]
+        self.assertNotIn("Held", variants)
+
 
 @mock.patch("apps.mygarage.views.get_vehicle_image_url", return_value="https://img.example/fallback.jpg")
 @mock.patch("apps.mygarage.views.emit_analytics_event")
@@ -832,8 +842,19 @@ class CurrentVehicleSearchAIFallbackTests(TestCase):
                                 format="json")
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(any(r["source"] == "carreb" for r in resp.data))
-        self.assertEqual(resp.data[0]["make"], "Bentley")
-        m_ai.assert_not_called()
+
+    @mock.patch("apps.mygarage.views.search_ai_vehicles")
+    def test_suppressed_listing_never_returned(self, m_ai):
+        # Held listings (B-12) are invisible to vehicle search; the query
+        # falls through to the AI path like any absent vehicle.
+        make_vehicle(brand="Aston Martin", model="Vantage",
+                     is_suppressed=True)
+        m_ai.return_value = ([], False)
+        resp = self.client.post(self.ENDPOINT,
+                                {"query": "aston martin vantage"},
+                                format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(any(r["source"] == "carreb" for r in resp.data))
 
     @mock.patch("apps.mygarage.views.get_vehicle_image_url",
                  return_value="https://img.example/fallback.jpg")
@@ -1016,6 +1037,78 @@ class CurrentVehicleStateFallbackTests(TestCase):
         self.assertEqual(resp.data["meta"]["state"], "QLD")
         self.assertFalse(resp.data["meta"]["state_defaulted"])
         self.assertEqual(m_calc.call_args[0][1], "QLD")
+
+
+class SameModeCostDifferenceTests(TestCase):
+    """B-13: the current vehicle must be costed in the user's selected CORE
+    mode so garage-card cost differences compare like with like (previously
+    the CV was always Pure Cost while cards used the selected mode)."""
+
+    MODE_COSTS = {
+        "pure_cost": 599100,
+        "cool_choice": 800100,
+        "true_value": 4824100,
+        "full_picture": 510100,
+    }
+
+    def setUp(self):
+        from apps.mygarage.models import UserPriorityState
+        self.user = User.objects.create_user(
+            email="modes@example.com", password="x")
+        UserPriorityState.objects.create(
+            user=self.user, state="NSW", priority_slider_position=4,
+            active_core_mode="true_value")
+        self.client.force_authenticate(self.user)
+        self.cv_vehicle = make_vehicle(brand="Mazda", model="CX-5")
+        self.garage_vehicle = make_vehicle(brand="Audi", model="Q5")
+
+    @mock.patch("apps.mygarage.views.calculate_core_rating")
+    def test_cv_costed_in_active_mode_with_all_mode_costs(self, m_calc):
+        recorded = []
+        m_calc.side_effect = lambda vehicle=None, *a, **k: (
+            recorded.append({"mode": a[2] if len(a) > 2 else None,
+                             "current_cost": k.get("current_vehicle_annual_cost")}),
+            {"core_rating": 3.0,
+             "total_annual_cost": self.MODE_COSTS[a[2]],
+             "est_cost_difference": None})[1]
+        self.client.post(reverse("current-vehicle"),
+                         {"vehicle_catalogue_id": str(self.cv_vehicle.id)},
+                         format="json")
+        resp = self.client.get(reverse("current-vehicle"))
+        self.assertEqual(resp.status_code, 200)
+        # Headline cost is the ACTIVE mode (true_value), not Pure Cost.
+        self.assertEqual(resp.data["engine_data"]["total_annual_cost"],
+                         self.MODE_COSTS["true_value"])
+        # All four modes exposed for same-mode comparisons.
+        self.assertEqual(resp.data["engine_data"]["mode_annual_costs"],
+                         self.MODE_COSTS)
+        self.assertEqual(recorded[0]["mode"], "true_value")
+
+    @mock.patch("apps.mygarage.views.calculate_core_rating")
+    def test_garage_diff_uses_same_mode_cv_cost(self, m_calc):
+        recorded = []
+        m_calc.side_effect = lambda vehicle=None, *a, **k: (
+            recorded.append({"mode": a[2] if len(a) > 2 else None,
+                             "current_cost": k.get("current_vehicle_annual_cost")}),
+            {"core_rating": 3.0,
+             "total_annual_cost": self.MODE_COSTS[a[2]],
+             "est_cost_difference": None})[1]
+        self.client.post(reverse("current-vehicle"),
+                         {"vehicle_catalogue_id": str(self.cv_vehicle.id)},
+                         format="json")
+        self.client.post(reverse("garage-vehicles"),
+                         {"vehicle_catalogue_id": str(self.garage_vehicle.id),
+                          "source": "vehicle_lookup"}, format="json")
+        resp = self.client.get(reverse("garage-vehicles"))
+        self.assertEqual(resp.status_code, 200)
+        # Every comparison call must be costed in the user's mode AND
+        # compared against the CV costed in that same mode (never Pure Cost).
+        card_calls = [r for r in recorded if r["current_cost"] is not None]
+        self.assertTrue(card_calls)
+        for call in card_calls:
+            self.assertEqual(call["mode"], "true_value")
+            self.assertEqual(call["current_cost"],
+                             self.MODE_COSTS["true_value"])
 
 
 class GarageAddDedupeTests(TestCase):

@@ -22,7 +22,9 @@ class StandardResultsSetPagination(pagination.PageNumberPagination):
     max_page_size = 100
 
 class VehicleListView(generics.ListAPIView):
-    queryset = Vehicle.objects.all()
+    # Held listings (maker withheld pricing pre-launch) never appear in
+    # search results or counts.
+    queryset = Vehicle.objects.filter(is_suppressed=False)
     serializer_class = VehicleListSerializer
     pagination_class = StandardResultsSetPagination
     permission_classes = [AllowAny]
@@ -123,7 +125,7 @@ class VehicleBrandsView(views.APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
-        brands = Vehicle.objects.values_list('brand', flat=True).distinct().order_by('brand')
+        brands = Vehicle.objects.filter(is_suppressed=False).values_list('brand', flat=True).distinct().order_by('brand')
         return Response(brands)
 
 class VehicleModelsView(views.APIView):
@@ -134,7 +136,7 @@ class VehicleModelsView(views.APIView):
         brand = request.query_params.get('brand')
         if not brand:
             return Response({"detail": "brand is required"}, status=status.HTTP_400_BAD_REQUEST)
-        models = Vehicle.objects.filter(brand__iexact=brand).values_list('model', flat=True).distinct().order_by('model')
+        models = Vehicle.objects.filter(brand__iexact=brand, is_suppressed=False).values_list('model', flat=True).distinct().order_by('model')
         return Response(models)
 
 class VehicleYearsView(views.APIView):
@@ -146,7 +148,7 @@ class VehicleYearsView(views.APIView):
         model = request.query_params.get('model')
         if not brand or not model:
             return Response({"detail": "brand and model are required"}, status=status.HTTP_400_BAD_REQUEST)
-        years = Vehicle.objects.filter(brand__iexact=brand, model__iexact=model).values_list('year', flat=True).distinct().order_by('-year')
+        years = Vehicle.objects.filter(brand__iexact=brand, model__iexact=model, is_suppressed=False).values_list('year', flat=True).distinct().order_by('-year')
         return Response(years)
 
 class VehicleVariantsView(views.APIView):
@@ -159,7 +161,7 @@ class VehicleVariantsView(views.APIView):
         year = request.query_params.get('year')
         if not brand or not model or not year:
             return Response({"detail": "brand, model and year are required"}, status=status.HTTP_400_BAD_REQUEST)
-        variants = Vehicle.objects.filter(brand__iexact=brand, model__iexact=model, year=year).values_list('variant', flat=True).distinct().order_by('variant')
+        variants = Vehicle.objects.filter(brand__iexact=brand, model__iexact=model, year=year, is_suppressed=False).values_list('variant', flat=True).distinct().order_by('variant')
         return Response(variants)
 
 
@@ -322,7 +324,7 @@ class CoreSearchView(views.APIView):
                 return Response({"locked": True, "detail": "Premium subscription required for this mode"}, status=status.HTTP_403_FORBIDDEN)
                 
         # Filter initial vehicles
-        queryset = Vehicle.objects.all()
+        queryset = Vehicle.objects.filter(is_suppressed=False)
         if fcai_category:
             queryset = queryset.filter(fcai_category__iexact=fcai_category)
             

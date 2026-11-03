@@ -110,9 +110,12 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
     if is_current_vehicle:
         base_data = CurrentVehicleSerializer(vehicle_instance).data
         overrides_qs = VehicleOverride.objects.filter(user=user, current_vehicle=vehicle_instance)
-        # Current vehicle ALWAYS uses pure cost
-        mode = CoreMode.PURE_COST
-        priority = 1
+        # The CV card follows the user's selected CORE mode so the figures
+        # are comparable with garage cards costed in that same mode (B-13:
+        # cost differences must never mix modes). Per-mode costs are added
+        # to engine_data below.
+        mode = priority_state.active_core_mode if priority_state else CoreMode.PURE_COST
+        priority = priority_state.priority_slider_position if priority_state else 3
         # State chain (spec section 8): saved priority state, else the current
         # car's state. If neither is set, fall back to NSW so a figure always
         # shows — the same fallback the garage-card path uses. Without it the
@@ -232,6 +235,23 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
                 user_inputs,
                 current_vehicle_annual_cost=current_cost
             )
+            if is_current_vehicle:
+                # Per-mode annual costs let the frontend switch CORE modes
+                # without a refetch and let same-mode cost differences be
+                # computed against the matching mode (B-13).
+                engine_data['mode_annual_costs'] = {}
+                for m in CoreMode.values:
+                    if m == mode:
+                        engine_data['mode_annual_costs'][m] = \
+                            engine_data.get('total_annual_cost')
+                        continue
+                    try:
+                        res = calculate_core_rating(
+                            rating_vehicle, state, priority, m, user_inputs)
+                        engine_data['mode_annual_costs'][m] = \
+                            res.get('total_annual_cost')
+                    except Exception:
+                        engine_data['mode_annual_costs'][m] = None
 
     return {
         "vehicle_data": base_data,
@@ -436,7 +456,7 @@ class CurrentVehicleSearchView(views.APIView):
         records: list = []  # (record, source) pairs, warmed then carded
 
         # 1. Carreb catalogue (new vehicles; preferred on collision)
-        carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
+        carreb_qs = text_filter(Vehicle.objects.filter(is_suppressed=False), brand_field='brand', model_field='model')
         if year:
             carreb_qs = carreb_qs.filter(year=year)
         for v in carreb_qs.order_by('brand', 'model', '-year')[:10]:
@@ -690,7 +710,9 @@ class CurrentVehicleSuggestionsView(views.APIView):
 
     def _cache_key(self, prefix: str, *parts) -> str:
         safe = '_'.join(str(p).lower().replace(' ', '_') for p in parts if p is not None)
-        return f'cv_typeahead_{prefix}_{safe}'[:250]
+        # v2: suppressed (held) listings excluded — bumps the namespace so
+        # pre-fix 24 h cached dropdowns are not reused.
+        return f'cv_typeahead_v2_{prefix}_{safe}'[:250]
 
     def _other_option(self) -> dict:
         return {
@@ -774,7 +796,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
                     (variant or '').casefold(), yr)
 
         # 1. Carreb catalogue (preferred on collision)
-        carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
+        carreb_qs = text_filter(Vehicle.objects.filter(is_suppressed=False), brand_field='brand', model_field='model')
         if year:
             carreb_qs = carreb_qs.filter(year=year)
         for v in carreb_qs.order_by('brand', 'model', '-year')[:self.MAX_RESULTS]:
@@ -854,7 +876,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
         if cached is None:
             q_make = make.casefold()
             carreb_models = set(
-                Vehicle.objects.filter(brand__iexact=q_make).values_list('model', flat=True).distinct()
+                Vehicle.objects.filter(brand__iexact=q_make, is_suppressed=False).values_list('model', flat=True).distinct()
             )
             gvg_models = set(
                 VehicleIdentity.objects.filter(make__iexact=q_make).values_list('model', flat=True).distinct()
@@ -877,7 +899,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
         cached = cache.get(cache_key)
         if cached is None:
             carreb_years = set(
-                Vehicle.objects.filter(brand__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()
+                Vehicle.objects.filter(brand__iexact=make, model__iexact=model, is_suppressed=False).values_list('year', flat=True).distinct()
             )
             gvg_years = set(
                 VehicleIdentity.objects.filter(make__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()
@@ -1353,7 +1375,7 @@ class AISmartMatchView(views.APIView):
         # gets 0-1 results from an over-strict query.
         MIN_RESULTS = 5
 
-        queryset = Vehicle.objects.all()
+        queryset = Vehicle.objects.filter(is_suppressed=False)
 
         def _ensure_list(val):
             if isinstance(val, str):

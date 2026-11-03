@@ -386,6 +386,30 @@ class CoreDialApiTests(TestCase):
         self.assertIsNone(resp.data['header'])
         self.assertEqual(resp.data['results'], [])
 
+    # --- held (suppressed) listings (B-12) ---
+
+    def test_matches_excludes_suppressed_listings(self):
+        vehicle = self.rows[0].vehicle
+        vehicle.is_suppressed = True
+        vehicle.save(update_fields=['is_suppressed'])
+        self._auth()
+        resp = self._matches()
+        self.assertEqual(resp.status_code, 200)
+        ids = {r['vehicle_id'] for r in resp.data['results']}
+        self.assertNotIn(str(vehicle.id), ids)
+        # The three rows with no vehicle link remain.
+        self.assertEqual(resp.data['total'], 3)
+
+    def test_dataset_excludes_suppressed_listings(self):
+        vehicle = self.rows[0].vehicle
+        vehicle.is_suppressed = True
+        vehicle.save(update_fields=['is_suppressed'])
+        self._auth()
+        resp = self.client.get('/api/core-dial/dataset/', {'state': 'NSW'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data['rows']), 3)
+        self.assertNotIn(1, [r['version_id'] for r in resp.data['rows']])
+
     def test_priority_state_patch_semantics(self):
         user = User.objects.create_user(
             email='patch@carreb.com.au', password='password123',

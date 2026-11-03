@@ -324,7 +324,8 @@ def nearest_catalogue_price(make: str, model: str, year: Optional[int],
     if not make or not model:
         return None
     qs = Vehicle.objects.filter(brand__iexact=make.strip(),
-                                model__iexact=model.strip())
+                                model__iexact=model.strip(),
+                                is_suppressed=False)
     if exclude_id is not None:
         qs = qs.exclude(id=exclude_id)
     best = None

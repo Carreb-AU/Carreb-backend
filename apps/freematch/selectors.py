@@ -25,9 +25,10 @@ def get_freematch_session(session_token: str) -> Optional[FreeMatchSession]:
 def get_freematch_candidates(session: FreeMatchSession) -> QuerySet[Vehicle]:
     """
     Returns a queryset of candidate vehicles based on the session fields.
-    Excludes FCEV vehicles as they have no CORE Rating at launch.
+    Excludes FCEV vehicles as they have no CORE Rating at launch, and
+    suppressed (held) listings.
     """
-    qs = Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV)
+    qs = Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV).filter(is_suppressed=False)
     
     # Fuel Preference
     fuel_pref = session.fuel_type_preference
@@ -65,16 +66,17 @@ def get_freematch_candidates(session: FreeMatchSession) -> QuerySet[Vehicle]:
 
 def get_freematch_candidates_base() -> QuerySet[Vehicle]:
     """
-    Returns base candidate queryset without any filters except FCEV exclusion.
+    Returns base candidate queryset without any filters except FCEV
+    and suppressed-listing exclusions.
     """
-    return Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV)
+    return Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV).filter(is_suppressed=False)
 
 def get_freematch_candidates_relaxed(session: FreeMatchSession) -> QuerySet[Vehicle]:
     """
     Returns candidates with relaxed constraints (drops budget, ANCAP, towing).
     Keeps fundamental requirements: body style, seating (if possible), and fuel type.
     """
-    qs = Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV)
+    qs = Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV).filter(is_suppressed=False)
     
     # Fuel Preference
     fuel_pref = session.fuel_type_preference
@@ -103,7 +105,7 @@ def get_freematch_candidates_fuel_only(fuel_pref: Optional[str]) -> QuerySet[Veh
     """
     Returns candidate queryset with only the fuel filter applied.
     """
-    qs = Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV)
+    qs = Vehicle.objects.exclude(powertrain_type=PowertrainType.FCEV).filter(is_suppressed=False)
     if fuel_pref and fuel_pref != FuelTypePreference.NO_PREFERENCE:
         qs = qs.filter(powertrain_type=fuel_pref)
     return qs
