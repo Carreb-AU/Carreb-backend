@@ -114,14 +114,20 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         mode = CoreMode.PURE_COST
         priority = 1
         # State chain (spec section 8): saved priority state, else the current
-        # car's state. If neither is set, no figure is produced at all — the
-        # frontend asks once (eight-state picker) before any figure shows.
+        # car's state. If neither is set, fall back to NSW so a figure always
+        # shows — the same fallback the garage-card path uses. Without it the
+        # card rendered "—" forever when the frontend never prompted (and the
+        # garage diff silently fell back to category-average comparisons).
+        # state_defaulted tells the frontend it may still offer the picker.
         state = None
         if priority_state:
             state = priority_state.state
         if not state:
             state = vehicle_instance.state
         state = (state or '').upper() or None
+        state_defaulted = state is None
+        if state_defaulted:
+            state = 'NSW'
         catalogue = vehicle_instance.vehicle_catalogue
         gvg_record = vehicle_instance.green_vehicle_guide_record
         ai_entry = getattr(vehicle_instance, 'ai_vehicle_entry', None)
@@ -133,6 +139,7 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         # Assume state from current vehicle if exists, else default
         cv = getattr(user, 'current_vehicle', None)
         state = cv.state if cv and cv.state else 'NSW'
+        state_defaulted = False
         catalogue = vehicle_instance.vehicle_catalogue
         gvg_record = vehicle_instance.green_vehicle_guide_record
         ai_entry = getattr(vehicle_instance, 'ai_vehicle_entry', None)
@@ -233,6 +240,8 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
         "meta": {
             "calculated_at": timezone.now().isoformat(),
             "is_estimate": True,
+            "state": state,
+            "state_defaulted": state_defaulted,
             "disclaimer": "All figures are estimates only."
         }
     }

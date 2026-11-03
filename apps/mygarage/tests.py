@@ -976,6 +976,48 @@ class FirstGarageAddSetsCurrentVehicleTests(TestCase):
         self.assertEqual(str(cv.vehicle_catalogue_id), str(v1.id))
 
 
+class CurrentVehicleStateFallbackTests(TestCase):
+    """Current vehicle with no saved state (no priority_state.state, no
+    cv.state) must still show figures — NSW fallback, flagged in meta —
+    instead of an empty engine_data ('—' on every cost row)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="nostate@example.com", password="x")
+        self.client.force_authenticate(self.user)
+
+    def _set_cv(self, **cv_kwargs):
+        v = make_vehicle()
+        payload = {"vehicle_catalogue_id": str(v.id)}
+        payload.update(cv_kwargs)
+        resp = self.client.post(reverse("current-vehicle"), payload,
+                                format="json")
+        self.assertEqual(resp.status_code, 200)
+        return v
+
+    @mock.patch("apps.mygarage.views.calculate_core_rating")
+    def test_no_state_falls_back_to_nsw(self, m_calc):
+        m_calc.return_value = {"core_rating": 2.0, "total_annual_cost": 599100}
+        self._set_cv()
+        resp = self.client.get(reverse("current-vehicle"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNotNone(resp.data["engine_data"])
+        self.assertEqual(
+            resp.data["engine_data"]["total_annual_cost"], 599100)
+        self.assertEqual(resp.data["meta"]["state"], "NSW")
+        self.assertTrue(resp.data["meta"]["state_defaulted"])
+
+    @mock.patch("apps.mygarage.views.calculate_core_rating")
+    def test_saved_state_used_and_not_defaulted(self, m_calc):
+        m_calc.return_value = {"core_rating": 2.0, "total_annual_cost": 599100}
+        self._set_cv(state="QLD")
+        resp = self.client.get(reverse("current-vehicle"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["meta"]["state"], "QLD")
+        self.assertFalse(resp.data["meta"]["state_defaulted"])
+        self.assertEqual(m_calc.call_args[0][1], "QLD")
+
+
 class GarageAddDedupeTests(TestCase):
     """Re-adding a vehicle that is already in the garage must not duplicate."""
 
