@@ -336,6 +336,30 @@ def calculate_vehicle_cost_breakdown(
         tyres_annual = int(round_half_up(tyres_annual * km_factor, 0))
         ev_levy = int(round_half_up(ev_levy * km_factor, 0))
 
+    # Per-line user overrides (Edit Vehicle modal). Stored as annual dollars;
+    # the engine works in integer cents. Applied AFTER km scaling: a user's
+    # servicing/tyres figure is their own annual number at their km, not a
+    # dataset line to be re-scaled. (Bug Register: overrides were stored but
+    # never applied, so an insurance edit never moved the card.)
+    def _ov_cents(key):
+        v = user_inputs.get(key)
+        if v is None or v == '':
+            return None
+        return int(round_half_up(float(v) * 100, 0))
+
+    _ins_ov = _ov_cents('insurance_override')
+    if _ins_ov is not None:
+        insurance = _ins_ov
+    _reg_ov = _ov_cents('registration_override')
+    if _reg_ov is not None:
+        rego = _reg_ov
+    _serv_ov = _ov_cents('servicing_override')
+    if _serv_ov is not None:
+        servicing_annual = _serv_ov
+    _tyr_ov = _ov_cents('tyres_override')
+    if _tyr_ov is not None:
+        tyres_annual = _tyr_ov
+
     # 4. If we have no component data, fall back to a canonical 5-year aggregate.
     # Skipped under km scaling: the aggregate lumps fixed and km-dependent
     # costs together, so scaling it would corrupt the fixed lines.
@@ -390,7 +414,13 @@ def calculate_vehicle_cost_breakdown(
 
     resale_annual = 0
     if core_mode in ['true_value', 'full_picture']:
-        if stored_mode and stored_mode.get('resale_credit_pa') is not None:
+        _resale_ov = user_inputs.get('resale_value_override')
+        if _resale_ov is not None and _resale_ov != '':
+            # User's explicit 5-year resale figure (dollars) replaces the
+            # workbook credit, computed the same way as the dataset path.
+            resale_annual = int(round_half_up(
+                max(0, driveaway - float(_resale_ov) * 100) / 5, 0))
+        elif stored_mode and stored_mode.get('resale_credit_pa') is not None:
             resale_annual = int(round_half_up(float(stored_mode['resale_credit_pa']) * 100, 0))
         else:
             depreciation = max(0, driveaway - (getattr(vehicle, 'resale_value_5yr_estimate', 0) or 0))
@@ -469,7 +499,9 @@ def calculate_core_rating(
 
     peer_user_inputs = {
         k: v for k, v in user_inputs.items()
-        if k not in ('driveaway_override', 'loan_amount', 'insurance_override')
+        if k not in ('driveaway_override', 'loan_amount', 'insurance_override',
+                     'registration_override', 'servicing_override',
+                     'tyres_override', 'resale_value_override')
     }
 
     for peer in peers:
@@ -489,6 +521,27 @@ def calculate_core_rating(
         )
         core_rating = float(core_rating)
         stored_total = int(round_half_up(stored_target['mode_coo_pa'] * 100, 0))
+
+        # Per-line override delta: the stored Mode COO embeds the workbook's
+        # dataset lines, so a user override moves the total by the difference
+        # between their figure and the dataset line at the SAME km. Both
+        # breakdowns run at costed_km, so km-dependent lines compare scaled
+        # and fixed lines compare raw; dataset lines in stored_total are
+        # untouched. Without overrides the delta is exactly zero.
+        override_keys = [k for k in ('insurance_override', 'registration_override',
+                                     'servicing_override', 'tyres_override',
+                                     'resale_value_override')
+                         if user_inputs.get(k) is not None]
+        stripped_inputs = {k: v for k, v in user_inputs.items()
+                           if k not in override_keys}
+        override_delta = 0
+        if override_keys:
+            with_ov = calculate_vehicle_cost_breakdown(
+                vehicle, state, core_mode, user_inputs, costed_km=costed_km)
+            without_ov = calculate_vehicle_cost_breakdown(
+                vehicle, state, core_mode, stripped_inputs, costed_km=costed_km)
+            override_delta = with_ov['total_annual'] - without_ov['total_annual']
+
         if costed_km:
             # B-21: km moves the dollars only, and only the km-dependent
             # part. The stored Mode COO is the dataset truth at the category
@@ -499,19 +552,21 @@ def calculate_core_rating(
             # stay as the workbook scored them (D29/D30).
             base_km = vehicle.annual_km_default or 13300
             factor = costed_km / base_km
+            # The km re-base uses DATASET variable lines; an overridden line
+            # is the user's own figure and must not be factor-scaled.
             unscaled = calculate_vehicle_cost_breakdown(
-                vehicle, state, core_mode, user_inputs)
+                vehicle, state, core_mode, stripped_inputs)
             variable_cents = (
                 unscaled['fuel_or_energy_annual']
                 + unscaled['servicing_annual']
                 + unscaled['tyres_annual']
                 + unscaled['ev_levy_annual'])
             total_annual_cost = int(round_half_up(
-                stored_total + variable_cents * (factor - 1), 0))
+                stored_total + variable_cents * (factor - 1), 0)) + override_delta
             annual_co2_kg = int(round_half_up(
                 stored_target['annual_co2_kg'] * factor, 0))
         else:
-            total_annual_cost = stored_total
+            total_annual_cost = stored_total + override_delta
             annual_co2_kg = int(round_half_up(stored_target['annual_co2_kg'], 0))
 
     else:

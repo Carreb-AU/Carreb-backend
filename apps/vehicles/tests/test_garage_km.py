@@ -155,6 +155,36 @@ class BreakdownScalingTests(TestCase):
             v, 'NSW', 'pure_cost', {}, costed_km=15000)
         self.assertEqual(base, same)
 
+    def test_per_line_overrides_replace_dataset_lines(self):
+        v = _catalogue()
+        d = calculate_vehicle_cost_breakdown(v, 'NSW', 'pure_cost', {
+            'insurance_override': 2500,      # $2,500/yr
+            'registration_override': 800,    # $800/yr
+            'servicing_override': 600,       # $600/yr
+            'tyres_override': 400,           # $400/yr
+        })
+        self.assertEqual(d['insurance_annual'], 250000)
+        self.assertEqual(d['registration_annual'], 80000)
+        self.assertEqual(d['servicing_annual'], 60000)
+        self.assertEqual(d['tyres_annual'], 40000)
+
+    def test_override_is_not_km_scaled(self):
+        # A user-entered line is their figure at their km — the servicing
+        # override must NOT be doubled along with the dataset lines.
+        v = _catalogue()
+        d = calculate_vehicle_cost_breakdown(v, 'NSW', 'pure_cost', {
+            'servicing_override': 600,
+        }, costed_km=30000)
+        self.assertEqual(d['servicing_annual'], 60000)
+        self.assertEqual(d['fuel_or_energy_annual'], 400000)  # dataset x2
+
+    def test_resale_override_replaces_workbook_credit(self):
+        v = _catalogue(driveaway_price_by_state={"NSW": 50_000_00})
+        d = calculate_vehicle_cost_breakdown(
+            v, 'NSW', 'true_value', {'resale_value_override': 30000})
+        # (50,000 - 30,000) / 5 = $4,000/yr credit = 400,000 cents.
+        self.assertEqual(d['resale_credit_annual'], 400000)
+
 
 class CoreRatingKmScalingTests(TestCase):
 
@@ -204,6 +234,40 @@ class CoreRatingKmScalingTests(TestCase):
         self.assertEqual(diff['direction'], 'saving')
         self.assertEqual(diff['value_cents'],
                          2_000_000 - res['total_annual_cost'])
+
+    def test_fixed_band_fixed_line_override_moves_total_at_category_km(self):
+        # Insurance $2,500 vs dataset $3,000: the stored Mode COO moves by
+        # exactly the line delta even when km is at the dataset value.
+        v = _catalogue()
+        res = calculate_core_rating(
+            v, 'NSW', 3, 'pure_cost', {'insurance_override': 2500})
+        self.assertEqual(res['total_annual_cost'],
+                         500000 + (250000 - 300000))
+        self.assertEqual(res['core_rating'], 4.0)  # D29/D30: rating unmoved
+
+    def test_fixed_band_override_stacks_with_km_scaling(self):
+        v = _catalogue()
+        res = calculate_core_rating(
+            v, 'NSW', 3, 'pure_cost',
+            {'insurance_override': 2500}, costed_km=30000)
+        # 500000 stored + 700000 km re-base (dataset variable x1) - 50000
+        # insurance delta.
+        self.assertEqual(res['total_annual_cost'],
+                         500000 + 700000 + (250000 - 300000))
+
+    def test_fixed_band_variable_override_is_not_factor_scaled(self):
+        # Servicing override is the user's own annual figure: it replaces
+        # the scaled dataset line, it is not multiplied by the km factor.
+        v = _catalogue()
+        res = calculate_core_rating(
+            v, 'NSW', 3, 'pure_cost',
+            {'servicing_override': 600}, costed_km=30000)
+        # stored 500000 + km re-base on dataset variable lines
+        # (fuel 200000 + servicing 200000 + tyres 300000) x (2 - 1)
+        # + delta (60000 user - 400000 dataset-at-costed-km).
+        # Net servicing = the user's 60000, not 400000 x factor.
+        self.assertEqual(res['total_annual_cost'],
+                         500000 + 700000 + (60000 - 400000))
 
     def test_bev_energy_cycle_g_per_km_not_zero(self):
         v = _catalogue(powertrain_type='bev', tailpipe_co2_g_per_km=None,
