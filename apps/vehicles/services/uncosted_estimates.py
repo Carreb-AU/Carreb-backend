@@ -96,7 +96,7 @@ COSTING_BASIS = "sheet_defaults_v6.4"
 FILL_NOTE = "uncosted-cost-fill 2026-11-02"
 
 # Latest-first preference for duplicate CategoryScoringBounds versions.
-BOUNDS_VERSION_PRIORITY = ["v6.4-audit-29Oct26", "v6.4-audit-27Oct26", "v6.3.4-cat-norm"]
+BOUNDS_VERSION_PRIORITY = ["v6.4-audit-04Nov26", "v6.4-audit-29Oct26", "v6.4-audit-27Oct26", "v6.3.4-cat-norm"]
 
 # Powertrain → sheet energy key (EK): mild hybrids take hybrid modifiers.
 EK_BY_POWERTRAIN = {

@@ -498,8 +498,11 @@ class CurrentVehicleSearchView(views.APIView):
 
         records: list = []  # (record, source) pairs, warmed then carded
 
-        # 1. Carreb catalogue (new vehicles; preferred on collision)
-        carreb_qs = text_filter(Vehicle.objects.filter(is_suppressed=False), brand_field='brand', model_field='model')
+        # 1. Carreb catalogue (new vehicles; preferred on collision).
+        # B-22: held (suppressed) listings are excluded from every catalogue
+        # surface but stay selectable here — a held car can be a current
+        # vehicle, just never a match/band/dial entry.
+        carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
         if year:
             carreb_qs = carreb_qs.filter(year=year)
         for v in carreb_qs.order_by('brand', 'model', '-year')[:10]:
@@ -760,9 +763,9 @@ class CurrentVehicleSuggestionsView(views.APIView):
 
     def _cache_key(self, prefix: str, *parts) -> str:
         safe = '_'.join(str(p).lower().replace(' ', '_') for p in parts if p is not None)
-        # v2: suppressed (held) listings excluded — bumps the namespace so
-        # pre-fix 24 h cached dropdowns are not reused.
-        return f'cv_typeahead_v2_{prefix}_{safe}'[:250]
+        # v3: B-22 — held listings included for current-vehicle selection;
+        # bumps the namespace so pre-B-22 24 h cached results are not reused.
+        return f'cv_typeahead_v3_{prefix}_{safe}'[:250]
 
     def _other_option(self) -> dict:
         return {
@@ -792,6 +795,9 @@ class CurrentVehicleSuggestionsView(views.APIView):
             "powertrain_type": v.powertrain_type,
             "image_url": image_url,
             "name": str(v),
+            # B-22: held cars are selectable here; the FE shows the amber
+            # notice when this is true.
+            "is_suppressed": v.is_suppressed,
         }
 
     def _normalize_gvg(self, r: VehicleIdentity) -> dict:
@@ -845,8 +851,9 @@ class CurrentVehicleSuggestionsView(views.APIView):
             return ((make or '').casefold(), (model_name or '').casefold(),
                     (variant or '').casefold(), yr)
 
-        # 1. Carreb catalogue (preferred on collision)
-        carreb_qs = text_filter(Vehicle.objects.filter(is_suppressed=False), brand_field='brand', model_field='model')
+        # 1. Carreb catalogue (preferred on collision). B-22: held listings
+        # stay selectable as a current vehicle (card flags is_suppressed).
+        carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
         if year:
             carreb_qs = carreb_qs.filter(year=year)
         for v in carreb_qs.order_by('brand', 'model', '-year')[:self.MAX_RESULTS]:
@@ -926,7 +933,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
         if cached is None:
             q_make = make.casefold()
             carreb_models = set(
-                Vehicle.objects.filter(brand__iexact=q_make, is_suppressed=False).values_list('model', flat=True).distinct()
+                Vehicle.objects.filter(brand__iexact=q_make).values_list('model', flat=True).distinct()
             )
             gvg_models = set(
                 VehicleIdentity.objects.filter(make__iexact=q_make).values_list('model', flat=True).distinct()
@@ -949,7 +956,7 @@ class CurrentVehicleSuggestionsView(views.APIView):
         cached = cache.get(cache_key)
         if cached is None:
             carreb_years = set(
-                Vehicle.objects.filter(brand__iexact=make, model__iexact=model, is_suppressed=False).values_list('year', flat=True).distinct()
+                Vehicle.objects.filter(brand__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()
             )
             gvg_years = set(
                 VehicleIdentity.objects.filter(make__iexact=make, model__iexact=model).values_list('year', flat=True).distinct()

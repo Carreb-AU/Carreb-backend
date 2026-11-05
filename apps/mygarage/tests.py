@@ -844,9 +844,11 @@ class CurrentVehicleSearchAIFallbackTests(TestCase):
         self.assertTrue(any(r["source"] == "carreb" for r in resp.data))
 
     @mock.patch("apps.mygarage.views.search_ai_vehicles")
-    def test_suppressed_listing_never_returned(self, m_ai):
-        # Held listings (B-12) are invisible to vehicle search; the query
-        # falls through to the AI path like any absent vehicle.
+    def test_held_listing_selectable_as_current_vehicle(self, m_ai):
+        # B-22: held listings are hidden from catalogue surfaces but
+        # selectable as a current vehicle. The resolver short-circuits on
+        # the catalogue hit — no AI lookup runs — and the card flags the
+        # car as suppressed so the FE shows the amber notice.
         make_vehicle(brand="Aston Martin", model="Vantage",
                      is_suppressed=True)
         m_ai.return_value = ([], False)
@@ -854,7 +856,10 @@ class CurrentVehicleSearchAIFallbackTests(TestCase):
                                 {"query": "aston martin vantage"},
                                 format="json")
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse(any(r["source"] == "carreb" for r in resp.data))
+        carreb = [r for r in resp.data if r["source"] == "carreb"]
+        self.assertEqual(len(carreb), 1)
+        self.assertTrue(carreb[0]["is_suppressed"])
+        m_ai.assert_not_called()
 
     @mock.patch("apps.mygarage.views.get_vehicle_image_url",
                  return_value="https://img.example/fallback.jpg")

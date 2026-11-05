@@ -511,6 +511,22 @@ class CoreScoringBlockTests(TestCase):
         self.assertEqual(
             card['core_arcs']['modes']['B']['cost_arc']['needle'], 1.0)
 
+    def test_latest_scoring_version_bounds_win(self):
+        # B-15: after the 04-Nov load, arcs must read THIS file's bounds —
+        # not the stale 29-Oct rows still sitting in the table.
+        from apps.vehicles.models import CategoryScoringBounds
+        self._bounds()  # v6.4-audit-29Oct26: 6000–12000
+        CategoryScoringBounds.objects.create(
+            fcai_category="Ute", core_mode="B", vehicle_count=10,
+            cat_min_coo=7000.0, cat_max_coo=14000.0,
+            cat_min_co2=100.0, cat_max_co2=300.0,
+            scoring_version="v6.4-audit-04Nov26")
+        vehicle = _make_catalogue(mode_data_by_state=self._mode_data())
+        card = build_vehicle_card(vehicle, 'carreb', state='NSW')
+        cost_arc = card['core_arcs']['modes']['B']['cost_arc']
+        self.assertEqual(cost_arc['min'], 7000.0)
+        self.assertEqual(cost_arc['max'], 14000.0)
+
     def test_gvg_card_carries_bounds_but_no_rating(self):
         # GVG/AI rows are never scored: arcs expose the category bounds
         # (so the badge can draw its scale) but ratings stay absent.

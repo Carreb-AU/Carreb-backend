@@ -51,6 +51,10 @@ CARD_FIELDS = (
     'fuel_range_km',
     # media / spotlight
     'image_url', 'spotlight_data', 'research_status',
+    # B-22: held (suppressed) listings are hidden from catalogue surfaces but
+    # selectable as a current vehicle — the card must flag them so the FE can
+    # show the amber "official data incomplete" notice.
+    'is_suppressed',
     # pricing & costs (cents)
     'driveaway_price', 'driveaway_price_by_state',
     'servicing_5yr_estimate', 'tyre_replacement_estimate',
