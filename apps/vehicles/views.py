@@ -74,11 +74,20 @@ class VehicleDetailView(views.APIView):
 
     def get(self, request, vehicle_id):
         from django.core.cache import cache
-        from apps.vehicles.services.vehicle_card import catalogue_detail_payload
+        from apps.vehicles.services.vehicle_card import (
+            build_core_arcs, catalogue_detail_payload)
 
         vehicle = Vehicle.objects.filter(id=vehicle_id).first()
         if vehicle is not None:
-            return Response(VehicleDetailSerializer(vehicle).data)
+            data = VehicleDetailSerializer(vehicle).data
+            # B-15: the badge arcs need CategoryScoringBounds, which the ORM
+            # serializer never exposed — attach the same core_arcs block the
+            # garage cards carry so the detail modal can draw the badge.
+            category = data.get('fcai_category') or vehicle.cost_category
+            if category:
+                state = (request.query_params.get('state') or 'NSW').upper()
+                data['core_arcs'] = build_core_arcs(vehicle, category, state)
+            return Response(data)
 
         state = (request.query_params.get('state') or 'NSW').upper()
         cache_key = f"vdetail:{vehicle_id}:{state}"

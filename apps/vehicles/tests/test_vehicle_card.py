@@ -539,3 +539,52 @@ class CoreScoringBlockTests(TestCase):
         self.assertEqual(cost_arc['min'], 6000.0)
         self.assertEqual(cost_arc['max'], 12000.0)
         self.assertIsNone(cost_arc['needle'])
+
+
+class VehicleDetailArcsTests(TestCase):
+    """B-15: GET /api/vehicles/<id>/ must serve core_arcs for catalogue ids
+    too — the ORM serializer alone never exposed CategoryScoringBounds, so
+    the detail modal could not draw the badge arcs."""
+
+    def setUp(self):
+        from django.urls import reverse
+        from apps.vehicles.models import CategoryScoringBounds
+        CategoryScoringBounds.objects.create(
+            fcai_category="Ute", core_mode="B", vehicle_count=10,
+            cat_min_coo=6000.0, cat_max_coo=12000.0,
+            cat_min_co2=100.0, cat_max_co2=300.0,
+            scoring_version="v6.4-audit-29Oct26")
+        self.vehicle = _make_catalogue(mode_data_by_state={
+            "NSW": {"B": {"stars": 4.0, "band_name": "Smart Move",
+                          "core_rating_1dp": 3.8, "mode_coo_pa": 9000.0,
+                          "annual_co2_kg": 2500.0,
+                          "co2_fuel_g_km": 150.0, "co2_grid_g_km": 0.0}}})
+        self.url = reverse('vehicle-detail',
+                           kwargs={'vehicle_id': self.vehicle.id})
+
+    def test_detail_returns_core_arcs(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        arcs = resp.json()['core_arcs']
+        cost_arc = arcs['modes']['B']['cost_arc']
+        self.assertEqual(cost_arc['value'], 9000.0)
+        self.assertEqual(cost_arc['min'], 6000.0)
+        self.assertEqual(cost_arc['max'], 12000.0)
+        self.assertAlmostEqual(cost_arc['needle'], 0.5)
+        co2_arc = arcs['modes']['B']['co2_arc']
+        self.assertEqual(co2_arc['value'], 150.0)
+
+    def test_detail_state_param_selects_mode_block(self):
+        mode_data = {"VIC": {"B": {"stars": 4.0, "band_name": "Smart Move",
+                                   "core_rating_1dp": 3.8,
+                                   "mode_coo_pa": 9000.0,
+                                   "annual_co2_kg": 2500.0,
+                                   "co2_fuel_g_km": 150.0,
+                                   "co2_grid_g_km": 0.0}}}
+        self.vehicle.mode_data_by_state = mode_data
+        self.vehicle.save()
+        resp = self.client.get(self.url, {'state': 'VIC'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['core_arcs']['modes']['B']
+                         ['cost_arc']['value'], 9000.0)
+

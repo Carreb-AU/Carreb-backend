@@ -436,6 +436,20 @@ def _core_scoring_block(card: dict, record, source: str,
         getattr(record, 'cost_category', None)
     if not category:
         return
+    card['core_arcs'] = build_core_arcs(record, category, state)
+
+
+def build_core_arcs(record, category: str, state: Optional[str]) -> dict:
+    """Category-bounds arc data per Decision E / B-15.
+
+    One ``cost_arc`` (value = mode COO p.a. vs cat_min/max_coo) and one
+    ``co2_arc`` (value = energy-cycle g/km vs cat_min/max_co2) per mode,
+    each with a precomputed needle fraction clamped 0–1, plus
+    ``km_pa_used`` so annual-kg displays can convert. Bounds come from the
+    same version priority the rating engine uses, so the arcs line up with
+    the stars. Used by garage cards and by the catalogue vehicle detail
+    endpoint.
+    """
     from apps.vehicles.models import (
         CategoryAnnualKMBenchmark, CategoryScoringBounds)
     from apps.vehicles.services.uncosted_estimates import BOUNDS_VERSION_PRIORITY
@@ -450,6 +464,7 @@ def _core_scoring_block(card: dict, record, source: str,
         if bounds:
             break
 
+    mode_data = getattr(record, 'mode_data_by_state', None)
     state_block = {}
     if mode_data:
         resolved_state = state if state in mode_data else \
@@ -472,7 +487,7 @@ def _core_scoring_block(card: dict, record, source: str,
             'co2_arc': _arc_block(
                 co2, b.cat_min_co2 if b else None, b.cat_max_co2 if b else None),
         }
-    card['core_arcs'] = arcs
+    return arcs
 
 
 def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict:
