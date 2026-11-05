@@ -80,6 +80,65 @@ class ResolveGarageKmTests(TestCase):
             "Costed at 14,000 km/yr, your setting.")
 
 
+class LaunchAmendmentTests(TestCase):
+    """6-Nov register amendments: band name/slug, neutral direction,
+    off-grid CO2 (B-29 blocker, B-34, off-grid EV proof)."""
+
+    def test_band_name_and_slug_everyday_legend(self):
+        from apps.vehicles.services.rating_engine import get_band_name, get_band_slug
+        self.assertEqual(get_band_name(4.9), "Everyday Legend™")
+        self.assertEqual(get_band_slug(4.9), "everyday-legend")
+        self.assertEqual(get_band_name(5.0), "Everyday Legend™")
+        self.assertEqual(get_band_slug(3.9), "smart-move")
+
+    def test_est_cost_difference_same_when_it_rounds_to_zero(self):
+        v = _catalogue()
+        base = calculate_core_rating(v, 'NSW', 3, 'pure_cost', {},
+                                     current_vehicle_annual_cost=0)
+        total = base['total_annual_cost']
+
+        # Card costs 30c more than the baseline -> rounds to $0/yr -> "same".
+        res = calculate_core_rating(v, 'NSW', 3, 'pure_cost', {},
+                                    current_vehicle_annual_cost=total - 30)
+        diff = res['est_cost_difference']
+        self.assertEqual(diff['direction'], 'same')
+        self.assertEqual(diff['value_cents'], 0)
+        self.assertEqual(diff['est_5yr_savings'], 0)
+
+        # A real $500 difference still colours (baseline $500 cheaper than
+        # the card -> the card is more expensive).
+        res = calculate_core_rating(v, 'NSW', 3, 'pure_cost', {},
+                                    current_vehicle_annual_cost=total - 50000)
+        self.assertEqual(res['est_cost_difference']['direction'],
+                         'more_expensive')
+        self.assertEqual(res['est_cost_difference']['value_cents'], 50000)
+
+    def test_off_grid_override_scales_bev_energy_cycle_co2(self):
+        v = _catalogue(powertrain_type='bev', tailpipe_co2_g_per_km=0,
+                       energy_consumption_wh_km=180,
+                       fuel_cost_by_state={}, ev_levy_by_state={},
+                       electricity_cost_by_state={"NSW": 100000},
+                       co2_energy_cycle_g_per_km=130.7)
+        # No override: dataset figure verbatim.
+        res0 = calculate_core_rating(v, 'NSW', 3, 'pure_cost', {})
+        self.assertEqual(res0['co2_energy_cycle_g_per_km'], 130.7)
+        self.assertEqual(res0['annual_co2_kg'], 2000)
+
+        # 50% off-grid replaces the dataset 0.20 share:
+        # 130.7 x (1 - 0.50) / (1 - 0.20) = 81.7, and the kg line scales
+        # by the same ratio (2000 x 81.7/130.7 = 1250).
+        res50 = calculate_core_rating(v, 'NSW', 3, 'pure_cost',
+                                      {'off_grid_energy_percent': 50})
+        self.assertEqual(res50['co2_energy_cycle_g_per_km'], 81.7)
+        self.assertEqual(res50['annual_co2_kg'], 1250)
+
+        # Explicit 0 behaves like absent.
+        res_same = calculate_core_rating(v, 'NSW', 3, 'pure_cost',
+                                         {'off_grid_energy_percent': 0})
+        self.assertEqual(res_same['co2_energy_cycle_g_per_km'], 130.7)
+        self.assertEqual(res_same['annual_co2_kg'], 2000)
+
+
 class BreakdownScalingTests(TestCase):
 
     def test_only_km_dependent_lines_scale(self):

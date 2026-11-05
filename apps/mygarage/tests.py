@@ -744,6 +744,23 @@ class RideRevealShareCardTests(TestCase):
         self.assertEqual(ctx["display_name"], "Stephen")
         self.assertEqual(ctx["avatar_initial"], "S")
 
+    def test_plate_state_matches_user_state(self):
+        # B-16: the plate header must show the user's state (never a
+        # hardcoded "WESTERN AUSTRALIA"), or nothing when no state.
+        from apps.mygarage.models import UserPriorityState
+        from apps.mygarage.share_card import (
+            build_share_card_context, render_share_card_html)
+        ctx = build_share_card_context(self.result)
+        self.assertEqual(ctx["plate_state"], "")
+
+        UserPriorityState.objects.create(user=self.user, state='QLD')
+        ctx = build_share_card_context(self.result)
+        self.assertEqual(ctx["plate_state"], "QUEENSLAND")
+
+        html = render_share_card_html(self.result)
+        self.assertIn("QUEENSLAND", html)
+        self.assertNotIn("WESTERN", html)
+
     def test_context_color_without_known_name_has_no_hex(self):
         from apps.mygarage.share_card import build_share_card_context
         self.result.favorite_color = "Sparkle Unicorn"

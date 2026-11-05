@@ -90,7 +90,7 @@ BAND_BY_STARS = {
     2: "The Detour™",
     3: "Steady Cruiser™",
     4: "Smart Move™",
-    5: "Every Day Legend™",
+    5: "Everyday Legend™",
 }
 COSTING_BASIS = "sheet_defaults_v6.4"
 FILL_NOTE = "uncosted-cost-fill 2026-11-02"

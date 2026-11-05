@@ -214,9 +214,11 @@
       {% if license_plate %}
       <div class="plate">
         <div class="plate-header">
-          <span>WESTERN</span>
+          {% if plate_state %}
+          <span>{{ plate_state }}</span>
+          {% else %}
           <span class="plate-dot"></span>
-          <span>AUSTRALIA</span>
+          {% endif %}
         </div>
         <div class="plate-body">{{ license_plate }}</div>
       </div>

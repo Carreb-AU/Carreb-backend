@@ -38,9 +38,6 @@ logger = logging.getLogger(__name__)
 
 SHEET_NAME = 'Consolidated Vehicles v6.4'
 
-# Research Status values that count as "on sale" (section 2)
-ON_SALE_STATUSES = ('v6.3.4 seed', 'Confirmed')
-
 # Header names for the scalar columns the parser needs.
 COL_MAKE = 'Make'
 COL_MODEL = 'Model'
@@ -146,15 +143,19 @@ class ParsedWorkbook:
     skipped_suppressed: int = 0
 
     def dial_rows(self):
-        """Flatten to dial row data for on-sale, unsuppressed listings."""
+        """Flatten to dial row data for live (unsuppressed) listings.
+
+        is_suppressed is the only gate (B-22, locked rule 4-Nov): research
+        status vocabulary ('Pending verify', 'Coming FY26', ...) must not
+        exclude a live car from the Dial bands, counts or lists — 6-Nov fix
+        for the missing 109 (104 Pending verify + 5 Coming FY26).
+        """
         from apps.vehicles.services.core_dial import (
             co2_cap_for, dollars_to_cents, round_half_up,
         )
 
         rows: List[DialRowData] = []
         for version_id, listing in enumerate(self.listings, start=1):
-            if listing.research_status not in ON_SALE_STATUSES:
-                continue
             if listing.is_suppressed:
                 self.skipped_suppressed += 1
                 continue

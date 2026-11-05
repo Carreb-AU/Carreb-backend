@@ -58,6 +58,25 @@ def _absolute(url):
     return url
 
 
+# Plate header states the user's state, never a hardcoded one (B-16: a QLD
+# user was shown "WESTERN AUSTRALIA").
+PLATE_STATE_NAMES = {
+    'NSW': 'NEW SOUTH WALES',
+    'VIC': 'VICTORIA',
+    'QLD': 'QUEENSLAND',
+    'SA': 'SOUTH AUSTRALIA',
+    'WA': 'WESTERN AUSTRALIA',
+    'TAS': 'TASMANIA',
+    'NT': 'NORTHERN TERRITORY',
+    'ACT': 'AUSTRALIAN CAPITAL TERRITORY',
+}
+
+
+def _plate_state_name(user):
+    state = (getattr(getattr(user, 'priority_state', None), 'state', None) or '').upper()
+    return PLATE_STATE_NAMES.get(state, '')
+
+
 def _color_hex(label):
     text = (label or '').casefold()
     for name, hex_value in COLOR_HEX.items():
@@ -79,6 +98,7 @@ def build_share_card_context(result):
         'archetype_tagline': result.archetype_tagline,
         'vehicle_image_url': _absolute(getattr(vehicle, 'image_url', None)),
         'license_plate': result.custom_plate or '',
+        'plate_state': _plate_state_name(user),
         'favorite_color_hex': _color_hex(result.favorite_color),
         'favorite_color_label': result.favorite_color or '',
         'traits': list(traits)[:5],

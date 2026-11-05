@@ -207,6 +207,30 @@ class NewLayoutImportTests(TestCase):
         self.assertEqual(mode_b['co2_grid_g_km'], 0.0)
         self.assertEqual(mode_b['co2_tailpipe_pa_kg'], 0.0)
 
+    def test_dial_includes_live_pending_verify_listing(self):
+        # 6-Nov (B-22 locked rule): is_suppressed is the only dial gate.
+        # A live 'Pending verify' listing — 104 such cars plus 5 'Coming
+        # FY26' in the 04-Nov file — must produce dial rows, not vanish
+        # from bands, counts and "View … vehicles" lists.
+        path = os.path.join(self.tmpdir, 'synthetic-pending-verify.xlsx')
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = SHEET_NAME
+        ws.append(HEADERS)
+        for state in AU_STATES:
+            for mode in ('B', 'E', 'C', 'F'):
+                r = _row('L001', False, state, mode)
+                r['Research Status'] = 'Pending verify'
+                ws.append([r[h] for h in HEADERS])
+        wb.save(path)
+
+        parsed = parse_workbook(path, as_at='2026-11-06')
+        rows = parsed.dial_rows()
+        self.assertEqual(len(rows), 8)
+        self.assertEqual({r.state for r in rows}, set(AU_STATES))
+        self.assertEqual(parsed.skipped_suppressed, 0)
+        self.assertEqual(parsed.problems, [])
+
     def test_dial_parse_skips_suppressed_listing(self):
         import_consolidated_vehicles(self.path)  # rows exist; dial is parse-only
         parsed = parse_workbook(self.path, as_at='2026-10-21')

@@ -5,24 +5,60 @@ import statistics
 from django.utils import timezone
 from apps.vehicles.models import Vehicle, PowertrainType
 from apps.vehicles.selectors import get_vehicles_by_fcai_category
-from apps.vehicles.services.core_dial import round_half_up, _co2_g_per_km
+from apps.vehicles.services.core_dial import round_half_up, _co2_g_per_km, _bev_g_per_km
+
+# D39 bakes a standard 0.20 off-grid (home solar / non-grid) charging share
+# into the dataset energy-cycle figures.
+DATASET_OFF_GRID_SHARE = 0.20
 
 
-def _energy_cycle_g_per_km(vehicle, state: str) -> float:
+def _off_grid_fraction(user_inputs) -> float:
+    """The user's off-grid charging share (0-1) from Edit Vehicle, if set.
+
+    Accepts 0-1 or 0-100 ('off_grid_energy_percent'). Absent/invalid = 0.
+    """
+    raw = (user_inputs or {}).get('off_grid_energy_percent')
+    if raw is None or raw == '':
+        return 0.0
+    try:
+        pct = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if pct > 1:
+        pct = pct / 100
+    return min(max(pct, 0.0), 1.0)
+
+
+def _energy_cycle_g_per_km(vehicle, state: str, user_inputs=None) -> float:
     """Energy-cycle CO2 intensity for the g/km card row.
 
     Prefers the workbook column; falls back to computing it (grid scope 2+3
     for BEVs from Wh/km, tailpipe otherwise) so even rows the ETL left blank
     agree with their kg p.a. figure.
+
+    The user's off-grid charging share (Edit Vehicle) replaces the dataset's
+    standard 0.20 share on the grid component only — the fuel component of
+    a PHEV is untouched (D39 basis).
     """
     stored = getattr(vehicle, 'co2_energy_cycle_g_per_km', None)
-    if stored:
-        return float(stored)
-    return _co2_g_per_km(vehicle, state)
+    g_per_km = float(stored) if stored else _co2_g_per_km(vehicle, state)
+    share = _off_grid_fraction(user_inputs)
+    if not share or not g_per_km:
+        return g_per_km
+    powertrain = (getattr(vehicle, 'powertrain_type', None) or '').lower()
+    if powertrain == 'bev':
+        return round(g_per_km * (1 - share) / (1 - DATASET_OFF_GRID_SHARE), 1)
+    if powertrain in ('phev', 'reev'):
+        grid_raw = _bev_g_per_km(vehicle, state)
+        if grid_raw <= 0:
+            return g_per_km
+        fuel_component = max(g_per_km - grid_raw * (1 - DATASET_OFF_GRID_SHARE), 0)
+        return round(fuel_component + grid_raw * (1 - share), 1)
+    return g_per_km
 
 # Trademarked Band Names
 BAND_NAMES = {
-    (4.5, 5.0): "Every Day Legend™",
+    (4.5, 5.0): "Everyday Legend™",
     (3.5, 4.4): "Smart Move™",
     (2.5, 3.4): "Steady Cruiser™",
     (1.5, 2.4): "The Detour™",
@@ -42,7 +78,7 @@ def get_band_slug(rating) -> str:
     if rating is None:
         return ""
     rating = float(rating)
-    if rating >= 4.5: return "every-day-legend"
+    if rating >= 4.5: return "everyday-legend"
     if rating >= 3.5: return "smart-move"
     if rating >= 2.5: return "steady-cruiser"
     if rating >= 1.5: return "the-detour"
@@ -478,6 +514,15 @@ def calculate_core_rating(
     state = (state or 'NSW').upper()
     fcai_category = vehicle.fcai_category
 
+    # Off-grid charging share (Edit Vehicle): scales the grid component of
+    # the energy-cycle CO2; 1.0 = the dataset figure (D39 standard share).
+    off_grid_co2_ratio = 1.0
+    if _off_grid_fraction(user_inputs):
+        stored_gkm = _energy_cycle_g_per_km(vehicle, state)
+        adjusted_gkm = _energy_cycle_g_per_km(vehicle, state, user_inputs)
+        if stored_gkm > 0:
+            off_grid_co2_ratio = adjusted_gkm / stored_gkm
+
     # Target vehicle breakdown and stored workbook data.
     stored_target = _get_stored_mode_data(vehicle, state, core_mode)
     breakdown = calculate_vehicle_cost_breakdown(vehicle, state, core_mode, user_inputs, costed_km=costed_km)
@@ -564,10 +609,11 @@ def calculate_core_rating(
             total_annual_cost = int(round_half_up(
                 stored_total + variable_cents * (factor - 1), 0)) + override_delta
             annual_co2_kg = int(round_half_up(
-                stored_target['annual_co2_kg'] * factor, 0))
+                stored_target['annual_co2_kg'] * factor * off_grid_co2_ratio, 0))
         else:
             total_annual_cost = stored_total + override_delta
-            annual_co2_kg = int(round_half_up(stored_target['annual_co2_kg'], 0))
+            annual_co2_kg = int(round_half_up(
+                stored_target['annual_co2_kg'] * off_grid_co2_ratio, 0))
 
     else:
         # ----- NON-CATALOGUE PATH (GVG / legacy / manual entry) -----
@@ -590,11 +636,14 @@ def calculate_core_rating(
         else:
             base_disp = f"Est. ${int(round(baseline / 100)):,}/year\n      ({fcai_category} category average)"
 
-        if diff < 0:
+        # Direction follows the DISPLAYED dollar figure: a difference that
+        # rounds to $0/yr is "same" so the FE never colours a zero
+        # (B-34, Jock 6-Nov).
+        if diff < 0 and int(round(abs(diff) / 100)) > 0:
             direction = "more_expensive"
             val = abs(diff)
             bucket = None
-        elif diff > 0:
+        elif diff > 0 and int(round(diff / 100)) > 0:
             direction = "saving"
             val = diff
             s5 = val * 5
@@ -628,7 +677,7 @@ def calculate_core_rating(
 
     # Calculate peer distribution and medians
     peer_band_stats = {
-        "every-day-legend": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
+        "everyday-legend": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
         "smart-move": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
         "steady-cruiser": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
         "the-detour": {"count": 0, "breakdowns": [], "co2": [], "totals": []},
@@ -721,7 +770,8 @@ def calculate_core_rating(
         # Energy-cycle basis (tailpipe for combustion, grid scope 2+3 for
         # BEVs) so the g/km card row agrees with the kg p.a. row — a BEV
         # shows its real ~130 g/km, not "~0" from a missing tailpipe figure.
-        "co2_energy_cycle_g_per_km": float(_energy_cycle_g_per_km(vehicle, state) or 0),
+        "co2_energy_cycle_g_per_km": float(
+            _energy_cycle_g_per_km(vehicle, state, user_inputs) or 0),
         "annual_co2_kg": annual_co2_kg,
         "peer_band_distribution": peer_distribution,
         "peer_band_medians": peer_band_medians,
