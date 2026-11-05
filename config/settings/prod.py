@@ -31,6 +31,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://carreb.com.au",
     "https://carreb-developement.vercel.app",
     "https://www.carreb-developement.vercel.app",
+    "https://carreb-developement-lovat.vercel.app",
 ]
 
 # CORS settings
@@ -46,7 +47,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://www.carreb.com.au",
     "https://carreb.com.au",
     "https://carreb-developement.vercel.app",
-    "https://www.carreb-developement.vercel.app"
+    "https://www.carreb-developement.vercel.app",
+    "https://carreb-developement-lovat.vercel.app",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
