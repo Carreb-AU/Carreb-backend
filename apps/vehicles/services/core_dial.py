@@ -418,109 +418,41 @@ def _annual_co2_kg(record, km: int, state: str = None) -> int:
     return int(round_half_up(tailpipe * km / 1000, 0))
 
 
-# Minimum ownership history before annualising an odometer reading: under
-# ~3 months the rate extrapolates to noise.
-MIN_OWNERSHIP_YEARS = 0.25
-# Guard rails for annualised odometer rates (km/yr). Within this range the
-# owner's real usage is trusted; outside it the class benchmark wins —
-# an absurd rate nearly always means a wrong purchase date.
+# Acceptable typed km/yr range for the Edit Vehicle km field (the B-02
+# guard rails, now the typing cap only — the odometer derivation they
+# guarded was retired 6-Nov-26: odometer ÷ time since purchase assumes the
+# car was bought new and overstates on every used car, and readings outside
+# the rails fell back silently to the ABS default).
 KM_RATE_FLOOR = 3_000
 KM_RATE_CEIL = 60_000
 
 
-def annual_km_from_odometer(odometer_reading, purchase_date, today=None):
-    """Annualised km from the owner's odometer + purchase date (B-02).
-
-    Returns None when the inputs can't produce a trustworthy rate (missing
-    either value, purchase date in the future, under 3 months of ownership,
-    or a rate outside the guard rails) — callers fall back to the class
-    benchmark.
-    """
-    if not odometer_reading or not purchase_date:
-        return None
-    from datetime import date
-    today = today or date.today()
-    days = (today - purchase_date).days
-    if days <= 0:
-        return None
-    years = days / 365.25
-    if years < MIN_OWNERSHIP_YEARS:
-        return None
-    rate = round(odometer_reading / years / 100) * 100
-    if rate < KM_RATE_FLOOR or rate > KM_RATE_CEIL:
-        return None
-    return rate
-
-
 # B-21 garage-level km normalisation ------------------------------------------
 # ABS Survey of Motor Vehicle Use 2020, all vehicles, Australia (file 16,
-# Section B). The garage default when no current-vehicle odometer yields a
-# trustworthy rate.
+# Section B). The garage default until the user sets their own km in Edit
+# Vehicle.
 GARAGE_KM_DEFAULT = 12_100
 
-# Whole km/yr the user may set in Edit Vehicle; matches the odometer guard
-# rails so a typed value can't be more optimistic than a derived one.
+# Whole km/yr the user may type in Edit Vehicle.
 GARAGE_KM_MIN = KM_RATE_FLOOR
 GARAGE_KM_MAX = KM_RATE_CEIL
 
 
-def _coerce_purchase_date(value):
-    """Best-effort parse of a purchase-date override.
-
-    The Edit Vehicle field is labelled MM/YY but older clients send ISO or
-    other shapes; all are accepted. Returns a date or None.
-    """
-    from datetime import date, datetime
-    if isinstance(value, date):
-        return value
-    s = str(value).strip()
-    if not s:
-        return None
-    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%m/%Y', '%m/%y',
-                '%Y/%m/%d'):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            continue
-    return None
-
-
-def resolve_garage_km(priority_state, current_vehicle, cv_inputs=None):
+def resolve_garage_km(priority_state):
     """The km/yr every garage and current-vehicle card is costed at (B-21).
 
-    Precedence:
-      1. the user's own Edit Vehicle setting (locks out re-derivation)
-      2. odometer ÷ years since purchase date, live from the current vehicle
-         (rounded to 100, with the B-02 guard rails)
-      3. the ABS 2020 national default of 12,100 km/yr
+    Since 6-Nov-26 km p.a. is a direct user input only (Jock's ruling): the
+    user's Edit Vehicle value if set, else the ABS 2020 national default of
+    12,100 km/yr. The old odometer ÷ years-since-purchase derivation is
+    retired — it assumed the car was bought new and overstated on used
+    cars; odometer and purchase date stay on the record, optional, feeding
+    resale only.
 
-    ``cv_inputs`` are the current vehicle's field overrides (the Edit
-    Vehicle modal saves odometer/purchase_date through the override
-    endpoint, not the CV record) — they fill in whichever model field is
-    empty, so an odometer update flows into every card without a frontend
-    change.
-
-    Returns (km, source) where source is 'user', 'odometer' or 'default' —
-    the copy line under the card dollars depends on it.
+    Returns (km, source) where source is 'user' or 'default' — the copy
+    line under the card dollars depends on it.
     """
     if priority_state is not None and priority_state.garage_km:
-        if priority_state.garage_km_user_set:
-            return priority_state.garage_km, 'user'
-        return priority_state.garage_km, 'odometer'
-    if current_vehicle is not None:
-        odometer = current_vehicle.odometer_reading
-        purchase_date = current_vehicle.purchase_date
-        if cv_inputs:
-            if odometer is None and cv_inputs.get('odometer_reading') is not None:
-                try:
-                    odometer = int(float(cv_inputs['odometer_reading']))
-                except (TypeError, ValueError):
-                    odometer = None
-            if purchase_date is None and cv_inputs.get('purchase_date'):
-                purchase_date = _coerce_purchase_date(cv_inputs['purchase_date'])
-        derived = annual_km_from_odometer(odometer, purchase_date)
-        if derived:
-            return derived, 'odometer'
+        return priority_state.garage_km, 'user'
     return GARAGE_KM_DEFAULT, 'default'
 
 

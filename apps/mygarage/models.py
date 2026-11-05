@@ -124,10 +124,10 @@ class UserPriorityState(models.Model):
     priority_slider_position = models.IntegerField(default=1) # 1-5, default Mostly cost (D28)
     active_core_mode = models.CharField(max_length=50, choices=CoreMode.choices, default=CoreMode.PURE_COST)
     # B-21 garage-level km normalisation: every garage/current-vehicle card is
-    # costed at this many km/yr. User-edited once in Edit Vehicle
-    # (garage_km_user_set locks it against odometer re-derivation); otherwise
-    # derived live from the current vehicle's odometer + purchase date, else
-    # the ABS 2020 national default (see resolve_garage_km in core_dial).
+    # costed at this many km/yr. Direct user input only — set in Edit
+    # Vehicle; when null the ABS 2020 national default applies (the odometer
+    # derivation was retired 6-Nov-26; odometer and purchase date now feed
+    # resale only).
     garage_km = models.IntegerField(null=True, blank=True)
     garage_km_user_set = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)

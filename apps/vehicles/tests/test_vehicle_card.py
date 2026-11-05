@@ -329,21 +329,17 @@ class GvgCurrentVehicleEngineDataTests(TestCase):
         # g/km = 180 Wh/km x (0.64 scope2 + 0.07 scope3) = 127.8
         self.assertEqual(ed['annual_co2_kg'], round(127.8 * 15000 / 1000))
 
-    def test_annual_km_from_odometer_guard_rails(self):
-        from datetime import date
-        from apps.vehicles.services.core_dial import annual_km_from_odometer
-        today = date(2026, 11, 3)
-        # 20,000 km over 2 years -> 10,000 km/yr (rounded to 100).
+    def test_garage_km_typing_cap_replaces_odometer_guard_rails(self):
+        """The odometer derivation and its guard rails were retired
+        6-Nov-26 (Jock): odometer/date pairs no longer produce a km rate:
+        without a user setting every card costs at the ABS default. The
+        old rail bounds live on as the Edit Vehicle typing cap."""
+        from apps.vehicles.services import core_dial
         self.assertEqual(
-            annual_km_from_odometer(20_000, date(2024, 11, 3), today), 10_000)
-        self.assertIsNone(annual_km_from_odometer(None, date(2024, 11, 3), today))
-        self.assertIsNone(annual_km_from_odometer(20_000, None, today))
-        # Future / very recent purchase dates can't annualise.
-        self.assertIsNone(annual_km_from_odometer(2_000, date(2026, 10, 1), today))
-        self.assertIsNone(annual_km_from_odometer(500, date(2027, 1, 1), today))
-        # Absurd rates (wrong date entry) fall back to the benchmark.
-        self.assertIsNone(annual_km_from_odometer(300_000, date(2026, 9, 1), today))
-        self.assertIsNone(annual_km_from_odometer(200, date(2010, 1, 1), today))
+            core_dial.resolve_garage_km(None),
+            (core_dial.GARAGE_KM_DEFAULT, 'default'))
+        self.assertEqual(core_dial.GARAGE_KM_MIN, 3_000)
+        self.assertEqual(core_dial.GARAGE_KM_MAX, 60_000)
 
     @mock.patch("apps.mygarage.ai_service._call_grok_json")
     def test_carreb_missing_spec_ai_estimated(self, grok):

@@ -1,8 +1,11 @@
 """B-21 garage-level km normalisation tests.
 
 Every card in MyGarage (current vehicle included) is costed at the user's
-garage km: their Edit Vehicle setting, else the current vehicle's
-annualised odometer, else the ABS 2020 default of 12,100 km/yr. Only the
+garage km: their Edit Vehicle km setting, else the ABS 2020 default of
+12,100 km/yr. km p.a. is a direct user input only — the odometer ÷
+years-since-purchase derivation was retired 6-Nov-26 (Jock: it assumed the
+car was bought new and overstated on used cars); odometer and purchase
+date stay on the record, optional, feeding resale only. Only the
 km-dependent cost lines (fuel/energy, servicing, tyres, EV road-user levy)
 and annual CO2 scale; rego, CTP, insurance, finance and depreciation never
 do. CORE ratings/stars stay on dataset km (D29/D30).
@@ -21,7 +24,7 @@ from apps.vehicles.models import (
     CategoryAnnualKMBenchmark, CoreDialBatch, CoreDialRow, Vehicle,
     VehicleIdentity)
 from apps.vehicles.services.core_dial import (
-    GARAGE_KM_DEFAULT, annual_km_from_odometer, cost_gvg_current_vehicle,
+    GARAGE_KM_DEFAULT, cost_gvg_current_vehicle,
     garage_km_copy_line, resolve_garage_km)
 from apps.vehicles.services.rating_engine import (
     calculate_core_rating, calculate_vehicle_cost_breakdown)
@@ -53,47 +56,20 @@ def _catalogue(**kwargs):
 class ResolveGarageKmTests(TestCase):
 
     def test_default_when_nothing_set(self):
-        self.assertEqual(resolve_garage_km(None, None),
+        self.assertEqual(resolve_garage_km(None),
                          (GARAGE_KM_DEFAULT, 'default'))
 
-    def test_odometer_derivation_used_when_no_user_setting(self):
+    def test_odometer_derivation_retired(self):
+        # However plausible the odometer + purchase date pair, it no longer
+        # produces a km rate (Jock, 6-Nov-26): km p.a. is a user input only.
         today = datetime.date.today()
         cv = _ns(odometer_reading=20000,
                  purchase_date=today - datetime.timedelta(days=730))
-        km, source = resolve_garage_km(None, cv)
-        self.assertEqual(km, 10000)
-        self.assertEqual(source, 'odometer')
+        self.assertEqual(resolve_garage_km(None), (GARAGE_KM_DEFAULT, 'default'))
 
-    def test_user_setting_wins_over_odometer(self):
-        today = datetime.date.today()
-        cv = _ns(odometer_reading=20000,
-                 purchase_date=today - datetime.timedelta(days=730))
+    def test_user_setting_wins(self):
         ps = _ns(garage_km=22000, garage_km_user_set=True)
-        self.assertEqual(resolve_garage_km(ps, cv), (22000, 'user'))
-
-    def test_fallback_when_odometer_unusable(self):
-        cv = _ns(odometer_reading=None, purchase_date=None)
-        self.assertEqual(resolve_garage_km(None, cv),
-                         (GARAGE_KM_DEFAULT, 'default'))
-
-    def test_cv_overrides_fill_empty_model_fields(self):
-        # The Edit Vehicle modal saves odometer/purchase_date via the
-        # override endpoint, leaving the CV record empty — the overrides
-        # must still drive the km derivation (string values included).
-        cv = _ns(odometer_reading=None, purchase_date=None)
-        inputs = {'odometer_reading': '25000', 'purchase_date': '06/2023'}
-        km, source = resolve_garage_km(None, cv, inputs)
-        expected = annual_km_from_odometer(25000, datetime.date(2023, 6, 1))
-        self.assertEqual((km, source), (expected, 'odometer'))
-
-    def test_model_fields_win_over_overrides(self):
-        today = datetime.date.today()
-        cv = _ns(odometer_reading=20000,
-                 purchase_date=today - datetime.timedelta(days=730))
-        inputs = {'odometer_reading': '99000'}
-        km, source = resolve_garage_km(None, cv, inputs)
-        self.assertEqual(source, 'odometer')
-        self.assertNotEqual(km, 99000)
+        self.assertEqual(resolve_garage_km(ps), (22000, 'user'))
 
     def test_copy_line_variants(self):
         self.assertEqual(
@@ -102,9 +78,6 @@ class ResolveGarageKmTests(TestCase):
         self.assertEqual(
             garage_km_copy_line(14000, 'user'),
             "Costed at 14,000 km/yr, your setting.")
-        self.assertEqual(
-            garage_km_copy_line(10000, 'odometer'),
-            "Costed at 10,000 km/yr, your setting.")
 
 
 class BreakdownScalingTests(TestCase):
@@ -351,16 +324,20 @@ class GarageKmApiTests(TestCase):
         payload = {k: v for k, v in payload.items() if v is not None}
         return self.client.post('/api/my-garage/current-vehicle/', payload)
 
-    def test_cv_costed_at_odometer_derived_km(self):
+    def test_cv_costed_at_abs_default_despite_odometer(self):
+        # Odometer + purchase date no longer derive km (retired 6-Nov-26) —
+        # a fresh CV with no user km setting costs at the ABS default even
+        # with both fields saved.
         resp = self._post_cv()
         self.assertEqual(resp.status_code, 200)
         engine = resp.data['engine_data']
-        self.assertEqual(engine['costed_km'], 10000)
-        self.assertEqual(engine['costed_km_source'], 'odometer')
+        self.assertEqual(engine['costed_km'], GARAGE_KM_DEFAULT)
+        self.assertEqual(engine['costed_km_source'], 'default')
         self.assertEqual(engine['costed_km_copy'],
-                         'Costed at 10,000 km/yr, your setting.')
-        self.assertTrue(engine['personalised_estimate'])
-        self.assertEqual(resp.data['meta']['costed_km'], 10000)
+                         'Costed at 12,100 km/yr (ABS 2020). '
+                         'Change in Edit Vehicle.')
+        self.assertFalse(engine['personalised_estimate'])
+        self.assertEqual(resp.data['meta']['costed_km'], GARAGE_KM_DEFAULT)
 
     def test_default_copy_when_no_odometer(self):
         resp = self._post_cv(odometer_reading=None, purchase_date=None)
@@ -400,12 +377,10 @@ class GarageKmApiTests(TestCase):
             diff = card['engine_data']['est_cost_difference']
             self.assertEqual(diff['comparison_mode'], 'current_vehicle')
 
-    def test_odometer_override_drives_costed_km_without_cv_post(self):
-        """The current Edit Vehicle modal saves odometer/purchase_date as
-        field overrides via /details/ — those must reach costed_km (and
-        every garage card) with no frontend change."""
-        # CV saved without odometer/purchase (the FE's normal path) — the
-        # modal later saves them as overrides.
+    def test_odometer_overrides_no_longer_move_costed_km(self):
+        """Since the derivation was retired (Jock, 6-Nov-26), saving
+        odometer/purchase_date as Edit Vehicle overrides must leave
+        costed_km at the ABS default — km p.a. is set directly only."""
         self._post_cv(odometer_reading=None, purchase_date=None)
         for field, value in (('odometer_reading', '25000'),
                              ('purchase_date', '06/2023')):
@@ -414,24 +389,23 @@ class GarageKmApiTests(TestCase):
                                      format='json')
             self.assertEqual(resp.status_code, 200)
 
-        expected = annual_km_from_odometer(25000, datetime.date(2023, 6, 1))
         resp = self.client.get('/api/my-garage/current-vehicle/')
         engine = resp.data['engine_data']
-        self.assertEqual(engine['costed_km'], expected)
-        self.assertEqual(engine['costed_km_source'], 'odometer')
-        self.assertTrue(engine['personalised_estimate'])
+        self.assertEqual(engine['costed_km'], GARAGE_KM_DEFAULT)
+        self.assertEqual(engine['costed_km_source'], 'default')
+        self.assertFalse(engine['personalised_estimate'])
 
-        # Garage cards pick up the CV's odometer override too.
+        # Garage cards keep the same ABS default.
         GarageVehicle.objects.create(
             user=self.user, vehicle_catalogue=self.vehicle,
             source=GarageVehicleSource.VEHICLE_LOOKUP)
         resp = self.client.get('/api/my-garage/vehicles/')
         self.assertEqual(resp.data['vehicles'][0]['engine_data']['costed_km'],
-                         expected)
+                         GARAGE_KM_DEFAULT)
 
     def test_garage_km_guard_rails(self):
         self._post_cv()
-        resp = self._post_cv(garage_km=100)  # below KM_RATE_FLOOR
+        resp = self._post_cv(garage_km=100)  # below the typing-cap floor
         self.assertEqual(resp.status_code, 400)
         resp = self.client.patch('/api/my-garage/priority-state/',
                                  {'garage_km': 99000}, format='json')
@@ -445,7 +419,7 @@ class GarageKmApiTests(TestCase):
         self.assertEqual(state['garage_km'], 20000)
         self.assertTrue(state['garage_km_user_set'])
 
-        # null reverts to automatic derivation.
+        # null reverts to the ABS 2020 default.
         resp = self.client.patch('/api/my-garage/priority-state/',
                                  {'garage_km': None}, format='json')
         self.assertEqual(resp.status_code, 200)

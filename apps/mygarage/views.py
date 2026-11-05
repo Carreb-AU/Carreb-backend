@@ -211,29 +211,19 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
     user_inputs = {o.field_name: o.override_value for o in overrides_qs}
 
     # B-21: every card in the garage (current vehicle included) is costed at
-    # the user's garage km — their Edit Vehicle setting, else the current
-    # vehicle's annualised odometer, else the ABS 2020 default. CORE ratings
+    # the user's garage km — their Edit Vehicle km setting, else the ABS 2020
+    # default. (The odometer derivation was retired 6-Nov-26 per Jock: it
+    # assumed the car was bought new and overstated on used cars; odometer
+    # and purchase date stay, optional, feeding resale only.) CORE ratings
     # and stars are untouched (km moves the dollars only, D29/D30).
-    cv_for_km = vehicle_instance if is_current_vehicle \
-        else getattr(user, 'current_vehicle', None)
-    cv_inputs = user_inputs if is_current_vehicle else None
-    if not is_current_vehicle and cv_for_km is not None:
-        # The Edit Vehicle modal saves odometer/purchase_date as CV
-        # overrides (not on the CV record), so garage cards must read them
-        # too or an odometer update would never reach their costed_km.
-        cv_inputs = {
-            o.field_name: o.override_value for o in
-            VehicleOverride.objects.filter(user=user, current_vehicle=cv_for_km)
-        }
-    garage_km, garage_km_source = resolve_garage_km(
-        priority_state, cv_for_km, cv_inputs)
+    garage_km, garage_km_source = resolve_garage_km(priority_state)
 
     engine_data = None
     if rating_vehicle and state:
         if not catalogue:
             # Non-catalogue car (GVG or AI-searched): fixed class medians from
             # the Mode B rows plus the car's own consumption, costed at the
-            # garage km (B-21). The odometer-derived/user-set km arrives via
+            # garage km (B-21). The user-set km arrives via
             # resolve_garage_km, which falls back to the ABS 2020 default —
             # never silently to the class benchmark.
             engine_data = cost_gvg_current_vehicle(
@@ -404,8 +394,8 @@ class CurrentVehicleView(views.APIView):
             state = UserPriorityState.objects.create(user=request.user)
 
         # B-21: an explicit garage_km in the Edit Vehicle payload is the
-        # user's one km setting — it locks against odometer re-derivation;
-        # explicit null reverts to automatic.
+        # user's one km setting (the only km source since the odometer
+        # derivation was retired); explicit null reverts to the ABS default.
         if 'garage_km' in data:
             state.garage_km = data['garage_km']
             state.garage_km_user_set = data['garage_km'] is not None
