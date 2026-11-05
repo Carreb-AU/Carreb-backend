@@ -57,14 +57,28 @@ class AccountDeletionRequestSerializer(serializers.Serializer):
 
 class UserProfileSerializer(serializers.ModelSerializer):
     is_2fa_enabled = serializers.SerializerMethodField()
+    next_charge_date = serializers.SerializerMethodField()
+    cancel_at_period_end = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'first_name', 'last_name', 'email', 'mobile_number', 'profile_picture', 'profile_photo_url', 'subscription_tier', 'email_verified', 'is_2fa_enabled']
-        read_only_fields = ['id', 'subscription_tier', 'email_verified', 'is_2fa_enabled']
+        fields = ['id', 'first_name', 'last_name', 'email', 'mobile_number', 'profile_picture', 'profile_photo_url', 'subscription_tier', 'email_verified', 'is_2fa_enabled', 'next_charge_date', 'cancel_at_period_end']
+        read_only_fields = ['id', 'subscription_tier', 'email_verified', 'is_2fa_enabled', 'next_charge_date', 'cancel_at_period_end']
 
     def get_is_2fa_enabled(self, obj):
         return hasattr(obj, 'two_factor_auth') and obj.two_factor_auth.is_enabled
+
+    def get_next_charge_date(self, obj):
+        plan = getattr(obj, 'subscription_plan', None)
+        if not plan or plan.status != 'active':
+            return None
+        return plan.current_period_end
+
+    def get_cancel_at_period_end(self, obj):
+        plan = getattr(obj, 'subscription_plan', None)
+        if not plan:
+            return None
+        return plan.cancel_at_period_end
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
