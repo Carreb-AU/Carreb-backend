@@ -132,7 +132,7 @@ curl -s "https://api.carreb.com.au/api/my-garage/vehicles/" -H "Authorization: B
 | `3d09cdc` | B-15 + B-22 (4-Nov email): bounds priority `v6.4-audit-04Nov26`; held cars selectable as current vehicle; `is_suppressed` on cards; cache namespace v3 |
 | `7c39d8c` | B-21 (proof 3): per-line Edit Vehicle overrides applied to cost lines; fixed-band deltas at costed km; peers don't inherit overrides |
 
-Deployed on `api.carreb.com.au` (server ref `1bf9095` = `7c39d8c` content; GitHub push pending a local credential issue on our side — code is identical). Test suite: 275 tests green.
+Deployed on `api.carreb.com.au`. **GitHub push done 5-Nov** — everything through `5e672f1` is on `main`: https://github.com/alirehan/Carreb-backend (`1bf9095` was the server-side ref for `7c39d8c` content; that content is in the push). Test suite: 275+ tests green.
 
 ## 6. Backend work queued before Mon 9 Nov (our side, no FE dependency)
 

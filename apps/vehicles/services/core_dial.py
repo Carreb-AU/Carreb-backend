@@ -235,8 +235,8 @@ def cost_gvg_current_vehicle(record, state, annual_km=None):
     standard cost formulas, at its class kilometres and the state's prices.
 
     ``annual_km`` overrides the class benchmark — the current-vehicle path
-    passes a figure derived from the owner's odometer and purchase date (B-02)
-    so the card reflects the real car, not the class average.
+    passes the user's Edit Vehicle km setting (B-21/B-38), else None so the
+    class benchmark applies.
     """
     from apps.vehicles.models import (
         CategoryAnnualKMBenchmark,
