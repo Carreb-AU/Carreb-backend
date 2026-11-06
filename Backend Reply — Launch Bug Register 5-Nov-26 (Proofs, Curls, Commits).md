@@ -134,15 +134,40 @@ curl -s "https://api.carreb.com.au/api/my-garage/vehicles/" -H "Authorization: B
 
 Deployed on `api.carreb.com.au`. **GitHub push done 5-Nov** — everything through `5e672f1` is on `main`: https://github.com/alirehan/Carreb-backend (`1bf9095` was the server-side ref for `7c39d8c` content; that content is in the push). Test suite: 275+ tests green.
 
-## 6. Backend work queued before Mon 9 Nov (our side, no FE dependency)
+## 5a. Evidence from 6-Nov deploys (blockers closed)
 
-1. **B-14/B-33** — budget ceiling + star filter on `GET /api/vehicles/`, G-146 filters applied first, downward-only relaxation ladder, Patch 6.4.1 header contract.
-2. **B-27** — manual/old-car running-cost reconciliation (six lines only) and the CO₂ kg arithmetic fix, with component tables for QA.
-3. **B-01** — keep both years per Guide row; type-ahead/Year select match either; "2025 (MY25)" labels; run the 352-row CSV (352/352 required).
-4. **B-17/B-18** — profile first name at serve/render; PATCH plate/colour re-render; trait-uniqueness guard log.
-5. **B-31** — assert a current-vehicle record never renders as a match card.
-6. **B-36** — stable PNG URL + public result page with og tags.
-7. (Optional, on your word) **B-34** — add `signed_value_cents` to `est_cost_difference`.
+**Off-grid EV proof (BLOCKER #6) — PASS on production** (009 as current vehicle, QA account):
+| Step | g/km | kg/yr |
+|---|---|---|
+| Baseline | 130.7 | 1,582 |
+| Off-grid 50% | **81.7** (130.7 × 0.5/0.8) | **989** (×81.7/130.7) |
+| Reset (override deleted) | 130.7 | 1,582 |
+
+The `off_grid_energy_percent` override now scales the grid component of energy-cycle CO₂ on both the g/km row and the kg p.a. line (BEV: ×(1−p)/0.8; PHEV: grid component only). The override saves through the standard Edit Vehicle PATCH and reset deletes it.
+
+**B-16 guard log (BLOCKER #4) — all four rules firing on production:**
+```
+[third person]      FLAG: third person       ✓  ("He made the smart choice with his car.")
+[US spelling]       FLAG: US spelling       ✓  ("color", "favorite")
+[advice words]      FLAG: purchase advice   ✓  ("you should buy", "worth every dollar")
+[performance claim] FLAG: performance claim ✓  ("fastest", "0-100", "horsepower")
+[clean control]     (clean)                 ✓
+```
+Guard extended with third-person pronouns (he/she/him/his/her), en-AU spelling checks, and performance-claim patterns; the system prompt is tightened to second person, Australian English, no performance claims. Plate graphic renders the user's state (was hardcoded WESTERN AUSTRALIA). One-retry-then-fail-and-refund flow unchanged.
+
+**Dial rebuild (BLOCKER #3):** the Research Status gate is removed (`is_suppressed` is the only gate, per the locked rule). Batch rebuilt live: **13,120 rows / 1,640 listings / 1,640 per state**. The 109 were 104 "Pending verify" + 5 "Coming FY26" live cars — not "Other" category (the 04-Nov file has zero live Other vehicles; our earlier "109 Other" note was stale).
+
+**Vehicle images (B-10/B-30):** full curated set from the Drive imported — 446 PNGs (each verified 1752×1000), 1,725 vehicles updated, **all 1,640 live listings carry a photo**, 77 held vehicles silhouette-filled, 418 old files deleted (backup at `~/media-backup-2026-11-06`). Tier 3 FCAI set (38 PNGs) is in the repo under `docs/` for the FE bundle.
+
+## 6. Backend work queued before Mon 9 Nov (our side, no FE dependency) — ALL DONE 6-Nov
+
+1. **B-14/B-33** ✅ — budget ceiling + exact-band star filter (3★ = 2.5–3.4) + downward-only relaxation ladder on `GET /api/vehicles/`; response carries `relaxation` details; `mode_data_by_state` added to list results for one-decimal ratings on result cards.
+2. **B-27** ✅ — EV road-user charge gated to plug-in powertrains; a 1995 petrol car's total is now exactly the six lines; CO₂ audited (tailpipe × km/1000).
+3. **B-01** ✅ (mechanics) — catalogue `model_year`/`my_year`, type-ahead matches release year OR MY year in both legs, cards annotate "2024 (MY25) …"; `load_model_year_csv` ready — **we never received the 352-row MY CSV; please re-share** and I'll populate the labels.
+4. **B-17/B-18** ✅ — first name resolves from the profile at render; plate/colour PATCH re-renders without credit; traits per result.
+5. **B-31** ✅ — verified: match/band/freematch queries all filter `is_suppressed=False`; the current vehicle is a different record type and can never render as a match card.
+6. **B-36** ✅ — public no-auth result page with og:image/og:title; `public_url` on the result payload is the share/copy-link target.
+7. **B-34** ✅ — `direction: "same"` now also fires when the difference rounds to $0/yr (was exact-zero only).
 
 ## 7. Evidence pack
 
