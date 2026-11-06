@@ -108,3 +108,52 @@ class GvgModelYearSearchTests(TestCase):
         self.assertTrue(any(r.get('source') == 'gvg' for r in resp.data))
         m_ai.assert_not_called()
 
+
+
+class CatalogueModelYearTests(TestCase):
+    """B-01 catalogue leg: MY labels on Vehicle rows, year-or-MY matching
+    in the type-ahead, and "2024 (MY25)" card names. Labels arrive via the
+    client's MY CSV (load_model_year_csv); the Consolidated sheet has none."""
+
+    ENDPOINT = reverse('current-vehicle-search')
+
+    def setUp(self):
+        self.client = APIClient()
+        from apps.vehicles.models import Vehicle
+        self.vehicle = Vehicle.objects.create(
+            brand='ZEEKR', model='009', year=2024, variant='6 Seat AWD',
+            body_style='mpv', powertrain_type='bev', fcai_category='People Mover',
+            model_year='MY25',
+            annual_km_default=15000,
+            fuel_cost_by_state={"NSW": 0},
+            insurance_estimate_by_state={"NSW": 100000},
+            ctp_by_state={"NSW": 50000},
+            registration_by_state={"NSW": 50000},
+            servicing_5yr_estimate=500000,
+            tyre_replacement_estimate=500000,
+            mode_data_by_state={"NSW": {"B": {
+                "mode_coo_pa": 5000.0, "annual_co2_kg": 2000.0, "stars": 4}}})
+
+    def test_save_derives_my_year(self):
+        self.assertEqual(self.vehicle.my_year, 2025)
+        self.vehicle.model_year = ''
+        self.vehicle.save()
+        self.assertIsNone(self.vehicle.my_year)
+
+    @mock.patch('apps.mygarage.views.search_ai_vehicles')
+    def test_year_token_matches_catalogue_my(self, m_ai):
+        resp = self.client.post(self.ENDPOINT,
+                                {'query': 'zeekr 009 2025'}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        rows = [r for r in resp.data if r.get('source') == 'carreb']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['name'],
+                         '2024 (MY25) ZEEKR 009 6 Seat AWD')
+        m_ai.assert_not_called()
+
+    @mock.patch('apps.mygarage.views.search_ai_vehicles')
+    def test_release_year_still_matches_catalogue(self, m_ai):
+        resp = self.client.post(self.ENDPOINT,
+                                {'query': 'zeekr 009 2024'}, format='json')
+        self.assertTrue(any(r.get('source') == 'carreb' for r in resp.data))
+        m_ai.assert_not_called()

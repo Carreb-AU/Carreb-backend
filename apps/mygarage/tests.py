@@ -761,6 +761,32 @@ class RideRevealShareCardTests(TestCase):
         self.assertIn("QUEENSLAND", html)
         self.assertNotIn("WESTERN", html)
 
+    def test_public_result_page_renders_with_og_tags(self):
+        # B-36: no-auth landing page per result_id; og:image/og:title for
+        # crawlers; the serializer exposes the public URL for share flows.
+        from django.core.files.base import ContentFile
+        self.result.share_image.save(
+            f"{self.result.id}.png", ContentFile(b"png"), save=True)
+
+        url = f"/api/my-garage/ridereveal/public/{self.result.id}/"
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"og:title", resp.content)
+        self.assertIn("Ali Steady Optimist!".encode(), resp.content)
+        self.assertIn(b"og:image", resp.content)
+
+        # Unknown id -> 404, still no auth required.
+        import uuid
+        resp = self.client.get(
+            f"/api/my-garage/ridereveal/public/{uuid.uuid4()}/")
+        self.assertEqual(resp.status_code, 404)
+
+        # Serializer carries the public landing URL.
+        from apps.mygarage.serializers import RideRevealResultSerializer
+        data = RideRevealResultSerializer(self.result).data
+        self.assertTrue(data["public_url"].endswith(
+            f"/api/my-garage/ridereveal/public/{self.result.id}/"))
+
     def test_context_color_without_known_name_has_no_hex(self):
         from apps.mygarage.share_card import build_share_card_context
         self.result.favorite_color = "Sparkle Unicorn"

@@ -258,6 +258,14 @@ def cost_gvg_current_vehicle(record, state, annual_km=None):
         values = [getattr(r, field) for r in rows]
         parts[part] = int(round_half_up(statistics.median(values), 0)) if values else 0
 
+    # B-27: the EV road-user charge applies to plug-in powertrains only — a
+    # 1995 petrol Corolla has no RUC. The class median mixes EV rows, so
+    # charging it to combustion cars overstated their running-cost total.
+    # With RUC gated, the total is exactly the six lines: fuel + CTP +
+    # comprehensive + registration + servicing + tyres.
+    if (record.powertrain_type or '').lower() not in ('bev', 'phev', 'reev'):
+        parts['road_user_charge'] = 0
+
     km = annual_km or CategoryAnnualKMBenchmark.get_annual_km_for_category(
         record.fcai_category or '')
     prices = StateEnergyPrice.get_price_for_state(state)

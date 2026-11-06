@@ -358,6 +358,27 @@ class GvgMedianScalingTests(TestCase):
         self.assertEqual(doubled['annual_co2_kg'],
                          at_benchmark['annual_co2_kg'] * 2)
 
+    def test_combustion_car_has_no_ev_road_user_charge(self):
+        # B-27: the EV road-user charge applies to plug-ins only. A 1995
+        # petrol Corolla's total must be exactly the six lines — fuel +
+        # CTP + comprehensive + registration + servicing + tyres — with
+        # the class RUC median (which mixes EV rows) dropped.
+        petrol = VehicleIdentity.objects.create(
+            make='Toyota', model='Corolla', year=1995, variant='SX',
+            body_style='hatch', fcai_category='Medium',
+            powertrain_type='petrol',
+            fuel_consumption_combined_l_100km=7.5,
+            tailpipe_co2_g_per_km=180)
+        ed = cost_gvg_current_vehicle(petrol, 'NSW', annual_km=12100)
+        bd = ed['annual_cost_breakdown']
+        self.assertEqual(bd['ev_levy_annual'], 0)
+        six_lines = (bd['fuel_or_energy_annual'] + bd['ctp_annual']
+                     + bd['insurance_annual'] + bd['registration_annual']
+                     + bd['servicing_annual'] + bd['tyres_annual'])
+        self.assertEqual(ed['total_annual_cost'], six_lines)
+        # CO2 is tailpipe x km / 1000 — no multiplication bug.
+        self.assertEqual(ed['annual_co2_kg'], round(180 * 12100 / 1000))
+
 
 class GarageKmApiTests(TestCase):
 

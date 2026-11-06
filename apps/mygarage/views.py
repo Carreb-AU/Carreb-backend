@@ -494,7 +494,10 @@ class CurrentVehicleSearchView(views.APIView):
         # vehicle, just never a match/band/dial entry.
         carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
         if year:
-            carreb_qs = carreb_qs.filter(year=year)
+            # B-01: the user's badge year can be the release year OR the
+            # model-year (year=2024, MY=MY25) — match either.
+            carreb_qs = carreb_qs.filter(
+                models.Q(year=year) | models.Q(my_year=year))
         for v in carreb_qs.order_by('brand', 'model', '-year')[:10]:
             seen.add(identity_key(v.brand, v.model, v.variant, v.year))
             records.append((v, 'carreb'))
@@ -845,7 +848,10 @@ class CurrentVehicleSuggestionsView(views.APIView):
         # stay selectable as a current vehicle (card flags is_suppressed).
         carreb_qs = text_filter(Vehicle.objects.all(), brand_field='brand', model_field='model')
         if year:
-            carreb_qs = carreb_qs.filter(year=year)
+            # B-01: the user's badge year can be the release year OR the
+            # model-year (year=2024, MY=MY25) — match either.
+            carreb_qs = carreb_qs.filter(
+                models.Q(year=year) | models.Q(my_year=year))
         for v in carreb_qs.order_by('brand', 'model', '-year')[:self.MAX_RESULTS]:
             seen.add(identity_key(v.brand, v.model, v.variant, v.year))
             results.append(self._normalize_vehicle(v))
@@ -861,11 +867,17 @@ class CurrentVehicleSuggestionsView(views.APIView):
                     sim=TrigramSimilarity('search_text', needle)
                 ).filter(sim__gt=0.05).order_by('-sim', '-year')
                 if year:
-                    gvg_qs = gvg_qs.filter(year=year)
+                    # B-01: match the release year or the MY-derived year in
+                    # search_text (year=2024, MY=MY25).
+                    gvg_qs = gvg_qs.filter(
+                        models.Q(year=year)
+                        | models.Q(search_text__icontains=str(year)))
             else:
                 gvg_qs = text_filter(gvg_qs, brand_field='make', model_field='model')
                 if year:
-                    gvg_qs = gvg_qs.filter(year=year)
+                    gvg_qs = gvg_qs.filter(
+                        models.Q(year=year)
+                        | models.Q(search_text__icontains=str(year)))
                 gvg_qs = gvg_qs.order_by('make', 'model', '-year')
 
             for r in gvg_qs[:self.MAX_RESULTS * 2]:
@@ -1838,6 +1850,37 @@ class RideRevealResultView(views.APIView):
             return Response(RideRevealResultSerializer(result).data, status=status.HTTP_200_OK)
         except RideRevealResult.DoesNotExist:
             return Response({"error": "not_found", "message": "No result found"}, status=status.HTTP_404_NOT_FOUND)
+
+class RideRevealPublicResultView(views.APIView):
+    """B-36: public, no-auth result page per result_id with og tags.
+
+    This is the share landing URL: og:image is the rendered 1080 PNG,
+    og:title the "{First name} {Archetype}!" headline. Share flows send
+    users here; crawlers read the meta tags.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request, result_id):
+        from django.shortcuts import render
+        result = RideRevealResult.objects.filter(id=result_id).first()
+        if not result:
+            return Response({"error": "not_found"}, status=status.HTTP_404_NOT_FOUND)
+        display_name = (getattr(result, 'first_name', None)
+                        or result.user.first_name or '').strip() or 'You'
+        headline = f"{display_name} {result.archetype_name}!"
+        share_image_url = ''
+        if result.share_image:
+            url = result.share_image.url
+            share_image_url = (request.build_absolute_uri(url)
+                               if url.startswith('/') else url)
+        site_url = getattr(settings, 'FRONTEND_URL', 'https://carreb.com.au')
+        return render(request, 'share/ride_reveal_public.html', {
+            'headline': headline,
+            'share_image_url': share_image_url,
+            'site_url': site_url,
+        })
 
 class RideRevealPurchaseView(views.APIView):
     permission_classes = [IsAuthenticated]

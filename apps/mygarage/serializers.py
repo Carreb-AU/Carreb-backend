@@ -210,6 +210,7 @@ class RideRevealPurchaseSerializer(serializers.Serializer):
 class RideRevealResultSerializer(serializers.ModelSerializer):
     vehicle = serializers.SerializerMethodField()
     share_image_url = serializers.SerializerMethodField()
+    public_url = serializers.SerializerMethodField()
 
     class Meta:
         model = RideRevealResult
@@ -218,8 +219,15 @@ class RideRevealResultSerializer(serializers.ModelSerializer):
             'social_perception_text', 'did_you_know_fact', 'share_caption',
             'disclaimer', 'custom_plate', 'favorite_color', 'first_name',
             'traits', 'generated_at', 'vehicle',
-            'share_image_url'
+            'share_image_url', 'public_url'
         ]
+
+    def get_public_url(self, obj):
+        # B-36: the public landing page (og tags) is the share/copy URL.
+        from django.urls import reverse
+        from django.conf import settings
+        path = reverse('ridereveal-public', kwargs={'result_id': obj.id})
+        return getattr(settings, 'API_BASE_URL', '').rstrip('/') + path
 
     def get_share_image_url(self, obj):
         if not obj.share_image:

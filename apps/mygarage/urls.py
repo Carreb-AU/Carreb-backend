@@ -22,6 +22,7 @@ from apps.mygarage.views import (
     RideRevealGenerateView,
     RideRevealJobView,
     RideRevealResultView,
+    RideRevealPublicResultView,
     RideRevealPurchaseView,
     StripeWebhookView
 )
@@ -72,6 +73,7 @@ urlpatterns = [
     path('api/my-garage/ridereveal/generate/', RideRevealGenerateView.as_view(), name='ridereveal-generate'),
     path('api/my-garage/ridereveal/job/<uuid:job_id>/', RideRevealJobView.as_view(), name='ridereveal-job'),
     path('api/my-garage/ridereveal/result/<uuid:garage_vehicle_id>/', RideRevealResultView.as_view(), name='ridereveal-result'),
+    path('api/my-garage/ridereveal/public/<uuid:result_id>/', RideRevealPublicResultView.as_view(), name='ridereveal-public'),
     path('api/my-garage/ridereveal/purchase/', RideRevealPurchaseView.as_view(), name='ridereveal-purchase'),
     
     # Stripe Webhook

@@ -273,6 +273,12 @@ class Vehicle(models.Model):
     model = models.CharField(max_length=255)
     year = models.IntegerField()
     variant = models.CharField(max_length=255)
+    # Model-year label from the source (e.g. "MY25") — B-01: the release
+    # year and the MY can differ (year=2024, MY=MY25) and owners search by
+    # either. Populated by the client's MY lookup CSV
+    # (load_model_year_csv); the Consolidated sheet itself carries no MY.
+    model_year = models.CharField(max_length=50, blank=True, default='')
+    my_year = models.IntegerField(null=True, blank=True)  # derived from model_year
     body_style = models.CharField(max_length=100)
     image_url = models.URLField(max_length=2000, blank=True, null=True)
     # AI/heuristic image-quality verdict:
@@ -387,6 +393,12 @@ class Vehicle(models.Model):
 
     class Meta:
         ordering = ['brand', 'model', 'year', 'variant']
+
+    def save(self, *args, **kwargs):
+        # B-01: keep the MY-derived year in step with the label so the
+        # type-ahead can match "2025" against a MY25 row stored as 2024.
+        self.my_year = model_year_from_label(self.model_year)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.year} {self.brand} {self.model} {self.variant}"

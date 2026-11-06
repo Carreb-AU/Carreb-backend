@@ -1,0 +1,42 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ headline }} · Carreb RideReveal™</title>
+  <meta name="description" content="Carreb RideReveal™ — {{ headline }}. For entertainment and educational purposes only." />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Carreb" />
+  <meta property="og:title" content="{{ headline }}" />
+  <meta property="og:description" content="My Carreb RideReveal™ — {{ headline }}. For entertainment and educational purposes only." />
+  {% if share_image_url %}
+  <meta property="og:image" content="{{ share_image_url }}" />
+  <meta property="og:image:width" content="1080" />
+  <meta property="og:image:height" content="1350" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="{{ share_image_url }}" />
+  {% endif %}
+  <style>
+    body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+           background: #f6f7f6; color: #111e18; display: flex; flex-direction: column;
+           align-items: center; padding: 32px 16px; }
+    .card-img { max-width: 420px; width: 100%; border-radius: 16px;
+                box-shadow: 0 8px 30px rgba(0,0,0,.12); }
+    h1 { font-size: 22px; margin: 20px 0 6px; text-align: center; }
+    p  { margin: 0 0 20px; color: #68726e; text-align: center; max-width: 420px; }
+    a.cta { display: inline-block; background: #2d5a3d; color: #fff; padding: 12px 28px;
+            border-radius: 999px; text-decoration: none; font-weight: 600; }
+    .fine { font-size: 12px; margin-top: 24px; }
+  </style>
+</head>
+<body>
+  {% if share_image_url %}
+  <img class="card-img" src="{{ share_image_url }}" alt="Carreb RideReveal card for {{ headline }}" />
+  {% endif %}
+  <h1>{{ headline }}</h1>
+  <p>My Carreb RideReveal™ — Cut the Noise. Keep the Money.</p>
+  <a class="cta" href="{{ site_url }}">Get your own RideReveal™</a>
+  <p class="fine">For entertainment and educational purposes only.</p>
+</body>
+</html>

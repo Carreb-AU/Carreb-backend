@@ -18,6 +18,7 @@ class VehicleListSerializer(serializers.ModelSerializer):
             'registration_by_state', 'total_5yr_cost_of_ownership_by_state',
             'fuel_consumption_per_100km', 'electricity_consumption_per_100km',
             'tailpipe_co2_g_per_km', 'wltp_range_km',
+            'mode_data_by_state',
         ]
 
 class VehicleDetailSerializer(serializers.ModelSerializer):

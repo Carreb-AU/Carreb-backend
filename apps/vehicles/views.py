@@ -28,11 +28,30 @@ class VehicleListView(generics.ListAPIView):
     serializer_class = VehicleListSerializer
     pagination_class = StandardResultsSetPagination
     permission_classes = [AllowAny]
-    
+
+    # B-33 star filter: exact band (Jock 6-Nov — 3★ means rating 2.5 to 3.4).
+    STAR_BANDS = {1: (1.0, 1.4), 2: (1.5, 2.4), 3: (2.5, 3.4),
+                  4: (3.5, 4.4), 5: (4.5, 5.0)}
+    # B-14 relaxation ladder: widen the budget floor downward in $5k steps
+    # (never above budget) until enough matches.
+    RELAX_STEP_CENTS = 500_000
+    RELAX_MIN_MATCHES = 5
+    RELAX_MAX_STEPS = 24
+
+    def _dollars_param(self, name):
+        raw = self.request.query_params.get(name)
+        if raw in (None, ''):
+            return None
+        try:
+            return int(float(raw) * 100)
+        except (TypeError, ValueError):
+            return None
+
     def get_queryset(self):
         queryset = super().get_queryset()
         params = self.request.query_params
-        
+        self._relaxation = None
+
         if 'brand' in params:
             queryset = queryset.filter(brand__iexact=params['brand'])
         if 'model' in params:
@@ -49,11 +68,61 @@ class VehicleListView(generics.ListAPIView):
             queryset = queryset.filter(fcai_category__iexact=params['fcai_category'])
         if 'ancap_rating_min' in params:
             queryset = queryset.filter(ancap_safety_rating__gte=params['ancap_rating_min'])
-            
+
+        # B-14/B-33: budget ceiling + star filter. Prices and ratings are
+        # read for `state` (default NSW) in Pure Cost mode (B), the same
+        # basis the Dial stars use.
+        state = (params.get('state') or 'NSW').upper()
+        price_key = f'driveaway_price_by_state__{state}'
+        budget_max_c = self._dollars_param('budget_max')
+        budget_min_c = self._dollars_param('budget_min')
+        if budget_max_c is not None:
+            # Hard cap — relaxation never goes above the user's budget;
+            # unpriced rows (incl. every held car) can't match a ceiling.
+            queryset = queryset.filter(**{f'{price_key}__lte': budget_max_c})
+        stars = params.get('stars')
+        if stars:
+            try:
+                band = self.STAR_BANDS[int(stars)]
+            except (KeyError, ValueError):
+                band = None
+            if band:
+                rating_key = f'mode_data_by_state__{state}__B__core_rating_1dp'
+                queryset = queryset.filter(
+                    **{f'{rating_key}__gte': band[0], f'{rating_key}__lte': band[1]})
+
+        # Downward-only relaxation: fewer than 5 matches inside the user's
+        # budget band -> step the floor down $5k at a time until enough
+        # matches or the floor reaches $0. The ceiling is never touched.
+        if budget_min_c is not None:
+            in_band = queryset.filter(**{f'{price_key}__gte': budget_min_c})
+            strict_count = in_band.count()
+            floor = budget_min_c
+            if strict_count < self.RELAX_MIN_MATCHES and budget_min_c > 0:
+                for _ in range(self.RELAX_MAX_STEPS):
+                    floor = max(0, floor - self.RELAX_STEP_CENTS)
+                    count_at_floor = queryset.filter(
+                        **{f'{price_key}__gte': floor}).count()
+                    if count_at_floor >= self.RELAX_MIN_MATCHES or floor == 0:
+                        break
+                self._relaxation = {
+                    "applied": True,
+                    "widened": "budget_min",
+                    "from_dollars": budget_min_c // 100,
+                    "to_dollars": floor // 100,
+                    "strict_count": strict_count,
+                }
+            queryset = queryset.filter(**{f'{price_key}__gte': floor})
+
         return queryset
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
+        if isinstance(response.data, dict):
+            if self._relaxation:
+                response.data["relaxation"] = self._relaxation
+            elif 'budget_min' in request.query_params:
+                response.data["relaxation"] = {"applied": False}
         if request.user.is_authenticated and getattr(request.user, 'analytics_consent', False):
             emit_analytics_event.delay(str(request.user.id), 'vehicle_search_performed', dict(request.query_params))
         return response

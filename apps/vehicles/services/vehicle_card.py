@@ -504,7 +504,15 @@ def build_vehicle_card(record, source: str, state: Optional[str] = None) -> dict
     card: dict[str, Any] = {f: None for f in CARD_FIELDS}
     card['id'] = str(record.id)
     card['source'] = source
-    card['name'] = f"{year or ''} {make} {model} {variant}".strip()
+    # B-01: a differing MY label is shown beside the release year —
+    # "2025 (MY25) ZEEKR 009 ..." — so the badge year and MY never fight.
+    model_year = getattr(record, 'model_year', '') or ''
+    my_year = getattr(record, 'my_year', None)
+    if model_year and my_year and my_year != year:
+        year_label = f"{year} ({model_year})"
+    else:
+        year_label = f"{year or ''}"
+    card['name'] = f"{year_label} {make} {model} {variant}".strip()
     card['field_sources'] = {}
 
     for field in CARD_FIELDS:
