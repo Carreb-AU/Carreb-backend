@@ -315,34 +315,37 @@ class CurrentVehicleView(views.APIView):
         vehicle_catalogue_id = data.get('vehicle_catalogue_id')
         gvg_record_id = data.get('green_vehicle_guide_record_id')
         ai_entry_id = data.get('ai_vehicle_entry_id')
-        exists_in_garage = False
 
+        # Validate a submitted catalogue id against the actual Carreb
+        # Vehicles table before anything is written — never trust a
+        # frontend-supplied id (also prevents a dangling-FK 500).
+        if vehicle_catalogue_id and not Vehicle.objects.filter(id=vehicle_catalogue_id).exists():
+            return Response(
+                {'vehicle_catalogue_id': 'Vehicle does not exist in the Carreb Vehicles table.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        # My Garage auto-insertion eligibility (both conditions mandatory):
+        #   1. this is the user's FIRST-EVER current vehicle, and
+        #   2. the selected vehicle exists in the Carreb Vehicles table.
+        # GVG / AI / manual current vehicles are still saved as the current
+        # vehicle but are NEVER auto-inserted into My Garage.
+        first_current_vehicle = not hasattr(request.user, 'current_vehicle')
+        exists_in_garage = False
         if vehicle_catalogue_id:
             exists_in_garage = GarageVehicle.objects.filter(
                 user=request.user,
                 vehicle_catalogue_id=vehicle_catalogue_id,
                 status=GarageVehicleStatus.ACTIVE
             ).exists()
-        elif gvg_record_id:
-            exists_in_garage = GarageVehicle.objects.filter(
-                user=request.user,
-                green_vehicle_guide_record_id=gvg_record_id,
-                status=GarageVehicleStatus.ACTIVE
-            ).exists()
-        elif ai_entry_id:
-            exists_in_garage = GarageVehicle.objects.filter(
-                user=request.user,
-                ai_vehicle_entry_id=ai_entry_id,
-                status=GarageVehicleStatus.ACTIVE
-            ).exists()
+        will_auto_insert = (first_current_vehicle and vehicle_catalogue_id
+                            and not exists_in_garage)
 
-        if (vehicle_catalogue_id or gvg_record_id or ai_entry_id) and not exists_in_garage:
-            if not check_cap_limit(request.user):
-                cap = get_cap_counter(request.user)
-                return Response({
-                    "detail": f"Plan limit reached. You are on {cap['plan']} which allows {cap['limit']} vehicles.",
-                    "cap_counter": cap
-                }, status=status.HTTP_403_FORBIDDEN)
+        if will_auto_insert and not check_cap_limit(request.user):
+            cap = get_cap_counter(request.user)
+            return Response({
+                "detail": f"Plan limit reached. You are on {cap['plan']} which allows {cap['limit']} vehicles.",
+                "cap_counter": cap
+            }, status=status.HTTP_403_FORBIDDEN)
         
         cv, created = CurrentVehicle.objects.update_or_create(
             user=request.user,
@@ -364,26 +367,10 @@ class CurrentVehicleView(views.APIView):
             AIVehicleEntry.objects.filter(id=data['ai_vehicle_entry_id']).update(
                 selected_count=_F('selected_count') + 1)
         
-        if vehicle_catalogue_id and not exists_in_garage:
+        if will_auto_insert and created:
             GarageVehicle.objects.create(
                 user=request.user,
                 vehicle_catalogue_id=vehicle_catalogue_id,
-                source=GarageVehicleSource.VEHICLE_LOOKUP
-            )
-            if getattr(request.user, 'analytics_consent', False):
-                emit_analytics_event.delay(str(request.user.id), 'vehicle_added_to_garage', {})
-        elif gvg_record_id and not exists_in_garage:
-            GarageVehicle.objects.create(
-                user=request.user,
-                green_vehicle_guide_record_id=gvg_record_id,
-                source=GarageVehicleSource.VEHICLE_LOOKUP
-            )
-            if getattr(request.user, 'analytics_consent', False):
-                emit_analytics_event.delay(str(request.user.id), 'vehicle_added_to_garage', {})
-        elif ai_entry_id and not exists_in_garage:
-            GarageVehicle.objects.create(
-                user=request.user,
-                ai_vehicle_entry_id=ai_entry_id,
                 source=GarageVehicleSource.VEHICLE_LOOKUP
             )
             if getattr(request.user, 'analytics_consent', False):
@@ -1095,6 +1082,20 @@ class GarageVehicleListView(views.APIView):
     def post(self, request):
         serializer = GarageVehicleCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        # Vehicle eligibility: a My Garage row may only point at a record
+        # that actually exists in the Carreb Vehicles table. GVG, AI-search,
+        # temporary or any other ids are rejected here. (Rows of those types
+        # created by older flows still list, edit and delete as before.)
+        catalogue_id = serializer.validated_data.get('vehicle_catalogue_id')
+        if not catalogue_id:
+            return Response(
+                {"detail": "Only Carreb catalogue vehicles can be added to My Garage."},
+                status=status.HTTP_400_BAD_REQUEST)
+        if not Vehicle.objects.filter(id=catalogue_id).exists():
+            return Response(
+                {"detail": "Vehicle does not exist in the Carreb Vehicles table."},
+                status=status.HTTP_400_BAD_REQUEST)
 
         # Duplicate guard: re-adding a vehicle already in the garage returns
         # the existing active row instead of creating a second record.

@@ -6,7 +6,8 @@ from rest_framework.test import APITestCase as TestCase
 from django.urls import reverse
 
 from apps.vehicles.models import Vehicle
-from apps.mygarage.models import GarageVehicle, GarageVehicleSource, RideRevealJob
+from apps.mygarage.models import (
+    CurrentVehicle, GarageVehicle, GarageVehicleSource, RideRevealJob)
 
 User = get_user_model()
 
@@ -492,18 +493,15 @@ class GVGGarageVehicleTests(TestCase):
             diesel_cents_per_litre=280, electricity_cents_per_kwh=30.0,
         )
 
-    def test_add_gvg_vehicle_to_garage(self):
+    def test_add_gvg_vehicle_to_garage_rejected(self):
+        # Only records in the Carreb Vehicles table are garage-eligible.
         resp = self.client.post(
             reverse("garage-vehicles"),
             {"green_vehicle_guide_record_id": str(self.gvg_record.id),
              "source": "vehicle_lookup"},
             format="json")
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(
-            str(resp.data["green_vehicle_guide_record_id"]), str(self.gvg_record.id))
-        gv = GarageVehicle.objects.get(user=self.user)
-        self.assertIsNone(gv.vehicle_catalogue_id)
-        self.assertEqual(str(gv.green_vehicle_guide_record_id), str(self.gvg_record.id))
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(GarageVehicle.objects.filter(user=self.user).exists())
 
     def test_garage_list_includes_gvg_vehicle_with_costs(self):
         GarageVehicle.objects.create(
@@ -551,16 +549,71 @@ class GVGGarageVehicleTests(TestCase):
             format="json")
         self.assertEqual(resp.status_code, 400)
 
-    def test_current_vehicle_gvg_pick_auto_adds_to_garage(self):
+    def test_current_vehicle_gvg_pick_not_added_to_garage(self):
+        """A first-time GVG current vehicle is saved as the Current Vehicle
+        (existing functionality) but must NOT be auto-inserted into My
+        Garage — only Carreb Vehicles table records are eligible."""
         resp = self.client.post(
             reverse("current-vehicle"),
             {"green_vehicle_guide_record_id": str(self.gvg_record.id),
              "state": "NSW"},
             format="json")
         self.assertEqual(resp.status_code, 200)
-        self.assertTrue(GarageVehicle.objects.filter(
+        self.assertTrue(CurrentVehicle.objects.filter(
             user=self.user,
             green_vehicle_guide_record_id=self.gvg_record.id).exists())
+        self.assertFalse(GarageVehicle.objects.filter(
+            user=self.user,
+            green_vehicle_guide_record_id=self.gvg_record.id).exists())
+
+    def test_first_catalogue_cv_auto_adds_to_garage(self):
+        """First-ever current vehicle + a real Carreb Vehicles record →
+        auto-inserted into My Garage."""
+        v = make_vehicle()
+        resp = self.client.post(
+            reverse("current-vehicle"),
+            {"vehicle_catalogue_id": str(v.id), "state": "NSW"},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(GarageVehicle.objects.filter(
+            user=self.user, vehicle_catalogue_id=v.id).exists())
+
+    def test_second_cv_change_does_not_auto_insert_into_garage(self):
+        """With an existing current vehicle, selecting another Carreb
+        vehicle updates the CV but must NOT auto-insert into My Garage."""
+        first = make_vehicle(brand="Toyota", model="Camry")
+        second = make_vehicle(brand="Honda", model="Accord")
+        self.client.post(
+            reverse("current-vehicle"),
+            {"vehicle_catalogue_id": str(first.id), "state": "NSW"},
+            format="json")
+        self.assertEqual(GarageVehicle.objects.filter(user=self.user).count(), 1)
+        resp = self.client.post(
+            reverse("current-vehicle"),
+            {"vehicle_catalogue_id": str(second.id), "state": "NSW"},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(GarageVehicle.objects.filter(user=self.user).count(), 1)
+        self.assertTrue(CurrentVehicle.objects.filter(
+            user=self.user, vehicle_catalogue_id=second.id).exists())
+
+    def test_cv_rejects_unknown_catalogue_id(self):
+        import uuid
+        resp = self.client.post(
+            reverse("current-vehicle"),
+            {"vehicle_catalogue_id": str(uuid.uuid4()), "state": "NSW"},
+            format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(CurrentVehicle.objects.filter(user=self.user).exists())
+
+    def test_garage_rejects_unknown_catalogue_id(self):
+        import uuid
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"vehicle_catalogue_id": str(uuid.uuid4()),
+             "source": "vehicle_lookup"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(GarageVehicle.objects.filter(user=self.user).exists())
 
     def test_current_vehicle_gvg_pick_does_not_duplicate_garage_row(self):
         GarageVehicle.objects.create(
@@ -947,14 +1000,12 @@ class GarageAddAIEntryTests(TestCase):
             powertrain_type="petrol", fuel_consumption_combined_l_100km=7.8,
             tailpipe_co2_g_per_km=181, fcai_category="Medium")
 
-    def test_add_ai_entry_to_garage(self):
+    def test_add_ai_entry_to_garage_rejected(self):
         resp = self.client.post(
             reverse("garage-vehicles"),
             {"ai_vehicle_entry_id": str(self.ai_entry.id),
              "source": "vehicle_lookup"}, format="json")
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(str(resp.data["ai_vehicle_entry_id"]), str(self.ai_entry.id))
-        self.assertIsNone(resp.data["vehicle_catalogue_id"])
+        self.assertEqual(resp.status_code, 400)
 
     def test_add_rejects_two_id_fields(self):
         v = make_vehicle()
@@ -965,18 +1016,16 @@ class GarageAddAIEntryTests(TestCase):
              "source": "vehicle_lookup"}, format="json")
         self.assertEqual(resp.status_code, 400)
 
-    def test_ai_id_in_catalogue_field_is_routed(self):
-        """Frontend that always sends the result id as vehicle_catalogue_id
-        still works when the result was an AI vehicle."""
+    def test_ai_id_in_catalogue_field_is_rejected(self):
+        """A search-result id that belongs to an AI entry is not a Carreb
+        Vehicles table record, so it must not reach My Garage — even when a
+        client sends it in the catalogue field."""
         resp = self.client.post(
             reverse("garage-vehicles"),
             {"vehicle_catalogue_id": str(self.ai_entry.id),
              "source": "vehicle_lookup"}, format="json")
-        self.assertEqual(resp.status_code, 201)
-        self.assertEqual(str(resp.data["ai_vehicle_entry_id"]), str(self.ai_entry.id))
-        self.assertIsNone(resp.data["vehicle_catalogue_id"])
-        gv = GarageVehicle.objects.get(user=self.user)
-        self.assertEqual(str(gv.ai_vehicle_entry_id), str(self.ai_entry.id))
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(GarageVehicle.objects.filter(user=self.user).exists())
 
     def test_ai_garage_card_surfaces_full_spec(self):
         """AI garage cards must not come back half-empty: drive, engine_l,
@@ -986,10 +1035,9 @@ class GarageAddAIEntryTests(TestCase):
         self.ai_entry.num_seats = 5
         self.ai_entry.ancap_safety_rating = 5
         self.ai_entry.save()
-        self.client.post(
-            reverse("garage-vehicles"),
-            {"ai_vehicle_entry_id": str(self.ai_entry.id),
-             "source": "vehicle_lookup"}, format="json")
+        GarageVehicle.objects.create(
+            user=self.user, ai_vehicle_entry=self.ai_entry,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
         resp = self.client.get(reverse("garage-vehicles"))
         card = resp.data["vehicles"][0]
         vd = card["vehicle_data"]
@@ -998,14 +1046,17 @@ class GarageAddAIEntryTests(TestCase):
         self.assertEqual(vd["num_seats"], 5)
         self.assertEqual(vd["ancap_safety_rating"], 5)
 
-    def test_current_vehicle_with_ai_entry_creates_garage_row(self):
+    def test_current_vehicle_with_ai_entry_does_not_create_garage_row(self):
+        """An AI-search current vehicle is saved as the Current Vehicle but
+        never auto-inserted into My Garage."""
         resp = self.client.post(
             reverse("current-vehicle"),
             {"ai_vehicle_entry_id": str(self.ai_entry.id),
              "state": "NSW"}, format="json")
         self.assertEqual(resp.status_code, 200)
-        gv = GarageVehicle.objects.get(user=self.user)
-        self.assertEqual(str(gv.ai_vehicle_entry_id), str(self.ai_entry.id))
+        self.assertFalse(GarageVehicle.objects.filter(user=self.user).exists())
+        self.assertTrue(CurrentVehicle.objects.filter(
+            user=self.user, ai_vehicle_entry_id=self.ai_entry.id).exists())
         self.assertEqual(resp.data["vehicle_data"]["source"], "ai")
         self.assertEqual(resp.data["vehicle_data"]["make"], "Toyota")
 
