@@ -2,7 +2,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework import status
 
-from apps.vehicles.models import VehicleCOOComponentBreakdown
+from apps.vehicles.models import CoreDialBatch, CoreDialRow, Vehicle
 from apps.vehicles.cost_estimator_api import (
     calculate_cost_estimate,
     parse_annual_km,
@@ -10,100 +10,95 @@ from apps.vehicles.cost_estimator_api import (
 )
 
 
+def _dial_row(batch, version_id, vehicle, **costs):
+    defaults = dict(
+        batch=batch, version_id=version_id,
+        model_id=f'm{version_id:06d}', state='NSW',
+        make=vehicle.brand, model=vehicle.model,
+        variant=vehicle.variant, year=vehicle.year,
+        fcai_category=vehicle.fcai_category,
+        driveaway_cents=3000000, coo_pa_cents=500000,
+        annual_co2_kg=2000.0, co2_g_per_km=140.0,
+        price_score=0.5, emissions_score=0.5, co2_cap=None,
+        fuel_cents=0, electricity_cents=0,
+        ctp_cents=50000, comprehensive_cents=150000,
+        registration_cents=60000, servicing_cents=30000,
+        tyres_cents=25000, road_user_charge_cents=0,
+    )
+    defaults.update(costs)
+    return CoreDialRow.objects.create(vehicle=vehicle, **defaults)
+
+
 class VehicleCostEstimatorAPITestCase(TestCase):
     """
     Test suite for VehicleCostEstimatorAPIView (`GET /api/v1/vehicles/estimate-cost/`).
-    Validates cost estimations, variable cost scaling, EV/petrol savings benchmarks,
-    grocery weeks calculation, and response formats.
+    Validates cost estimations, variable cost scaling, EV/petrol savings
+    benchmarks, grocery weeks calculation, and response formats.
+
+    The estimator reads the CURRENT CORE Dial batch (live rows of the
+    current load only), so fixtures seed vehicles + dial rows.
     """
 
     def setUp(self):
         self.client = APIClient()
+        batch = CoreDialBatch.objects.create(
+            scoring_version='v-test', as_at='2026-11-07', is_current=True)
 
-        # Seed mock breakdown records across NSW for diesel, petrol, electric, and hybrid
-        VehicleCOOComponentBreakdown.objects.create(
-            make='Toyota',
-            model='Hilux',
-            variant='SR5 Double Cab',
-            year=2024,
-            state='NSW',
-            fcai_category='Light Commercial',
-            fcai_broad='Light Commercial',
-            energy_norm='diesel',
-            km_pa_used=15000,
-            fuel_cost_pa_cents=300000,          # $3,000 @ 15,000km
-            electricity_cost_pa_cents=0,
-            comprehensive_pa_cents=150000,      # $1,500
-            ctp_pa_cents=50000,                 # $500
-            registration_pa_cents=70000,        # $700
-            maintenance_pa_cents=45000,         # $450 @ 15,000km
-            tyre_cost_pa_cents=30000,           # $300 @ 15,000km
-            ev_levy_pa_cents=0,
-            components_sum_pa_cents=645000,
-        )
+        def v(brand, model, variant, energy_norm, category, broad):
+            return Vehicle.objects.create(
+                brand=brand, model=model, variant=variant, year=2024,
+                body_style='sedan', fcai_category=category, fcai_broad=broad,
+                powertrain_type='petrol', energy_norm=energy_norm,
+                annual_km_default=15000)
 
-        VehicleCOOComponentBreakdown.objects.create(
-            make='Toyota',
-            model='Corolla',
-            variant='Ascent Sport',
-            year=2024,
-            state='NSW',
-            fcai_category='Small',
-            fcai_broad='Passenger Cars',
-            energy_norm='petrol',
-            km_pa_used=15000,
-            fuel_cost_pa_cents=225000,          # $2,250 @ 15,000km
-            electricity_cost_pa_cents=0,
-            comprehensive_pa_cents=120000,      # $1,200
-            ctp_pa_cents=50000,                 # $500
-            registration_pa_cents=60000,        # $600
-            maintenance_pa_cents=35000,         # $350 @ 15,000km
-            tyre_cost_pa_cents=25000,           # $250 @ 15,000km
-            ev_levy_pa_cents=0,
-            components_sum_pa_cents=515000,
-        )
+        # Diesel Hilux — the default query's target
+        hilux = v('Toyota', 'Hilux', 'SR5 Double Cab', 'diesel',
+                  'Light Commercial', 'Light Commercial')
+        _dial_row(batch, 1, hilux,
+                  fuel_cents=300000,              # $3,000 @ 15,000km
+                  comprehensive_cents=150000,     # $1,500
+                  ctp_cents=50000,                # $500
+                  registration_cents=70000,       # $700
+                  servicing_cents=45000,          # $450 @ 15,000km
+                  tyres_cents=30000)              # $300 @ 15,000km
 
-        VehicleCOOComponentBreakdown.objects.create(
-            make='Tesla',
-            model='Model 3',
-            variant='RWD',
-            year=2024,
-            state='NSW',
-            fcai_category='Medium',
-            fcai_broad='Passenger Cars',
-            energy_norm='electric',
-            km_pa_used=15000,
-            fuel_cost_pa_cents=0,
-            electricity_cost_pa_cents=75000,    # $750 @ 15,000km
-            comprehensive_pa_cents=180000,      # $1,800
-            ctp_pa_cents=50000,                 # $500
-            registration_pa_cents=65000,        # $650
-            maintenance_pa_cents=15000,         # $150 @ 15,000km
-            tyre_cost_pa_cents=35000,           # $350 @ 15,000km
-            ev_levy_pa_cents=0,
-            components_sum_pa_cents=420000,
-        )
+        # Petrol Corolla
+        corolla = v('Toyota', 'Corolla', 'Ascent Sport', 'petrol',
+                    'Small', 'Passenger Cars')
+        _dial_row(batch, 2, corolla,
+                  fuel_cents=225000,              # $2,250
+                  comprehensive_cents=120000,
+                  ctp_cents=50000,
+                  registration_cents=60000,
+                  servicing_cents=35000,
+                  tyres_cents=25000)
 
-        VehicleCOOComponentBreakdown.objects.create(
-            make='Toyota',
-            model='RAV4',
-            variant='GXL Hybrid',
-            year=2024,
-            state='NSW',
-            fcai_category='Medium SUV',
-            fcai_broad='SUVs',
-            energy_norm='petrol',
-            km_pa_used=15000,
-            fuel_cost_pa_cents=135000,          # $1,350 @ 15,000km
-            electricity_cost_pa_cents=0,
-            comprehensive_pa_cents=130000,      # $1,300
-            ctp_pa_cents=50000,                 # $500
-            registration_pa_cents=65000,        # $650
-            maintenance_pa_cents=30000,         # $300 @ 15,000km
-            tyre_cost_pa_cents=28000,           # $280 @ 15,000km
-            ev_levy_pa_cents=0,
-            components_sum_pa_cents=438000,
-        )
+        # BEV Model 3
+        model3 = v('Tesla', 'Model 3', 'RWD', 'bev', 'Medium', 'Passenger Cars')
+        _dial_row(batch, 3, model3,
+                  electricity_cents=75000,        # $750
+                  comprehensive_cents=180000,
+                  ctp_cents=50000,
+                  registration_cents=65000,
+                  servicing_cents=15000,
+                  tyres_cents=35000)
+
+        # Full hybrid RAV4 — the only row the 'hybrid' bucket may count
+        rav4 = v('Toyota', 'RAV4', 'GXL Hybrid', 'hev', 'Medium SUV', 'SUVs')
+        _dial_row(batch, 4, rav4,
+                  fuel_cents=135000,
+                  comprehensive_cents=130000,
+                  ctp_cents=50000,
+                  registration_cents=65000,
+                  servicing_cents=30000,
+                  tyres_cents=28000)
+
+        # Decoys: mild hybrid and PHEV must NOT count in the hybrid sample
+        mhev = v('Toyota', 'Corolla Cross', 'Atmos', 'mhev', 'Small SUV', 'SUVs')
+        _dial_row(batch, 5, mhev, fuel_cents=150000)
+        phev = v('Mitsubishi', 'Outlander', 'Exceed', 'phev', 'Medium SUV', 'SUVs')
+        _dial_row(batch, 6, phev,
+                  fuel_cents=100000, electricity_cents=40000)
 
     def test_parse_annual_km_utility(self):
         self.assertEqual(parse_annual_km(10000), 10000)
@@ -128,11 +123,12 @@ class VehicleCostEstimatorAPITestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
         self.assertEqual(data['status'], 'success')
-        
+
         cost_data = data['data']
         self.assertEqual(cost_data['fuel_type'], 'diesel')
         self.assertEqual(cost_data['state'], 'NSW')
         self.assertEqual(cost_data['annual_km'], 15000)
+        self.assertEqual(cost_data['sample_size'], 1)
         self.assertGreater(cost_data['estimated_annual_running_cost'], 0)
         self.assertIn('cost_breakdown', cost_data)
         self.assertIn('potential_saving_vs_ev', cost_data)
@@ -178,10 +174,21 @@ class VehicleCostEstimatorAPITestCase(TestCase):
         res = response.json()['data']
 
         self.assertEqual(res['fuel_type'], 'electric')
+        self.assertEqual(res['sample_size'], 1)      # the bev only
         self.assertEqual(res['potential_saving_vs_ev'], 0.0)
         # Should report savings against petrol vehicle
         self.assertGreater(res['potential_saving_vs_petrol'], 0)
         self.assertIn('saved per year compared to petrol', res['grocery_comparison_text'])
+
+    def test_hybrid_bucket_counts_full_hybrids_only(self):
+        """The hybrid sample is energy_norm 'hev' only — mild hybrids (mhev)
+        and PHEVs are separate buckets and must not be counted."""
+        url = '/api/v1/vehicles/estimate-cost/?fuel_type=hybrid&annual_km=15000&state=NSW'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        res = response.json()['data']
+        self.assertEqual(res['fuel_type'], 'hybrid')
+        self.assertEqual(res['sample_size'], 1)      # RAV4 hev only
 
     def test_string_km_with_plus_formatting(self):
         url = '/api/v1/vehicles/estimate-cost/?fuel_type=petrol&annual_km=10,000+%20km&state=NSW'

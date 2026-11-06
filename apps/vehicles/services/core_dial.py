@@ -62,15 +62,18 @@ def dollars_to_cents(dollars):
 
 
 def co2_cap_for(powertrain, co2_g_per_km):
-    """Rating cap from tailpipe CO2 (section 5). BEV/FCEV are never capped."""
+    """Rating cap from ENERGY-CYCLE CO2 (D39), matching the dataset's
+    co2_cap_tier column. Thresholds re-based 21-Oct per the Policy Update
+    Log (190/250/315 -> caps 4.4/3.4/2.4). BEV/FCEV are never capped.
+    """
     if powertrain in ('bev', 'fcev'):
         return None
     co2 = float(co2_g_per_km or 0)
-    if co2 >= 250:
+    if co2 >= 315:
         return 2.4
-    if co2 >= 200:
+    if co2 >= 250:
         return 3.4
-    if co2 >= 150:
+    if co2 >= 190:
         return 4.4
     return None
 

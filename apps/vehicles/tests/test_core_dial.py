@@ -94,13 +94,16 @@ class RoundingTests(TestCase):
         self.assertEqual(BAND_NAMES[band], 'The Detour™')
 
     def test_co2_cap_tiers(self):
+        # Energy-cycle thresholds (D39, re-based 21-Oct per the Policy
+        # Update Log): >=315 -> 2.4, >=250 -> 3.4, >=190 -> 4.4.
+        # Matches the dataset's co2_cap_tier column.
         from apps.vehicles.services.core_dial import co2_cap_for
-        self.assertEqual(co2_cap_for('petrol', 250), 2.4)
-        self.assertEqual(co2_cap_for('petrol', 249), 3.4)
-        self.assertEqual(co2_cap_for('petrol', 200), 3.4)
-        self.assertEqual(co2_cap_for('petrol', 199), 4.4)
-        self.assertEqual(co2_cap_for('petrol', 150), 4.4)
-        self.assertIsNone(co2_cap_for('petrol', 149))
+        self.assertEqual(co2_cap_for('petrol', 315), 2.4)
+        self.assertEqual(co2_cap_for('petrol', 314), 3.4)
+        self.assertEqual(co2_cap_for('petrol', 250), 3.4)
+        self.assertEqual(co2_cap_for('petrol', 249), 4.4)
+        self.assertEqual(co2_cap_for('petrol', 190), 4.4)
+        self.assertIsNone(co2_cap_for('petrol', 189))
         self.assertIsNone(co2_cap_for('bev', 999))
         self.assertIsNone(co2_cap_for('fcev', 999))
 

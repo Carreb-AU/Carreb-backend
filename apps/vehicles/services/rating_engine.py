@@ -172,23 +172,28 @@ def _apply_co2_cap(blended_score: float, powertrain: str, tailpipe_co2: Optional
     return blended_score, False, None
 
 
-def _co2_star_cap_stars(powertrain: str, tailpipe_co2: Optional[float]) -> Optional[int]:
-    """Absolute CO2 cap expressed as a whole-star ceiling."""
+def _co2_star_cap_stars(powertrain: str, co2_g_per_km: Optional[float]) -> Optional[int]:
+    """Absolute CO2 cap expressed as a whole-star ceiling.
+
+    Runs on the ENERGY-CYCLE figure (D39) with the 21-Oct re-based
+    thresholds (>=315 -> 2, >=250 -> 3, >=190 -> 4), matching the
+    dataset's co2_cap_tier. BEV/FCEV are never capped.
+    """
     if powertrain in (PowertrainType.BEV, PowertrainType.FCEV):
         return None
-    co2 = tailpipe_co2 or 0
-    if co2 >= 250:
+    co2 = co2_g_per_km or 0
+    if co2 >= 315:
         return 2
-    if co2 >= 200:
+    if co2 >= 250:
         return 3
-    if co2 >= 150:
+    if co2 >= 190:
         return 4
     return None
 
 
-def _apply_star_co2_cap(stars: int, powertrain: str, tailpipe_co2: Optional[float]) -> tuple[int, bool, Optional[int]]:
+def _apply_star_co2_cap(stars: int, powertrain: str, co2_g_per_km: Optional[float]) -> tuple[int, bool, Optional[int]]:
     """Return (capped_stars, cap_applied, cap_threshold)."""
-    cap = _co2_star_cap_stars(powertrain, tailpipe_co2)
+    cap = _co2_star_cap_stars(powertrain, co2_g_per_km)
     if cap is not None and stars > cap:
         return cap, True, cap
     return stars, False, None
@@ -562,7 +567,7 @@ def calculate_core_rating(
         core_rating, co2_cap_applied, co2_cap_threshold = _apply_star_co2_cap(
             stored_target['stars'],
             vehicle.powertrain_type,
-            vehicle.tailpipe_co2_g_per_km
+            _energy_cycle_g_per_km(vehicle, state)
         )
         core_rating = float(core_rating)
         stored_total = int(round_half_up(stored_target['mode_coo_pa'] * 100, 0))

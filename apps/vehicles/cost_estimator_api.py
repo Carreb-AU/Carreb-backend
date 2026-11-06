@@ -6,7 +6,6 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 
 from django.db.models import Avg, Count, Q
-from apps.vehicles.models import VehicleCOOComponentBreakdown
 
 
 # ---------------------------------------------------------------------------
@@ -122,39 +121,49 @@ def get_fuel_type_display(normalized_fuel: str) -> str:
 
 
 def _query_aggregated_components(fuel_norm: str, state: str, category: Optional[str] = None) -> Dict[str, Any]:
+    """Average component costs from the CURRENT CORE Dial batch — i.e. the
+    live rows of the current dataset load only (suppressed listings never
+    enter the dial). Sample sizes are distinct live listings per state.
+
+    Fuel buckets follow the dataset's energy_norm vocabulary: petrol,
+    diesel, bev (+fcev) as electric, and FULL hybrids (hev) as hybrid —
+    mild hybrids (mhev) and PHEVs are separate and not counted as hybrid.
     """
-    Queries VehicleCOOComponentBreakdown database table for average component costs by state & powertrain.
-    """
-    qs = VehicleCOOComponentBreakdown.objects.filter(state__iexact=state)
+    from apps.vehicles.models import CoreDialBatch, CoreDialRow
+
+    batch = CoreDialBatch.objects.filter(is_current=True).first()
+    qs = CoreDialRow.objects.filter(batch=batch, state__iexact=state) \
+        if batch else CoreDialRow.objects.none()
 
     if category:
         cat_clean = category.strip().lower()
-        cat_qs = qs.filter(Q(fcai_broad__icontains=cat_clean) | Q(fcai_category__icontains=cat_clean))
+        cat_qs = qs.filter(
+            Q(vehicle__fcai_broad__icontains=cat_clean)
+            | Q(vehicle__fcai_category__icontains=cat_clean))
         if cat_qs.exists():
             qs = cat_qs
 
-    if fuel_norm == "hybrid":
-        fuel_qs = qs.filter(Q(variant__icontains="hybrid") | Q(model__icontains="hybrid"))
-        # Fallback if specific state/category combination has no hybrid rows
-        if not fuel_qs.exists():
-            fuel_qs = qs.filter(energy_norm__iexact="petrol")
-    else:
-        fuel_qs = qs.filter(energy_norm__iexact=fuel_norm)
-        # Fallback if no matching rows for rare combinations
-        if not fuel_qs.exists():
-            fuel_qs = qs.filter(energy_norm__iexact="petrol")
+    energy_norms = {
+        'petrol': ['petrol'],
+        'diesel': ['diesel'],
+        'electric': ['bev', 'fcev'],
+        'hybrid': ['hev'],
+    }.get(fuel_norm, ['petrol'])
+    fuel_qs = qs.filter(vehicle__energy_norm__in=energy_norms)
+    if not fuel_qs.exists():
+        fuel_qs = qs.filter(vehicle__energy_norm__in=['petrol'])
 
     agg = fuel_qs.aggregate(
-        sample_count=Count("id"),
-        avg_fuel=Avg("fuel_cost_pa_cents"),
-        avg_elec=Avg("electricity_cost_pa_cents"),
-        avg_ctp=Avg("ctp_pa_cents"),
-        avg_comp=Avg("comprehensive_pa_cents"),
-        avg_rego=Avg("registration_pa_cents"),
-        avg_maint=Avg("maintenance_pa_cents"),
-        avg_tyre=Avg("tyre_cost_pa_cents"),
-        avg_ev_levy=Avg("ev_levy_pa_cents"),
-        avg_km=Avg("km_pa_used"),
+        sample_count=Count('version_id', distinct=True),
+        avg_fuel=Avg('fuel_cents'),
+        avg_elec=Avg('electricity_cents'),
+        avg_ctp=Avg('ctp_cents'),
+        avg_comp=Avg('comprehensive_cents'),
+        avg_rego=Avg('registration_cents'),
+        avg_maint=Avg('servicing_cents'),
+        avg_tyre=Avg('tyres_cents'),
+        avg_ev_levy=Avg('road_user_charge_cents'),
+        avg_km=Avg('vehicle__annual_km_default'),
     )
     return agg
 
