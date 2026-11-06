@@ -54,7 +54,11 @@ curl -s -X POST "https://api.carreb.com.au/api/my-garage/vehicles/" \
 - Render "Next charge: 15 Oct 2027" formatted `en-AU` (day month year).
 - `next_charge_date: null` → **hide the status bar entirely** (the old hardcoded "Jan 1, 2027" placeholder is gone from the backend contract; if any FE copy of it remains, delete it).
 - `cancel_at_period_end: true` → "Subscription is scheduled to be canceled at the end of the billing period."
-- Abdullah's implementation in `userProfile.js`/`SettingsSubscription.js` (presence-aware extraction, nulls, formatter) is the canonical one — keep it.
+- **Renew plan** (7-Nov): `POST /api/billing/renew/` (Bearer) makes the Renew button real. Responses:
+  - `200 {"renewed": true, "cancel_at_period_end": false, "next_charge_date": ...}` → clear the cancel UI, toast success, refetch the profile.
+  - `200 {"needs_checkout": true, "plan_type": "full_insight_pro"}` → the subscription has fully ended; start a fresh checkout for that plan (`/pricing/upgrade/<plan-type-with-dashes>`).
+  - `400 {"error": "..."}` → show the message (e.g. not scheduled to cancel / no subscription on file).
+- Abdullah's implementation in `userProfile.js`/`SettingsSubscription.js` (presence-aware extraction, nulls, formatter) is the canonical one — keep it; the renew wiring (`token` + `onProfileRefresh` props, `api/stripe.js renewSubscription`) is in place on `main`.
 
 ```bash
 curl -s "https://api.carreb.com.au/api/users/profile/" -H "Authorization: Bearer <token>" \
