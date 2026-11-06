@@ -1,3 +1,4 @@
+import math
 import re
 from typing import Dict, Any, Optional
 
@@ -64,7 +65,7 @@ class CostEstimatorResponseSerializer(serializers.Serializer):
 
 
 class CostEstimatorRequestSerializer(serializers.Serializer):
-    fuel_type = serializers.CharField(required=False, default="diesel", help_text="Vehicle fuel/powertrain: diesel, petrol, hybrid, electric/ev")
+    fuel_type = serializers.CharField(required=False, default="diesel", help_text="Vehicle fuel/powertrain: petrol, diesel, hybrid (HEV), mild_hybrid, phev, electric/ev")
     annual_km = serializers.CharField(required=False, default="15000", help_text="Annual km driven: e.g. 10000, '10,000', '10,000+ km'")
     state = serializers.CharField(required=False, default="NSW", help_text="Australian state code: NSW, VIC, QLD, WA, SA, TAS, ACT, NT")
     category = serializers.CharField(required=False, allow_blank=True, default="", help_text="Optional category filter: SUV, Passenger, Commercial")
@@ -75,7 +76,7 @@ class CostEstimatorRequestSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 
 AU_VALID_STATES = {"NSW", "VIC", "QLD", "WA", "SA", "TAS", "ACT", "NT"}
-GROCERY_WEEKLY_BASELINE = 75.0  # AU single-person average weekly grocery baseline
+GROCERY_WEEKLY_BASELINE = 207.0  # Average household grocery spend, Finder Consumer Sentiment Tracker, March 2026
 
 def parse_annual_km(raw_km: Any, default: int = 15000) -> int:
     """
@@ -94,19 +95,30 @@ def parse_annual_km(raw_km: Any, default: int = 15000) -> int:
 
 
 def normalize_fuel_type(raw_fuel: Optional[str]) -> str:
-    """
-    Normalizes fuel/powertrain query string into one of: 'diesel', 'petrol', 'hybrid', 'electric'.
+    """Normalize a fuel query string to one of the dataset's powertrain
+    buckets: 'petrol', 'diesel', 'hybrid' (HEV only), 'mild_hybrid',
+    'phev', 'electric' (BEV/FCEV).
+
+    PHEV and mild hybrid are their own types — never lumped into 'hybrid'.
+    Raises ValueError for unknown types (the view turns that into a 400);
+    there is no silent petrol fallback.
     """
     if not raw_fuel:
         return "diesel"
-    val = str(raw_fuel).lower().strip()
-    if any(k in val for k in ["phev", "hybrid", "hev"]):
-        return "hybrid"
-    if any(k in val for k in ["electric", "bev"]) or val == "ev" or " ev" in val or "ev " in val:
-        return "electric"
-    if "diesel" in val:
-        return "diesel"
-    return "petrol"
+    val = str(raw_fuel).lower().strip().replace('-', '_')
+    aliases = {
+        'petrol': 'petrol', 'gasoline': 'petrol',
+        'diesel': 'diesel',
+        'hybrid': 'hybrid', 'hev': 'hybrid', 'full_hybrid': 'hybrid',
+        'mild_hybrid': 'mild_hybrid', 'mhev': 'mild_hybrid',
+        'phev': 'phev', 'plug_in_hybrid': 'phev', 'plug_in hybrid': 'phev', 'plug_in': 'phev',
+        'electric': 'electric', 'ev': 'electric', 'bev': 'electric',
+    }
+    if val in aliases:
+        return aliases[val]
+    raise ValueError(
+        f"Unknown fuel_type '{raw_fuel}'. Expected one of: "
+        "petrol, diesel, hybrid, mild_hybrid, phev, electric.")
 
 
 
@@ -115,6 +127,8 @@ def get_fuel_type_display(normalized_fuel: str) -> str:
         "diesel": "Diesel",
         "petrol": "Petrol",
         "hybrid": "Hybrid",
+        "mild_hybrid": "Mild hybrid",
+        "phev": "Plug-in hybrid",
         "electric": "Electric (EV)",
     }
     return labels.get(normalized_fuel, normalized_fuel.capitalize())
@@ -147,11 +161,11 @@ def _query_aggregated_components(fuel_norm: str, state: str, category: Optional[
         'petrol': ['petrol'],
         'diesel': ['diesel'],
         'electric': ['bev', 'fcev'],
-        'hybrid': ['hev'],
+        'hybrid': ['hev'],              # full hybrids only
+        'mild_hybrid': ['mhev'],        # mild hybrids are their own type
+        'phev': ['phev'],               # plug-in hybrids are their own type
     }.get(fuel_norm, ['petrol'])
     fuel_qs = qs.filter(vehicle__energy_norm__in=energy_norms)
-    if not fuel_qs.exists():
-        fuel_qs = qs.filter(vehicle__energy_norm__in=['petrol'])
 
     agg = fuel_qs.aggregate(
         sample_count=Count('version_id', distinct=True),
@@ -229,26 +243,40 @@ def calculate_cost_estimate(
     petrol_rego = round(((petrol_agg.get("avg_rego") or 0)) / 100.0, 2)
     petrol_total = round(petrol_fuel + petrol_maint + petrol_tyres + petrol_insurance + petrol_rego, 2)
 
-    # Savings calculations
-    potential_saving_vs_ev = max(0.0, round(total_running_cost - ev_total, 2))
-    potential_saving_vs_petrol = max(0.0, round(petrol_total - total_running_cost, 2))
+    # Savings calculations — signed. A type that costs more than its
+    # comparison reports an extra cost, never a clamped "$0 saving".
+    potential_saving_vs_ev = round(total_running_cost - ev_total, 2)
+    potential_saving_vs_petrol = round(petrol_total - total_running_cost, 2)
 
     if normalized_fuel == "electric":
         saving_metric = potential_saving_vs_petrol
-        grocery_weeks = max(0, int(round(saving_metric / GROCERY_WEEKLY_BASELINE)))
-        grocery_comparison_text = f"That's roughly equivalent to {grocery_weeks} weeks of average grocery bills saved per year compared to petrol"
-        summary_disclaimer = (
-            f"Estimate · Average electric vehicle · {annual_km:,} km/year ({state}) · "
-            f"Individual costs vary significantly · Estimated potential saving against petrol: ~${round(saving_metric):,}/yr"
-        )
+        comparison_label = "petrol"
     else:
         saving_metric = potential_saving_vs_ev
-        grocery_weeks = max(0, int(round(saving_metric / GROCERY_WEEKLY_BASELINE)))
-        grocery_comparison_text = f"That's roughly equivalent to {grocery_weeks} weeks of average grocery bills per year"
-        summary_disclaimer = (
-            f"Estimate · Average {fuel_type_display.lower()} vehicle · {annual_km:,} km/year ({state}) · "
-            f"Individual costs vary significantly · Estimated potential saving against EV: ~${round(saving_metric):,}/yr"
-        )
+        comparison_label = "EV"
+
+    if saving_metric > 0:
+        # Half-up rounding (Finder baseline 207): floor(x + 0.5), because
+        # Python's round() banks (round(4.5) == 4).
+        grocery_weeks = max(0, math.floor(saving_metric / GROCERY_WEEKLY_BASELINE + 0.5))
+        grocery_comparison_text = (
+            f"That potential estimated saving is about the same as {grocery_weeks} "
+            f"week{'s' if grocery_weeks != 1 else ''} of the average household grocery shop."
+        ) if grocery_weeks > 0 else ""
+        comparison_phrase = (
+            f"Estimated potential saving against {comparison_label}: "
+            f"~${round(saving_metric):,}/yr")
+    else:
+        grocery_weeks = 0
+        grocery_comparison_text = ""
+        comparison_phrase = (
+            f"Estimated extra cost against {comparison_label}: "
+            f"~${round(abs(saving_metric)):,}/yr")
+
+    summary_disclaimer = (
+        f"Estimate · Average {fuel_type_display.lower()} vehicle · {annual_km:,} km/year ({state}) · "
+        f"Individual costs vary significantly · {comparison_phrase}"
+    )
 
     disclaimer = (
         "All figures are indicative only — individual running costs vary based on driving style, "
@@ -310,7 +338,8 @@ class VehicleCostEstimatorAPIView(views.APIView):
     against electric vehicles, and grocery equivalency benchmarks.
 
     Query Parameters:
-      - fuel_type (optional, str): 'diesel', 'petrol', 'hybrid', 'electric' / 'ev'. Default: 'diesel'.
+      - fuel_type (optional, str): 'petrol', 'diesel', 'hybrid' (HEV only), 'mild_hybrid',
+        'phev', 'electric' / 'ev'. Unknown values return 400. Default: 'diesel'.
       - annual_km (optional, int/str): e.g. 10000, 15000, 20000, '10,000+ km'. Default: 15000.
       - state (optional, str): Australian state code ('NSW', 'VIC', 'QLD', etc.). Default: 'NSW'.
       - category (optional, str): Optional FCAI category / vehicle type filter (e.g. 'SUV', 'Passenger').
@@ -330,12 +359,18 @@ class VehicleCostEstimatorAPIView(views.APIView):
             )
 
         data = serializer.validated_data
-        result = calculate_cost_estimate(
-            raw_fuel=data.get("fuel_type"),
-            raw_km=data.get("annual_km"),
-            raw_state=data.get("state"),
-            raw_category=data.get("category"),
-        )
+        try:
+            result = calculate_cost_estimate(
+                raw_fuel=data.get("fuel_type"),
+                raw_km=data.get("annual_km"),
+                raw_state=data.get("state"),
+                raw_category=data.get("category"),
+            )
+        except ValueError as exc:
+            return Response(
+                {"status": "error", "message": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         response_serializer = CostEstimatorResponseSerializer({"status": "success", "data": result})
         return Response(response_serializer.data, status=status.HTTP_200_OK)

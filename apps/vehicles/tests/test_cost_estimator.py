@@ -116,7 +116,18 @@ class VehicleCostEstimatorAPITestCase(TestCase):
         self.assertEqual(normalize_fuel_type("EV"), "electric")
         self.assertEqual(normalize_fuel_type("bev"), "electric")
         self.assertEqual(normalize_fuel_type("hybrid"), "hybrid")
-        self.assertEqual(normalize_fuel_type("PHEV"), "hybrid")
+        self.assertEqual(normalize_fuel_type("PHEV"), "phev")
+        self.assertEqual(normalize_fuel_type("plug-in hybrid"), "phev")
+        self.assertEqual(normalize_fuel_type("mild_hybrid"), "mild_hybrid")
+        self.assertEqual(normalize_fuel_type("mhev"), "mild_hybrid")
+        with self.assertRaises(ValueError):
+            normalize_fuel_type("banana")
+
+    def test_unknown_fuel_type_returns_400(self):
+        resp = self.client.get(
+            '/api/v1/vehicles/estimate-cost/?fuel_type=banana')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.json()['status'], 'error')
 
     def test_default_estimate_query(self):
         response = self.client.get('/api/v1/vehicles/estimate-cost/')
@@ -163,9 +174,11 @@ class VehicleCostEstimatorAPITestCase(TestCase):
         # ins: 2300, rego: 650
         # ev total = 500 + 100 + 233.33 + 2300 + 650 = 3783.33
         # saving vs EV = 5200 - 3783.33 = 1416.67
+        # grocery weeks (baseline 207, half-up): floor(1416.67/207 + 0.5) = 7
         self.assertAlmostEqual(res['potential_saving_vs_ev'], 1416.67, places=1)
-        self.assertGreater(res['equivalent_grocery_weeks'], 0)
-        self.assertIn('grocery bills per year', res['grocery_comparison_text'])
+        self.assertEqual(res['equivalent_grocery_weeks'], 7)
+        self.assertIn('about the same as 7 weeks', res['grocery_comparison_text'])
+        self.assertIn('average household grocery shop', res['grocery_comparison_text'])
 
     def test_electric_vehicle_query(self):
         url = '/api/v1/vehicles/estimate-cost/?fuel_type=electric&annual_km=15000&state=NSW'
@@ -176,9 +189,55 @@ class VehicleCostEstimatorAPITestCase(TestCase):
         self.assertEqual(res['fuel_type'], 'electric')
         self.assertEqual(res['sample_size'], 1)      # the bev only
         self.assertEqual(res['potential_saving_vs_ev'], 0.0)
-        # Should report savings against petrol vehicle
+        # Saving basis for EVs is petrol; against itself it is exactly zero,
+        # so no grocery line.
         self.assertGreater(res['potential_saving_vs_petrol'], 0)
-        self.assertIn('saved per year compared to petrol', res['grocery_comparison_text'])
+        self.assertIn('about the same as', res['grocery_comparison_text'])
+        self.assertIn('average household grocery shop', res['grocery_comparison_text'])
+
+    def test_mild_hybrid_and_phev_are_separate_buckets(self):
+        """mhev and phev are their own fuel types with their own samples,
+        never lumped into 'hybrid'."""
+        for fuel, expected in (('mild_hybrid', 1), ('phev', 1)):
+            resp = self.client.get(
+                f'/api/v1/vehicles/estimate-cost/?fuel_type={fuel}&state=NSW')
+            self.assertEqual(resp.status_code, status.HTTP_200_OK)
+            res = resp.json()['data']
+            self.assertEqual(res['fuel_type'], fuel)
+            self.assertEqual(res['sample_size'], expected)
+
+    def test_more_expensive_type_reports_extra_cost(self):
+        """No clamping: when the selected type costs more than the
+        comparison, the payload reports an extra cost and no grocery line."""
+        from unittest import mock
+        from apps.vehicles import cost_estimator_api as ce
+
+        def fake_components(fuel_norm, state, category=None):
+            # Diesel deliberately costs LESS than the EV baseline, so the
+            # "saving vs EV" goes negative and must surface as an extra cost.
+            table = {
+                'diesel': dict(sample_count=3, avg_km=15000,
+                               avg_fuel=100000, avg_elec=0, avg_maint=100000,
+                               avg_tyre=50000, avg_ev_levy=0, avg_ctp=50000,
+                               avg_comp=200000, avg_rego=70000),
+                'electric': dict(sample_count=3, avg_km=15000,
+                                 avg_fuel=0, avg_elec=900000, avg_maint=80000,
+                                 avg_tyre=40000, avg_ev_levy=0, avg_ctp=50000,
+                                 avg_comp=150000, avg_rego=60000),
+                'petrol': dict(sample_count=3, avg_km=15000,
+                               avg_fuel=400000, avg_elec=0, avg_maint=80000,
+                               avg_tyre=40000, avg_ev_levy=0, avg_ctp=50000,
+                               avg_comp=150000, avg_rego=60000),
+            }
+            return table[fuel_norm]
+
+        with mock.patch.object(ce, '_query_aggregated_components', fake_components):
+            res = ce.calculate_cost_estimate(raw_fuel='diesel', raw_km=15000,
+                                             raw_state='NSW')
+        self.assertLess(res['potential_saving_vs_ev'], 0)
+        self.assertEqual(res['grocery_comparison_text'], '')
+        self.assertEqual(res['equivalent_grocery_weeks'], 0)
+        self.assertIn('Estimated extra cost against EV', res['summary_disclaimer'])
 
     def test_hybrid_bucket_counts_full_hybrids_only(self):
         """The hybrid sample is energy_norm 'hev' only — mild hybrids (mhev)
