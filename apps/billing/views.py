@@ -80,6 +80,46 @@ class PaymentMethodsView(views.APIView):
             logger.error(f"Error fetching payment methods: {e}")
             return Response({"error": "Failed to fetch payment methods"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class RenewSubscriptionView(views.APIView):
+    """Resume a subscription that is scheduled to cancel at period end.
+
+    Cancellation via the customer portal sets Stripe's
+    cancel_at_period_end; this flips it back before the period ends. If
+    the subscription has already fully ended, the client must run a fresh
+    checkout — signalled with needs_checkout.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        plan = getattr(request.user, 'subscription_plan', None)
+        if not plan or not plan.stripe_subscription_id:
+            return Response({"error": "No subscription on file."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            stripe_sub = stripe.Subscription.retrieve(plan.stripe_subscription_id)
+            if hasattr(stripe_sub, 'to_dict'):
+                stripe_sub = stripe_sub.to_dict()
+        except stripe.InvalidRequestError:
+            stripe_sub = None
+
+        if not stripe_sub or stripe_sub.get('status') in ('canceled', 'incomplete_expired'):
+            return Response({"needs_checkout": True, "plan_type": plan.plan_type})
+
+        if not stripe_sub.get('cancel_at_period_end'):
+            return Response({"error": "Subscription is not scheduled to cancel."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        stripe.Subscription.modify(plan.stripe_subscription_id,
+                                   cancel_at_period_end=False)
+        plan.cancel_at_period_end = False
+        plan.save(update_fields=['cancel_at_period_end', 'updated_at'])
+        return Response({
+            "renewed": True,
+            "cancel_at_period_end": False,
+            "next_charge_date": plan.current_period_end,
+        })
+
 class StripeCustomerPortalView(views.APIView):
     permission_classes = [IsAuthenticated]
     
