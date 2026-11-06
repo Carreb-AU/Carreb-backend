@@ -1388,6 +1388,24 @@ class RideRevealGuardAndEditTests(TestCase):
         flagged = dict(clean, share_caption="You should buy this car now.")
         self.assertTrue(any("purchase advice" in h for h in _guard_violations(flagged)))
 
+    def test_guard_flags_jock_nov6_categories(self):
+        """B-16 (Jock 6-Nov): third-person pronouns, US spellings and
+        performance claims trip the guard alongside the original rules."""
+        from apps.mygarage.tasks import _guard_violations
+        clean = {
+            "self_insight_text": "You value calm confidence on the road.",
+            "did_you_know_fact": "The HiLux has topped Australian sales.",
+        }
+        self.assertEqual(_guard_violations(clean), [])
+        flagged = dict(clean,
+                       self_insight_text="Stephen is practical. He made a smart choice.")
+        self.assertTrue(any("third person" in h for h in _guard_violations(flagged)))
+        flagged = dict(clean, archetype_tagline="Your favorite color suits you.")
+        self.assertTrue(any("US spelling" in h for h in _guard_violations(flagged)))
+        flagged = dict(clean,
+                       did_you_know_fact="The fastest car in its class, 0-100 in 4 seconds.")
+        self.assertTrue(any("performance claim" in h for h in _guard_violations(flagged)))
+
     def _run_task(self, payloads):
         """Run generate_ridereveal_content with a mocked OpenAI client that
         returns each payload in turn."""

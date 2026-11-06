@@ -25,7 +25,9 @@ social_perception_text: 2-3 sentences about how others might perceive this vehic
 did_you_know_fact: 1 interesting fact about this vehicle type or ownership profile
 share_caption: max 280 characters, suitable for social media
 traits: a JSON array of exactly 5 short personality trait labels (2-3 words each) for the card's trait pills
-Write every text field in second person, addressing the vehicle's owner directly as "you" / "your" — never "individuals", "people who", "owners who" or other third-person phrasing.
+Write every text field in second person, addressing the vehicle's owner directly as "you" / "your" — never "individuals", "people who", "owners who", "he/she/his/her" or other third-person phrasing.
+Use Australian English spellings throughout (colour, favourite, centre, metre, litre, tyre) — never American spellings (color, favorite, center, meter, liter).
+Do not make performance claims: no "fastest", "quickest", acceleration figures (0-100, 0-60), "top speed", or horsepower.
 If an Owner's Favorite Color is provided in the input, weave it naturally into the archetype_tagline or social_perception_text.
 All outputs are for entertainment and educational purposes only. Do not include financial advice, purchase recommendations, statements of fact about actual vehicle performance, or emissions claims. Return ONLY a valid JSON object with these seven fields. No preamble. No markdown."""
 
@@ -45,6 +47,16 @@ _BANNED_PATTERNS = [
     (re.compile(r'\bpeople who (choose|drive|buy|own)\b', re.I), 'third person'),
     (re.compile(r'\b(owners|drivers) who (choose|drive|buy|own)\b', re.I), 'third person'),
     (re.compile(r'\b(those|someone|anyone) who (choose|drives?|buys?|owns?)\b', re.I), 'third person'),
+    # Third-person pronouns (B-16, Jock 6-Nov): all card copy is written in
+    # the second person — any third-person pronoun is a violation.
+    (re.compile(r'\b(he|she|him|his|her|hers)\b', re.I), 'third person'),
+    # US spellings — the site copy is en-AU (B-16, Jock 6-Nov).
+    (re.compile(r'\b(color|favorite|gray|center|meter|liter|defense|offense|traveled)\b', re.I), 'US spelling'),
+    # Performance claims in the fact line (B-16, Jock 6-Nov).
+    (re.compile(r'\b(fastest|quickest)\b', re.I), 'performance claim'),
+    (re.compile(r'\b0\s?[-–]\s?(60|100)\b'), 'performance claim'),
+    (re.compile(r'\btop speed\b', re.I), 'performance claim'),
+    (re.compile(r'\bhorsepower\b', re.I), 'performance claim'),
     (re.compile(r'\b(emissions?|carbon footprint|co2|co₂)\b', re.I), 'emissions claim'),
 ]
 
