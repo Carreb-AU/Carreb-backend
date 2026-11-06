@@ -70,6 +70,10 @@ curl -X PATCH "https://api.carreb.com.au/api/my-garage/priority-state/" \
 
 Render `engine_data.co2_energy_cycle_g_per_km` as the g/km headline for **all** powertrains. `tailpipe_co2_g_per_km` is 0 for every BEV by definition — your mapper currently prefers it (`myGarageMappers.js:1328`, `:1581`, `:365`), which reproduces the "~0 g/km" bug on garage cards (the vehicle slider already does this right — copy that). Example (009): `130.7 g/km` with `annual_co2_kg: 1582` at 12,100 km.
 
+**Vehicle slider — sum BOTH components (6-Nov, Jock).** Mode rows carry the energy-cycle figure in two parts: `co2_fuel_g_km` (fuel production) and `co2_grid_g_km` (electricity production). The fuel part is **0 for every BEV** — `vehicleSliderMappers.js` was reading only `co2_fuel_g_km`, so EVs rendered "~0 g/km" on the slider. Fixed to `fuel + grid` (equals `co2_energy_cycle_g_per_km`); petrol cars unchanged. Regression test added (`vehicleSliderMappers.test.js`). If you rebuild this mapping anywhere, sum the parts — never read `co2_fuel_g_km` alone.
+
+**Still to check (not yet fixed):** `onboardingStep4.js:87` and `AddVehicleScreen.js:91` map `tailpipeCo2` only (0 for BEVs) — if the onboarding/add-vehicle flow shows a g/km figure, give it the same energy-cycle treatment (`co2_energy_cycle_g_per_km` first, tailpipe never as the headline).
+
 Label the kg line **"energy-cycle, incl. fuel production"** (D39 basis) — `VehicleCardFilled.js:84` currently hard-codes "(rated · combined)"; change it. One basis, labelled — never mix bases on one card.
 
 ## 3. Held (suppressed) cars — amber notice + "Default" badges (B-22, B-23)

@@ -33,6 +33,10 @@ Jock has confirmed the trademark filing: the band is **"Everyday Legend™" (one
 
 Backend change: `same` fired only on an exact zero; it now also fires when the difference rounds to $0/yr (near-identical cars). `value_cents` stays unsigned; derive sign from `direction` only. Tooltip (CD-04/CC-03) unchanged.
 
+## 2a. CO₂ on the vehicle slider — sum fuel + grid (Jock, 6-Nov)
+
+Mode rows carry the energy-cycle figure as two components: `co2_fuel_g_km` and `co2_grid_g_km`. The fuel component is **0 for every BEV**, so reading it alone shows "~0 g/km" for EVs — the slider was doing exactly that. The g/km figure is **fuel + grid** (same total as `co2_energy_cycle_g_per_km`); petrol cars are unaffected. Fixed in `vehicleSliderMappers.js` with a regression test. If any other surface maps a per-mode CO₂, sum both parts — never `co2_fuel_g_km` alone. Known remaining spot: `onboardingStep4.js:87` / `AddVehicleScreen.js:91` (tailpipe only) — same treatment needed there.
+
 ## 3. CORE Dial — 109 more vehicles in bands, counts and "View … vehicles" (BLOCKER)
 
 Jock's arithmetic (12,248 dial rows ÷ 8 = 1,531 vs 1,640 live) is right, but the excluded 109 are **not "Other" category** — the 04-Nov file has zero live "Other" vehicles. They are live cars gated out by a backend Research Status filter: **104 "Pending verify" + 5 "Coming FY26"**. Per the locked rule ("is_suppressed is the only gate") they belong in the Dial.
