@@ -35,7 +35,29 @@ Backend change: `same` fired only on an exact zero; it now also fires when the d
 
 ## 2a. CO₂ on the vehicle slider — sum fuel + grid (Jock, 6-Nov)
 
-Mode rows carry the energy-cycle figure as two components: `co2_fuel_g_km` and `co2_grid_g_km`. The fuel component is **0 for every BEV**, so reading it alone shows "~0 g/km" for EVs — the slider was doing exactly that. The g/km figure is **fuel + grid** (same total as `co2_energy_cycle_g_per_km`); petrol cars are unaffected. Fixed in `vehicleSliderMappers.js` with a regression test. If any other surface maps a per-mode CO₂, sum both parts — never `co2_fuel_g_km` alone. Known remaining spot: `onboardingStep4.js:87` / `AddVehicleScreen.js:91` (tailpipe only) — same treatment needed there.
+**The decision (which option):** the g/km figure is the **energy-cycle total**. Two equivalent ways to get it, and we use both, in this priority:
+
+1. **`co2_energy_cycle_g_per_km`** — the combined total. Use wherever it exists (garage cards, list items, detail top level). This was the B-04 fix.
+2. **`co2_fuel_g_km` + `co2_grid_g_km`** — the same total as two components. Use only where mode rows don't carry the combined field (the vehicle slider's per-mode merge).
+
+**Tailpipe is never the headline** — `tailpipe_co2_g_per_km` is 0 for every BEV by definition and stays in the payload for reference only.
+
+The full story, for the record:
+
+1. The backend sends energy-cycle CO₂ in **two parts** per mode: `co2_fuel_g_km` (fuel-production emissions) and `co2_grid_g_km` (electricity-production emissions, D39 basis). Backend was always correct — the 009 payload has carried `co2_fuel_g_km: 0.0` + `co2_grid_g_km: 130.7` all along.
+2. For a **BEV the fuel part is 0 by definition** — the whole figure lives in the grid part. For a petrol car it's the reverse: the grid part is 0 and the fuel part carries the figure.
+3. The vehicle-slider mapper (`vehicleSliderMappers.js`) was reading **only `co2_fuel_g_km`**, so every EV rendered "~0 g/km" on the slider — exactly Jock's *"it should not be zero, it should use the electricity part."*
+4. **Fixed:** the per-mode merge now sums **fuel + grid** (rounded to 1 dp = the same total as `co2_energy_cycle_g_per_km`). Petrol cars unchanged. A regression test locks it: a BEV mode row with `0.0 + 130.7` must produce `co2PerKm: 130.7`, never 0.
+5. **Rule for any new surface:** never read `co2_fuel_g_km` alone; prefer the combined field, else sum the parts.
+6. **Still to fix (Meenam):** `onboardingStep4.js:87` and `AddVehicleScreen.js:91` map `tailpipeCo2` only — 0 for BEVs. Same treatment: `co2_energy_cycle_g_per_km` first, tailpipe never as the headline.
+7. **Testing:** the FE suite couldn't run on the backend machine (no node_modules) — run `vehicleSliderMappers.test.js` in CI/Vercel.
+
+```bash
+# Backend proof (nothing to fix here — both components in the payload)
+curl -s "https://api.carreb.com.au/api/vehicles/2f6beb87-aa31-4496-bb17-39cc58839ce9/?state=NSW" \
+  | python3 -c "import json,sys; m=json.load(sys.stdin)['mode_data_by_state']['NSW']['B']; print(m['co2_fuel_g_km'], '+', m['co2_grid_g_km'], '=', m['co2_fuel_g_km'] + m['co2_grid_g_km'])"
+# expect: 0.0 + 130.7 = 130.7
+```
 
 ## 3. CORE Dial — 109 more vehicles in bands, counts and "View … vehicles" (BLOCKER)
 
