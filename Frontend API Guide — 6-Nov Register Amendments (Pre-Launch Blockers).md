@@ -50,14 +50,29 @@ What "Pure Cost" means on every surface, so figures never mix bases:
 - **Ratings/stars never follow km or mode switches**: stars, the Dial, and bands stay on dataset km (D29/D30). Only dollars move with the user's km setting.
 - Sanity anchor (009, NSW): `mode_annual_costs.pure_cost` ≈ $7.7k vs `full_picture` ≈ $29.4k — the gap is finance + depreciation. If your rendered Pure Cost figure is ever in the tens of thousands for a $150k car, you're showing the wrong mode.
 
-## 5. Smart Car Finder — star filter and header contract (B-14/B-33, Jock decisions)
+## 5. Smart Car Finder — star filter, budget ceiling and header contract (B-14/B-33, Jock decisions)
 
 Backend adds to `GET /api/vehicles/` before Sunday: budget ceiling (hard cap), the G-146 filters, the **star filter**, and the downward-only relaxation ladder. Jock's ruling on the star filter: **exact band** — 3★ means rating 2.5–3.4 inclusive (bands: 1.0–1.4, 1.5–2.4, 2.5–3.4, 3.5–4.4, 4.5–5.0).
 
+**Query params (all optional):** `budget_max` and `budget_min` in **dollars**, `stars` (1–5), `state` (prices and ratings are read for this state, default `NSW`, on the Pure Cost basis — the same basis the Dial stars use). `mode_data_by_state` is now in every list result so result cards render the per-mode one-decimal rating (§7).
+
+**Response additions** (additive; pagination shape unchanged):
+```json
+"relaxation": {"applied": true, "widened": "budget_min",
+               "from_dollars": 55000, "to_dollars": 40000, "strict_count": 1}
+```
+- `relaxation.applied: false` when the band had 5+ matches.
+- The ladder fires only when fewer than 5 matches sit inside the user's min–max band; it steps the **floor** down $5k at a time (max 24 steps) until 5 matches or $0. **The ceiling never moves** — a car above `budget_max` can never appear.
+
 FE contract (unchanged from main guide §9, restated):
-- Strict: header "Showing N of M matches".
-- Relaxed: same header **plus one line naming the widening** ("Fewer than 5 under your budget, so we widened down to $X"). Downward only, never above budget.
-- Never "0 matches"; never "based on what you told us" when nothing relaxed; one-decimal ratings on result cards.
+- Strict: header "Showing N of M matches" (N = `results.length` on the page, M = `count`).
+- Relaxed: same header **plus one line naming the widening** — "Fewer than 5 under your budget, so we widened down to $X" using `relaxation.to_dollars`. Never "0 matches"; never "based on what you told us" when nothing relaxed; one-decimal ratings on result cards.
+
+## 5a. Type-ahead MY labels (B-01)
+
+Badge year and model-year can differ (year=2024, MY=MY25). The type-ahead (both the search and the suggestions cascade) now matches a year token against the release year **or** the MY year, and cards annotate the label: **"2024 (MY25) ZEEKR 009 6 Seat AWD"**. Render `name` as sent; don't construct your own. No duplicate rows — one card per identity either way. (MY values are loaded from the client's MY CSV; until it lands, catalogue cards show no annotation, which is correct.)
+
+---
 
 ## 6. km badge — label change (B-02, Jock decision + B-38)
 
@@ -83,7 +98,7 @@ Jock: a km figure derived from the odometer is not a user edit — label it "fro
 
 - **Plate graphic:** backend fix coming — the PNG plate header was hardcoded "WESTERN AUSTRALIA"; it will render the user's state or no state name. **FE: nothing to do**; verify a QLD user's card after deploy.
 - **Guard:** backend ships the guard log from three regenerated cards (third person, US spelling, advice words, performance claims) as proof; FE only renders the disclaimer line under the modal card and the footer strip on the 1080 PNG.
-- **Share (B-36):** backend is building the stable PNG URL + public result page with og tags (`og:image` = the 1080 PNG, `og:title` = headline). Until it lands, share flows use the existing `share_image_url` from the result payload. Final flow: mobile = Web Share API with the PNG file; desktop = per-channel intents with the **result URL**; Instagram = download fallback; copy-link = result URL.
+- **Share (B-36):** backend serves a public, no-auth landing page per result at `public_url` on the result payload (`.../api/my-garage/ridereveal/public/<result_id>/`) with `og:image` = the 1080 PNG and `og:title` = the "{First name} {Archetype}!" headline — use it as the share/copy-link URL on every channel. Mobile = Web Share API with the PNG file; desktop = per-channel intents with the result URL; Instagram = download fallback.
 
 ## 9. What did NOT change (save yourself the work)
 
