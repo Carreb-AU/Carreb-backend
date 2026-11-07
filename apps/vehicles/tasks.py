@@ -24,11 +24,13 @@ def process_vehicle_excel_upload(file_path):
 
         # New-format workbook (07-Oct-26 onwards): single consolidated sheet
         # with full state×mode data. Hand off to the consolidated importer.
+        # Frozen name ('Consolidated Vehicles') from the 1-Dec-26 monthly
+        # files; legacy name as fallback.
         from apps.vehicles.services.consolidated_import import (
-            SHEET_NAME as CONSOLIDATED_SHEET,
+            CONSOLIDATED_SHEET_CANDIDATES,
             import_consolidated_vehicles,
         )
-        if CONSOLIDATED_SHEET in sheet_names:
+        if any(name in sheet_names for name in CONSOLIDATED_SHEET_CANDIDATES):
             result = import_consolidated_vehicles(file_path)
             logger.info(
                 f"Consolidated import from {file_path}: "

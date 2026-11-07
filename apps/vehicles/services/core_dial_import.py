@@ -26,6 +26,7 @@ onto every state row.
 """
 import hashlib
 import logging
+import re
 import statistics
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -37,6 +38,66 @@ from apps.vehicles.services.core_dial import AU_STATES
 logger = logging.getLogger(__name__)
 
 SHEET_NAME = 'Consolidated Vehicles v6.4'
+
+# Monthly-refresh naming (Jock, 7-Nov-26): from the 1-Dec-26 file the tab
+# names are frozen — no dates, no versions — and reference tabs can be
+# added at any time. Loaders address sheets BY NAME (never iterating the
+# workbook), so a new reference tab can never break the load. The new
+# frozen name is tried first; the pre-Dec legacy name is the fallback so
+# both file generations load.
+CONSOLIDATED_SHEET_CANDIDATES = ('Consolidated Vehicles',
+                                 'Consolidated Vehicles v6.4')
+READ_ME_SHEET = 'Read me'
+
+
+def resolve_sheet(wb, candidates, purpose='data'):
+    """Return the first candidate sheet present in the workbook."""
+    for name in candidates:
+        if name in wb.sheetnames:
+            return wb[name]
+    raise KeyError(
+        f"{purpose} sheet not found; looked for {list(candidates)} "
+        f"— available: {list(wb.sheetnames)}")
+
+
+_VERSION_TOKEN = re.compile(r'^(v\S+)')
+
+
+def _version_token(text):
+    """The bare version token from a Read me cell — the 04-Nov Read me
+    annotates it ('v6.4-audit-04Nov26 — formulas and inputs unchanged…'),
+    monthly files may too. Returns the leading v-token when present."""
+    m = _VERSION_TOKEN.match(str(text).strip())
+    return m.group(1) if m else str(text).strip()
+
+
+def _scoring_version_from_read_me(wb):
+    """The dataset version string, once it moves to the Read me tab with
+    the 1-Dec-26 monthly files (e.g. 'v6.4-monthly-01Dec26').
+
+    Accepts a key/value row ('scoring_version' in one cell, value in a
+    later cell) or an inline 'scoring_version: X' label. Returns None when
+    the tab or key is absent (pre-Dec files carry the column instead).
+    """
+    if READ_ME_SHEET not in wb.sheetnames:
+        return None
+    ws = wb[READ_ME_SHEET]
+    for row in ws.iter_rows(values_only=True):
+        cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+        if not cells:
+            continue
+        first = cells[0].lower().replace(' ', '_')
+        if 'scoring_version' not in first:
+            continue
+        for sep in (':', '='):
+            if sep in cells[0]:
+                value = cells[0].split(sep, 1)[1].strip()
+                if value:
+                    return _version_token(value)
+        for c in cells[1:]:
+            if c:
+                return _version_token(c)
+    return None
 
 # Header names for the scalar columns the parser needs.
 COL_MAKE = 'Make'
@@ -284,16 +345,22 @@ def parse_name_group(name, group_rows, problems, columns) -> List[ParsedListing]
 
 
 def parse_workbook(path, as_at: Optional[str] = None) -> ParsedWorkbook:
-    """Parse the Consolidated Vehicles v6.4 sheet of the given workbook."""
+    """Parse the Consolidated Vehicles sheet of the given workbook.
+
+    Sheet by exact name (frozen name, legacy fallback); scoring version
+    from Read me when present (monthly files), else the sheet column.
+    """
     wb = openpyxl.load_workbook(path, read_only=True)
     try:
-        ws = wb[SHEET_NAME]
+        ws = resolve_sheet(wb, CONSOLIDATED_SHEET_CANDIDATES,
+                           purpose='Consolidated Vehicles')
         rows_iter = ws.iter_rows(values_only=True)
         header = next(rows_iter, ())
         columns = _build_column_map(header)
         name_groups: Dict[tuple, list] = {}
         group_order: List[tuple] = []
         scoring_versions = []
+        read_me_version = _scoring_version_from_read_me(wb)
         for row in rows_iter:
             if _cell(row, columns, COL_MAKE) is None:
                 continue
@@ -318,8 +385,16 @@ def parse_workbook(path, as_at: Optional[str] = None) -> ParsedWorkbook:
     for name in group_order:
         listings.extend(parse_name_group(name, name_groups[name], problems, columns))
 
-    if not scoring_versions:
-        problems.append('No scoring_version found in sheet')
+    # Monthly files (1-Dec-26 onward) carry the version in Read me; the
+    # per-row column is the fallback for pre-Dec files.
+    if read_me_version:
+        scoring_version = read_me_version
+        if scoring_versions and scoring_versions[0] != read_me_version:
+            problems.append(
+                f'Read me scoring_version {read_me_version} disagrees with the '
+                f'sheet column ({scoring_versions}); using Read me')
+    elif not scoring_versions:
+        problems.append('No scoring_version found in sheet or Read me')
         scoring_version = 'unknown'
     else:
         scoring_version = scoring_versions[0]

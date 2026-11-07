@@ -29,8 +29,28 @@ from apps.vehicles.models import (
     Vehicle,
 )
 
-SHEET_NAME = "Consolidated Vehicles v6.4"
-SPOTLIGHT_SHEET_NAME = "Spotlights"  # added in the 13-Oct-26 workbook
+# Monthly-refresh naming (Jock, 7-Nov-26): from the 1-Dec-26 file the
+# consolidated tab is frozen as 'Consolidated Vehicles'; the legacy name
+# is the fallback so pre-Dec files still load. Reference tabs may be
+# added at any time — we read by exact name only and never iterate the
+# workbook, so extra tabs can never break the load.
+CONSOLIDATED_SHEET_CANDIDATES = ("Consolidated Vehicles",
+                                 "Consolidated Vehicles v6.4")
+SPOTLIGHT_SHEET_NAME = "Spotlights"  # unchanged by the monthly refresh
+
+
+def _resolve_sheet_name(filepath: str, candidates, purpose: str) -> str:
+    import openpyxl
+    wb = openpyxl.load_workbook(filepath, read_only=True)
+    try:
+        for name in candidates:
+            if name in wb.sheetnames:
+                return name
+        raise ValueError(
+            f"{purpose} sheet not found; looked for {list(candidates)} "
+            f"— available: {list(wb.sheetnames)}")
+    finally:
+        wb.close()
 
 # Workbook metadata keywords that are never real vehicle makes (defensive;
 # the consolidated sheet is expected to be clean).
@@ -265,7 +285,9 @@ def parse_consolidated_sheet(filepath: str):
     source data row of a non-junk group); empty when the workbook has no
     listing_id column (pre-21-Oct layouts).
     """
-    df = pd.read_excel(filepath, sheet_name=SHEET_NAME)
+    sheet_name = _resolve_sheet_name(filepath, CONSOLIDATED_SHEET_CANDIDATES,
+                                     'Consolidated Vehicles')
+    df = pd.read_excel(filepath, sheet_name=sheet_name)
     spotlights = _load_spotlights(filepath)
     has_listing_id = "listing_id" in df.columns
     has_suppression = "is_suppressed" in df.columns

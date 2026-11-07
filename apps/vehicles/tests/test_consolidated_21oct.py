@@ -207,6 +207,66 @@ class NewLayoutImportTests(TestCase):
         self.assertEqual(mode_b['co2_grid_g_km'], 0.0)
         self.assertEqual(mode_b['co2_tailpipe_pa_kg'], 0.0)
 
+    def test_monthly_refresh_frozen_tab_name_and_extra_tabs(self):
+        # From the 1-Dec-26 monthly files the consolidated tab is frozen as
+        # 'Consolidated Vehicles', reference tabs keep plain names, and new
+        # tabs may appear at any time. The loader reads the three data tabs
+        # by exact name and skips everything else.
+        path = os.path.join(self.tmpdir, 'synthetic-monthly.xlsx')
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Consolidated Vehicles'
+        ws.append(HEADERS)
+        for listing_id, suppressed in (('L001', False), ('L002', True)):
+            for state in AU_STATES:
+                for mode in ('B', 'E', 'C', 'F'):
+                    ws.append([_row(listing_id, suppressed, state, mode)[h]
+                               for h in HEADERS])
+        # Reference tabs the loader must ignore entirely.
+        ws2 = wb.create_sheet('Market listing')
+        ws2.append(['anything'])
+        ws2.append(['a brand new reference tab can never break the load'])
+        wb.create_sheet('Change log')
+        wb.create_sheet('Spotlights')
+        wb.save(path)
+
+        parsed = parse_workbook(path, as_at='2026-12-01')
+        self.assertEqual(len(parsed.listings), 2)
+        self.assertEqual(len(parsed.dial_rows()), 8)
+
+    def test_scoring_version_moves_to_read_me(self):
+        # Monthly files carry the version in Read me (first: v6.4-monthly-
+        # 01Dec26); it wins over the per-row column. Accepts key/value rows
+        # and inline 'scoring_version: X' labels.
+        path = os.path.join(self.tmpdir, 'synthetic-readme-version.xlsx')
+
+        def build(read_me_rows):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = 'Consolidated Vehicles'
+            ws.append(HEADERS)
+            for state in AU_STATES:
+                for mode in ('B', 'E', 'C', 'F'):
+                    ws.append([_row('L001', False, state, mode)[h]
+                               for h in HEADERS])
+            rm = wb.create_sheet('Read me')
+            for row in read_me_rows:
+                rm.append(row)
+            wb.save(path)
+
+        build([('scoring_version', 'v6.4-monthly-01Dec26')])
+        parsed = parse_workbook(path)
+        self.assertEqual(parsed.scoring_version, 'v6.4-monthly-01Dec26')
+
+        build([('The dataset version:',), ('scoring_version: v6.4-monthly-01Dec26',)])
+        parsed = parse_workbook(path)
+        self.assertEqual(parsed.scoring_version, 'v6.4-monthly-01Dec26')
+
+        # No Read me -> falls back to the sheet column (pre-Dec files).
+        build([])
+        parsed = parse_workbook(path)
+        self.assertEqual(parsed.scoring_version, 'v6.4-test-21oct')
+
     def test_dial_includes_live_pending_verify_listing(self):
         # 6-Nov (B-22 locked rule): is_suppressed is the only dial gate.
         # A live 'Pending verify' listing — 104 such cars plus 5 'Coming
