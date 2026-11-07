@@ -1423,3 +1423,36 @@ class AIVehicleEntry(models.Model):
 
     def __str__(self):
         return f"{self.year or '?'} {self.make} {self.model} (AI)"
+
+
+class DatasetUpload(models.Model):
+    """Audit + status trail for monthly 02-file uploads (handover feature).
+
+    Created when anyone (admin page or the API endpoint) uploads the
+    signed-off monthly dataset workbook; the Celery task records the
+    outcome here so the uploader can see exactly what changed.
+    """
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        PROCESSING = 'processing', 'Processing'
+        SUCCESS = 'success', 'Success'
+        FAILED = 'failed', 'Failed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    uploaded_by = models.ForeignKey(
+        'users.User', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='dataset_uploads')
+    file = models.FileField(upload_to='dataset_uploads/')
+    original_name = models.CharField(max_length=255)
+    status = models.CharField(max_length=20, choices=Status.choices,
+                              default=Status.PENDING)
+    result = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f"{self.original_name} ({self.get_status_display()})"

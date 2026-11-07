@@ -13,10 +13,28 @@ def emit_analytics_event(user_id: str, event_name: str, event_data: dict):
     
 
 @shared_task
-def process_vehicle_excel_upload(file_path):
+def process_vehicle_excel_upload(file_path, upload_id=None):
+    """Process an uploaded 02 workbook; optionally record the outcome on a
+    DatasetUpload row (upload_id) so the uploader can see the result."""
     import pandas as pd
     from django.utils import timezone
-    from .models import Vehicle
+    from .models import DatasetUpload, Vehicle
+
+    upload = None
+    if upload_id:
+        upload = DatasetUpload.objects.filter(id=upload_id).first()
+        if upload:
+            upload.status = DatasetUpload.Status.PROCESSING
+            upload.save(update_fields=['status'])
+
+    def _finish(status, result=None, error=''):
+        if not upload:
+            return
+        upload.status = status
+        upload.result = result or {}
+        upload.error = error
+        upload.finished_at = timezone.now()
+        upload.save(update_fields=['status', 'result', 'error', 'finished_at'])
 
     try:
         xls = pd.ExcelFile(file_path)
@@ -37,21 +55,43 @@ def process_vehicle_excel_upload(file_path):
                 f"{result['created']} created / {result['updated']} updated / "
                 f"{result['skipped']} skipped."
             )
+            outcome = {
+                'vehicles_created': result.get('created'),
+                'vehicles_updated': result.get('updated'),
+                'rows_skipped': result.get('skipped'),
+            }
             # Monthly refresh: one upload updates every surface. Bounds and
             # the CORE Dial read the same signed-off workbook; failures here
-            # don't undo the vehicle import but are logged loudly.
+            # don't undo the vehicle import but are recorded on the upload.
             try:
                 from django.core.management import call_command
                 call_command('sync_sheet_08_category_scoring_bounds',
                              filepath=file_path)
                 call_command('build_core_dial', path=file_path)
+                from apps.vehicles.models import (
+                    CategoryScoringBounds, CoreDialBatch, CoreDialRow)
+                batch = CoreDialBatch.objects.filter(is_current=True).first()
+                bounds_ver = (CategoryScoringBounds.objects
+                              .values_list('scoring_version', flat=True)
+                              .order_by('-id').first())
+                outcome['bounds_version'] = bounds_ver
+                outcome['dial'] = {
+                    'version': batch.scoring_version if batch else None,
+                    'as_at': str(batch.as_at) if batch else None,
+                    'rows': (CoreDialRow.objects.filter(batch=batch).count()
+                             if batch else 0),
+                }
+                outcome['post_import_refresh'] = 'ok'
                 logger.info(
                     f"Post-import refresh done for {file_path}: "
                     "bounds synced, dial batch rebuilt.")
             except Exception as exc:
+                outcome['post_import_refresh'] = 'failed'
+                outcome['post_import_error'] = str(exc)[:2000]
                 logger.error(
                     f"Post-import bounds/dial refresh FAILED for {file_path}: "
                     f"{exc}")
+            _finish(DatasetUpload.Status.SUCCESS, result=outcome)
             return
 
         dfs_to_process = []
@@ -214,8 +254,11 @@ def process_vehicle_excel_upload(file_path):
                 }
             )
         logger.info(f"Successfully processed vehicle upload from {file_path}")
+        _finish(DatasetUpload.Status.SUCCESS,
+                result={'vehicles_upserted': len(vehicles_data)})
     except Exception as e:
         logger.error(f"Failed to process vehicle upload from {file_path}: {e}")
+        _finish(DatasetUpload.Status.FAILED, error=str(e)[:2000])
 
 
 @shared_task

@@ -363,16 +363,24 @@ class VehicleDataUploadView(views.APIView):
         file_obj = request.FILES.get('file')
         if not file_obj:
             return Response({"error": "No file provided."}, status=status.HTTP_400_BAD_REQUEST)
-            
+
         # Save file temporarily
         file_name = default_storage.save(file_obj.name, file_obj)
         file_path = default_storage.path(file_name)
-        
+
+        from apps.vehicles.models import DatasetUpload
+        row = DatasetUpload.objects.create(
+            uploaded_by=request.user,
+            file=file_name,
+            original_name=file_obj.name,
+        )
+
         # Dispatch Celery task
-        process_vehicle_excel_upload.delay(file_path)
-        
+        process_vehicle_excel_upload.delay(file_path, str(row.id))
+
         return Response({
-            "message": "File accepted for processing in the background."
+            "message": "File accepted for processing in the background.",
+            "upload_id": str(row.id),
         }, status=status.HTTP_202_ACCEPTED)
 
 class CoreSearchView(views.APIView):

@@ -1,6 +1,7 @@
 import os
 from django.contrib import admin, messages
 from django.conf import settings
+from django.core.exceptions import PermissionDenied
 
 from apps.vehicles.models import (
     Vehicle,
@@ -34,8 +35,27 @@ from apps.vehicles.models import (
     CoreDialRow,
     ConsolidatedVehicleRow,
     AIVehicleEntry,
+    DatasetUpload,
 )
 from apps.vehicles.services.gvg_import import import_all
+
+
+def _current_dataset_snapshot():
+    """Live counts shown on the upload page so the uploader can sanity-check
+    the before/after state."""
+    from django.db.models import Count
+    try:
+        live = Vehicle.objects.filter(is_suppressed=False).count()
+        batch = CoreDialBatch.objects.filter(is_current=True).first()
+        return {
+            'live_vehicles': live,
+            'dial_version': batch.scoring_version if batch else None,
+            'dial_as_at': str(batch.as_at) if batch else None,
+            'dial_rows': (CoreDialRow.objects.filter(batch=batch).count()
+                          if batch else 0),
+        }
+    except Exception:
+        return {}
 
 
 @admin.register(DataSource)
@@ -283,6 +303,116 @@ class VehicleCOOComponentBreakdownAdmin(admin.ModelAdmin):
     search_fields = ["make", "model", "variant", "fcai_category"]
     list_filter = ["state", "fcai_category", "energy_norm", "year"]
     readonly_fields = ["id", "created_at", "updated_at"]
+
+
+@admin.register(DatasetUpload)
+class DatasetUploadAdmin(admin.ModelAdmin):
+    """Monthly dataset handover page.
+
+    One screen: upload the signed-off 02 workbook, watch the status, and
+    see the full history of what each upload changed. Available to staff
+    users with the "add datasetupload" permission only.
+    """
+    list_display = [
+        "created_at", "original_name", "uploaded_by", "status", "summary",
+    ]
+    list_filter = ["status"]
+    change_list_template = "admin/vehicles/datasetupload/change_list.html"
+    readonly_fields = [
+        "id", "uploaded_by", "file", "original_name", "status", "result",
+        "error", "created_at", "finished_at",
+    ]
+    search_fields = ["original_name"]
+
+    def has_add_permission(self, request):
+        # Rows are created through the upload view below.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def get_urls(self):
+        from django.urls import path
+        urls = super().get_urls()
+        upload = path(
+            "upload/",
+            self.admin_site.admin_view(self.upload_view),
+            name="vehicles_datasetupload_upload",
+        )
+        return [upload] + urls
+
+    def changelist_view(self, request, extra_context=None):
+        extra_context = extra_context or {}
+        extra_context["upload_url"] = "upload/"
+        extra_context["current_dataset"] = _current_dataset_snapshot()
+        extra_context["refresh"] = DatasetUpload.objects.filter(
+            status__in=(DatasetUpload.Status.PENDING,
+                        DatasetUpload.Status.PROCESSING)).exists()
+        return super().changelist_view(request, extra_context=extra_context)
+
+    def upload_view(self, request):
+        from django.shortcuts import redirect, render
+        from django.core.files.storage import default_storage
+        from apps.vehicles.tasks import process_vehicle_excel_upload
+
+        if not request.user.has_perm('vehicles.add_datasetupload'):
+            raise PermissionDenied
+
+        if request.method == "POST":
+            file_obj = request.FILES.get("file")
+            if not file_obj:
+                messages.error(request, "Choose the workbook file first.")
+                return redirect("..")
+            name = file_obj.name.lower()
+            if not name.endswith((".xlsx", ".xlsm")):
+                messages.error(
+                    request, "Expected an .xlsx workbook (the 02 Vehicles & CORE file).")
+                return redirect("..")
+            if file_obj.size > 200 * 1024 * 1024:
+                messages.error(request, "File too large (200 MB max).")
+                return redirect("..")
+            stored = default_storage.save(
+                f"dataset_uploads/{file_obj.name}", file_obj)
+            row = DatasetUpload.objects.create(
+                uploaded_by=request.user,
+                file=stored,
+                original_name=file_obj.name,
+                status=DatasetUpload.Status.PENDING,
+            )
+            process_vehicle_excel_upload.delay(
+                default_storage.path(stored), str(row.id))
+            messages.success(
+                request,
+                "Upload accepted — processing in the background. "
+                "This page refreshes until it finishes (usually 3-5 minutes).")
+            return redirect("..")
+
+        return render(request, "admin/vehicles/datasetupload/upload.html", {
+            "title": "Upload monthly dataset",
+            "opts": self.model._meta,
+            "has_view_permission": True,
+            "current_dataset": _current_dataset_snapshot(),
+        })
+
+    def summary(self, obj):
+        if obj.status == DatasetUpload.Status.SUCCESS:
+            bits = []
+            v = obj.result.get("vehicles_created")
+            u = obj.result.get("vehicles_updated")
+            if v is not None:
+                bits.append(f"{v} new / {u} updated")
+            dial = obj.result.get("dial") or {}
+            if dial.get("rows"):
+                bits.append(f"dial {dial['rows']} rows")
+            if obj.result.get("bounds_version"):
+                bits.append(str(obj.result["bounds_version"]))
+            if obj.result.get("post_import_refresh") == "failed":
+                bits.append("bounds/dial refresh FAILED")
+            return " · ".join(bits) or "ok"
+        if obj.status == DatasetUpload.Status.FAILED:
+            return (obj.error or "failed")[:120]
+        return obj.get_status_display()
+    summary.short_description = "Outcome"
 
 
 @admin.register(NGAEmissionFactor)

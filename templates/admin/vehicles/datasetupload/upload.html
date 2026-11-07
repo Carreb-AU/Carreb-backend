@@ -1,0 +1,60 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a> &rsaquo;
+  <a href="../">{{ opts.app_config.verbose_name }}</a> &rsaquo;
+  <a href="../">{{ opts.verbose_name_plural|capfirst }}</a> &rsaquo;
+  {% translate 'Upload' %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+  <h1>Upload the monthly dataset</h1>
+
+  {% if current_dataset %}
+  <p style="margin-bottom:1em">
+    <strong>Current live dataset:</strong>
+    {{ current_dataset.live_vehicles }} live vehicles ·
+    dial <em>{{ current_dataset.dial_version }}</em>
+    ({{ current_dataset.dial_as_at }}, {{ current_dataset.dial_rows }} rows).
+    After a successful upload these numbers should reflect the new file.
+  </p>
+  {% endif %}
+
+  <fieldset class="module aligned" style="max-width:60em">
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div class="form-row">
+        <label for="id_file">02 workbook (.xlsx)</label>
+        <input type="file" name="file" id="id_file" accept=".xlsx,.xlsm" required>
+        <p class="help" style="margin-left:0">
+          The signed-off “02 Vehicles &amp; CORE - &lt;date&gt;.xlsx” file.
+        </p>
+      </div>
+      <div class="submit-row">
+        <input type="submit" class="default" value="Upload and refresh">
+      </div>
+    </form>
+  </fieldset>
+
+  <h2>What happens</h2>
+  <ol>
+    <li>The <strong>vehicles</strong> table is replaced with the file’s contents
+        (new listings added, existing ones updated).</li>
+    <li><strong>CategoryScoringBounds</strong> is synced from the same file.</li>
+    <li>The <strong>CORE Dial</strong> batch is rebuilt (bands, counts, match lists).</li>
+  </ol>
+  <p>
+    Processing takes <strong>3–5 minutes</strong>. The history page refreshes
+    itself until the upload shows <em>Success</em>. If it shows
+    <em>Failed</em>, the error is recorded on the row — nothing is silently
+    half-applied beyond the vehicle import, which is logged per upload.
+    Uploads are kept as an audit trail (file, user, counts, outcome).
+  </p>
+
+  <p><a href="../">&larr; Back to upload history</a></p>
+</div>
+{% endblock %}
