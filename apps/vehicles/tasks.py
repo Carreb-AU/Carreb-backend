@@ -37,6 +37,21 @@ def process_vehicle_excel_upload(file_path):
                 f"{result['created']} created / {result['updated']} updated / "
                 f"{result['skipped']} skipped."
             )
+            # Monthly refresh: one upload updates every surface. Bounds and
+            # the CORE Dial read the same signed-off workbook; failures here
+            # don't undo the vehicle import but are logged loudly.
+            try:
+                from django.core.management import call_command
+                call_command('sync_sheet_08_category_scoring_bounds',
+                             filepath=file_path)
+                call_command('build_core_dial', path=file_path)
+                logger.info(
+                    f"Post-import refresh done for {file_path}: "
+                    "bounds synced, dial batch rebuilt.")
+            except Exception as exc:
+                logger.error(
+                    f"Post-import bounds/dial refresh FAILED for {file_path}: "
+                    f"{exc}")
             return
 
         dfs_to_process = []
