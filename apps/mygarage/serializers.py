@@ -197,6 +197,11 @@ class RideRevealGenerateSerializer(serializers.Serializer):
     custom_plate = serializers.CharField(max_length=7, required=False, allow_blank=True, allow_null=True)
     favorite_color = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
     first_name = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
+    # Absolute URL of a photo previously uploaded via POST
+    # /ridereveal/photo/ (same origin only). Persisted on the result so a
+    # reopen shows it even when the user has no profile picture.
+    photo_url = serializers.CharField(max_length=500, required=False,
+                                      allow_blank=True, allow_null=True)
 
     def validate_custom_plate(self, value):
         if value:
@@ -211,6 +216,7 @@ class RideRevealResultSerializer(serializers.ModelSerializer):
     vehicle = serializers.SerializerMethodField()
     share_image_url = serializers.SerializerMethodField()
     public_url = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
 
     class Meta:
         model = RideRevealResult
@@ -219,8 +225,19 @@ class RideRevealResultSerializer(serializers.ModelSerializer):
             'social_perception_text', 'did_you_know_fact', 'share_caption',
             'disclaimer', 'custom_plate', 'favorite_color', 'first_name',
             'traits', 'generated_at', 'vehicle',
-            'share_image_url', 'public_url'
+            'share_image_url', 'public_url', 'photo_url'
         ]
+
+    def get_photo_url(self, obj):
+        # The photo uploaded in the creation modal, persisted on the result
+        # (absolute URL for display). Null when the modal photo was never
+        # uploaded — the FE then falls back to the user's profile picture.
+        if not obj.uploaded_photo:
+            return None
+        from django.conf import settings
+        base = getattr(settings, 'API_BASE_URL', '').rstrip('/')
+        path = obj.uploaded_photo.name
+        return f"{base}/media/{path}" if not path.startswith(('http://', 'https://', '/')) else path
 
     def get_public_url(self, obj):
         # B-36: the public landing page (og tags) is the share/copy URL.

@@ -199,6 +199,10 @@ class RideRevealResult(models.Model):
     generated_at = models.DateTimeField(auto_now_add=True)
     credit_type = models.CharField(max_length=50, choices=RideRevealCreditType.choices)
     share_image = models.ImageField(upload_to='ride_reveal_shares/', null=True, blank=True)
+    # Photo the user uploaded in the RideReveal creation modal (persists on
+    # the result so reopening the reveal shows it even with no profile
+    # picture). Takes priority over the user's profile photo on the card.
+    uploaded_photo = models.ImageField(upload_to='ride_reveal_photos/', null=True, blank=True)
     # Five personality trait pills for the card (spec §3.4), generated with
     # the rest of the profile.
     traits = models.JSONField(null=True, blank=True)
@@ -219,6 +223,9 @@ class RideRevealJob(models.Model):
     custom_plate = models.CharField(max_length=7, null=True, blank=True)
     favorite_color = models.CharField(max_length=50, null=True, blank=True)
     first_name = models.CharField(max_length=50, null=True, blank=True)
+    # Photo uploaded in the creation modal, carried to the result by the
+    # task (relative MEDIA path).
+    photo_url = models.CharField(max_length=500, null=True, blank=True)
     status = models.CharField(max_length=20, choices=RideRevealJobStatus.choices, default=RideRevealJobStatus.PENDING)
     result = models.ForeignKey(RideRevealResult, on_delete=models.SET_NULL, null=True, blank=True, related_name='jobs')
     error_message = models.TextField(null=True, blank=True)

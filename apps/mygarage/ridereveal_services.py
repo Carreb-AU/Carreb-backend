@@ -58,7 +58,29 @@ def get_ridereveal_credits(user):
         "free_reveal_used": credits.free_reveal_used,
     }
 
-def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, favorite_color=None, first_name=None):
+def normalize_photo_url(photo_url):
+    """Reduce an uploaded-photo URL to its MEDIA-relative path.
+
+    Accepts only this origin ('https://api.carreb.com.au/media/x.jpg',
+    '/media/x.jpg') so the card renderer can never be pointed at an
+    arbitrary remote URL. Returns the relative path, or None when blank.
+    Raises ValueError for anything else.
+    """
+    if not photo_url:
+        return None
+    from django.conf import settings
+    url = str(photo_url).strip()
+    base = getattr(settings, 'API_BASE_URL', '').rstrip('/')
+    if base and url.startswith(base + '/'):
+        url = url[len(base):]
+    if url.startswith('/media/'):
+        url = url[len('/media/'):]
+    if url.startswith(('http://', 'https://', '/')) or '..' in url:
+        raise ValueError("photo_url must be a file uploaded to this site's media storage.")
+    return url
+
+
+def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, favorite_color=None, first_name=None, photo_url=None):
     from apps.mygarage.tasks import generate_ridereveal_content
     
     try:
@@ -91,8 +113,17 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, fa
         color_changed = (favorite_color or None) != existing_result.favorite_color
         new_name = (first_name or '').strip() or None
         name_changed = new_name is not None and new_name != existing_result.first_name
+        new_photo = None
+        photo_changed = False
+        if photo_url:
+            try:
+                new_photo = normalize_photo_url(photo_url)
+            except ValueError as exc:
+                return {"status_code": 422, "error": "invalid_photo_url",
+                        "message": str(exc)}
+            photo_changed = new_photo != (existing_result.uploaded_photo.name or None)
 
-        if not (plate_changed or color_changed or name_changed):
+        if not (plate_changed or color_changed or name_changed or photo_changed):
             from apps.mygarage.serializers import RideRevealResultSerializer
             return {
                 "status_code": 200,
@@ -100,13 +131,16 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, fa
                 "result": RideRevealResultSerializer(existing_result).data
             }
 
-        # Edit path (B-17): apply the new plate/colour/name without
+        # Edit path (B-17): apply the new plate/colour/name/photo without
         # consuming a credit. Plate or colour changes alter the generated
-        # content, so the profile is regenerated for free; a name-only
-        # change just re-renders the share card.
+        # content, so the profile is regenerated for free; a name-only or
+        # photo-only change just re-renders the share card.
         if name_changed:
             existing_result.first_name = new_name
             existing_result.save(update_fields=['first_name'])
+        if photo_changed:
+            existing_result.uploaded_photo = new_photo
+            existing_result.save(update_fields=['uploaded_photo'])
         if plate_changed or color_changed:
             job = RideRevealJob.objects.create(
                 user=user,
@@ -114,6 +148,7 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, fa
                 custom_plate=custom_plate,
                 favorite_color=favorite_color,
                 first_name=existing_result.first_name,
+                photo_url=new_photo or existing_result.uploaded_photo.name,
                 status=RideRevealJobStatus.PENDING
             )
             generate_ridereveal_content.delay(job.id, None)
@@ -178,6 +213,7 @@ def trigger_ridereveal_generation(user, garage_vehicle_id, custom_plate=None, fa
             custom_plate=custom_plate,
             favorite_color=favorite_color,
             first_name=(first_name or '').strip() or None,
+            photo_url=normalize_photo_url(photo_url) if photo_url else None,
             status=RideRevealJobStatus.PENDING
         )
         

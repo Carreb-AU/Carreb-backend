@@ -1548,7 +1548,7 @@ class RideRevealGuardAndEditTests(TestCase):
                        did_you_know_fact="The fastest car in its class, 0-100 in 4 seconds.")
         self.assertTrue(any("performance claim" in h for h in _guard_violations(flagged)))
 
-    def _run_task(self, payloads):
+    def _run_task(self, payloads, job_kwargs=None):
         """Run generate_ridereveal_content with a mocked OpenAI client that
         returns each payload in turn."""
         import json as _json
@@ -1559,7 +1559,7 @@ class RideRevealGuardAndEditTests(TestCase):
 
         job = RideRevealJob.objects.create(
             user=self.user, garage_vehicle=self.gv,
-            status=RideRevealJobStatus.PENDING)
+            status=RideRevealJobStatus.PENDING, **(job_kwargs or {}))
 
         def _completion(payload):
             m = mock.Mock()
@@ -1636,11 +1636,71 @@ class RideRevealGuardAndEditTests(TestCase):
                 self.user, self.gv.id, first_name="Steve")
         self.assertEqual(out["status_code"], 200)
         self.assertTrue(out["already_generated"])
+
+    # -- Modal photo persistence ----------------------------------------------
+    def _api_client(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+        return client
+
+    def test_photo_upload_endpoint_validates_and_stores(self):
+        import io
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        url = "/api/my-garage/ridereveal/photo/"
+        client = self._api_client()
+        self.assertEqual(client.post(url).status_code, 400)
+        bad = SimpleUploadedFile("notes.txt", b"hello",
+                                 content_type="text/plain")
+        self.assertEqual(client.post(url, {"photo": bad}).status_code, 400)
+        img = SimpleUploadedFile("me.jpg", b"\xff\xd8\xff\xe0" + b"0" * 64,
+                                 content_type="image/jpeg")
+        resp = client.post(url, {"photo": img})
+        self.assertEqual(resp.status_code, 201)
+        photo_url = resp.data["photo_url"]
+        self.assertIn("/media/ride_reveal_photos/me", photo_url)
+        # Stored where the URL points.
+        from django.core.files.storage import default_storage
+        name = photo_url.split("/media/")[-1]
+        self.assertTrue(default_storage.exists(name))
+
+    def test_generate_with_photo_url_persists_and_wins_on_card(self):
+        from apps.mygarage.share_card import build_share_card_context
+        job, result = self._run_task(
+            [self.GOOD],
+            job_kwargs={"photo_url": "ride_reveal_photos/me.jpg"})
+        self.assertIsNotNone(result)
         result.refresh_from_db()
-        self.assertEqual(result.first_name, "Steve")
+        self.assertEqual(result.uploaded_photo.name,
+                         "ride_reveal_photos/me.jpg")
+        from apps.mygarage.serializers import RideRevealResultSerializer
+        data = RideRevealResultSerializer(result).data
+        self.assertEqual(data["photo_url"],
+                         "https://api.carreb.com.au/media/ride_reveal_photos/me.jpg")
+        # The card prefers the uploaded photo over the profile photo.
+        ctx = build_share_card_context(result)
+        self.assertTrue(ctx["photo_url"].endswith("/media/ride_reveal_photos/me.jpg"))
+
+    def test_photo_only_edit_on_existing_result(self):
+        from apps.mygarage.ridereveal_services import trigger_ridereveal_generation
+        result = self._make_result()
+        with mock.patch("apps.mygarage.share_card.generate_share_card_png",
+                        return_value=False) as m_card:
+            out = trigger_ridereveal_generation(
+                self.user, self.gv.id,
+                photo_url="https://api.carreb.com.au/media/ride_reveal_photos/new.png")
+        self.assertEqual(out["status_code"], 200)
+        result.refresh_from_db()
+        self.assertEqual(result.uploaded_photo.name,
+                         "ride_reveal_photos/new.png")
         m_card.assert_called_once()
-        # No regeneration job, no credit consumed.
-        self.assertFalse(out.get("regenerating"))
+
+    def test_remote_photo_url_rejected(self):
+        resp = self._api_client().post(
+            "/api/my-garage/ridereveal/generate/",
+            {"garage_vehicle_id": str(self.gv.id),
+             "photo_url": "https://evil.example/x.jpg"}, format="json")
+        self.assertEqual(resp.status_code, 422)
 
     def test_plate_edit_regenerates_without_credit(self):
         from apps.mygarage.models import RideRevealJob

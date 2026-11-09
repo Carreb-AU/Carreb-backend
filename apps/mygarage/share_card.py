@@ -90,10 +90,18 @@ def build_share_card_context(result):
     vehicle = result.vehicle_catalogue
     display_name = (getattr(result, 'first_name', None) or user.first_name or '').strip() or 'You'
     traits = getattr(result, 'traits', None) or []
+    # The modal-uploaded photo wins; profile photo is the fallback. Without
+    # either, the template renders the initial-based avatar (issue: the
+    # uploaded image must persist on reopen even with no profile picture).
+    if getattr(result, 'uploaded_photo', None):
+        name = result.uploaded_photo.name
+        photo_url = _absolute(name if name.startswith('/') else f'/media/{name}')
+    else:
+        photo_url = _absolute(getattr(user, 'profile_photo_url', None))
     return {
         'display_name': display_name,
         'avatar_initial': (display_name[0] or 'Y').upper(),
-        'photo_url': _absolute(getattr(user, 'profile_photo_url', None)),
+        'photo_url': photo_url,
         'archetype_name': result.archetype_name,
         'archetype_tagline': result.archetype_tagline,
         'vehicle_image_url': _absolute(getattr(vehicle, 'image_url', None)),

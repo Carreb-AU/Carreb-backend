@@ -1845,16 +1845,56 @@ class RideRevealGenerateView(views.APIView):
     def post(self, request):
         serializer = RideRevealGenerateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+
         garage_vehicle_id = serializer.validated_data['garage_vehicle_id']
         custom_plate = serializer.validated_data.get('custom_plate')
         favorite_color = serializer.validated_data.get('favorite_color')
         first_name = serializer.validated_data.get('first_name')
+        photo_url = serializer.validated_data.get('photo_url')
 
-        result = trigger_ridereveal_generation(request.user, garage_vehicle_id, custom_plate, favorite_color, first_name)
-        
+        from apps.mygarage.ridereveal_services import normalize_photo_url
+        if photo_url:
+            try:
+                normalize_photo_url(photo_url)
+            except ValueError as exc:
+                return Response({"error": "invalid_photo_url",
+                                 "message": str(exc)},
+                                status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        result = trigger_ridereveal_generation(
+            request.user, garage_vehicle_id, custom_plate, favorite_color,
+            first_name, photo_url=photo_url)
+
         status_code = result.pop('status_code')
         return Response(result, status=status_code)
+
+class RideRevealPhotoUploadView(views.APIView):
+    """Accepts the photo uploaded in the RideReveal creation modal so it
+    persists on the result (multipart POST, returns the absolute URL to
+    pass as photo_url on generate)."""
+
+    permission_classes = [IsAuthenticated]
+
+    _ALLOWED_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
+
+    def post(self, request):
+        from django.core.files.storage import default_storage
+        file_obj = request.FILES.get('photo')
+        if not file_obj:
+            return Response({"error": "No photo provided."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        content_type = (file_obj.content_type or '').lower()
+        if content_type not in self._ALLOWED_TYPES:
+            return Response(
+                {"error": "Photo must be a JPEG, PNG or WebP image."},
+                status=status.HTTP_400_BAD_REQUEST)
+        if file_obj.size > 8 * 1024 * 1024:
+            return Response({"error": "Photo too large (8 MB max)."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        name = default_storage.save(f'ride_reveal_photos/{file_obj.name}', file_obj)
+        base = getattr(settings, 'API_BASE_URL', 'https://api.carreb.com.au').rstrip('/')
+        return Response({"photo_url": f"{base}/media/{name}"},
+                        status=status.HTTP_201_CREATED)
 
 class RideRevealJobView(views.APIView):
     permission_classes = [IsAuthenticated]

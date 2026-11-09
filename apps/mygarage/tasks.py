@@ -200,6 +200,7 @@ User Priority: {priority_label}
             custom_plate=job.custom_plate,
             favorite_color=job.favorite_color,
             first_name=job.first_name,
+            uploaded_photo=job.photo_url or None,
             archetype_name=data['archetype_name'],
             archetype_tagline=data['archetype_tagline'],
             self_insight_text=data['self_insight_text'],
