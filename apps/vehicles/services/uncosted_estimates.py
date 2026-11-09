@@ -96,7 +96,24 @@ COSTING_BASIS = "sheet_defaults_v6.4"
 FILL_NOTE = "uncosted-cost-fill 2026-11-02"
 
 # Latest-first preference for duplicate CategoryScoringBounds versions.
+# NOTE: consumers should use bounds_versions(), which puts the current
+# dial batch's version first — a hardcoded list can never anticipate the
+# next monthly dataset (found when v6.4-update-07Nov26 loaded and the arcs
+# still read the 04-Nov bounds).
 BOUNDS_VERSION_PRIORITY = ["v6.4-audit-04Nov26", "v6.4-audit-29Oct26", "v6.4-audit-27Oct26", "v6.3.4-cat-norm"]
+
+
+def bounds_versions():
+    """Bounds lookup order: the current CORE Dial batch's version first
+    (bounds are synced from the same signed-off workbook as the dial, so
+    they always move together), then the historical priority list."""
+    from apps.vehicles.models import CoreDialBatch
+    versions = []
+    batch = CoreDialBatch.objects.filter(is_current=True).first()
+    if batch and batch.scoring_version:
+        versions.append(batch.scoring_version)
+    versions.extend(v for v in BOUNDS_VERSION_PRIORITY if v not in versions)
+    return versions
 
 # Powertrain → sheet energy key (EK): mild hybrids take hybrid modifiers.
 EK_BY_POWERTRAIN = {
@@ -173,7 +190,7 @@ class _Lookups:
 
     def _load_bounds(self) -> Dict[tuple, CategoryScoringBounds]:
         bounds: Dict[tuple, CategoryScoringBounds] = {}
-        for version in BOUNDS_VERSION_PRIORITY:
+        for version in bounds_versions():
             for row in CategoryScoringBounds.objects.filter(scoring_version=version):
                 bounds.setdefault((row.fcai_category, row.core_mode), row)
         return bounds

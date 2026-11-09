@@ -452,12 +452,12 @@ def build_core_arcs(record, category: str, state: Optional[str]) -> dict:
     """
     from apps.vehicles.models import (
         CategoryAnnualKMBenchmark, CategoryScoringBounds)
-    from apps.vehicles.services.uncosted_estimates import BOUNDS_VERSION_PRIORITY
+    from apps.vehicles.services.uncosted_estimates import bounds_versions
 
-    # Same version priority the rating engine uses, so the arcs line up
-    # with the stars.
+    # The current dial batch's bounds version first (synced from the same
+    # signed-off workbook), so the arcs line up with the stars.
     bounds: dict = {}
-    for version in BOUNDS_VERSION_PRIORITY:
+    for version in bounds_versions():
         for row in CategoryScoringBounds.objects.filter(
                 scoring_version=version, fcai_category__iexact=category):
             bounds.setdefault(row.core_mode, row)
