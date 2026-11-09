@@ -379,6 +379,39 @@ class GvgMedianScalingTests(TestCase):
         # CO2 is tailpipe x km / 1000 — no multiplication bug.
         self.assertEqual(ed['annual_co2_kg'], round(180 * 12100 / 1000))
 
+    def test_edit_overrides_replace_median_parts(self):
+        # Existing AI/GVG vehicles must be editable: an override replaces
+        # the matching class-median part (dollars -> cents) and is NOT
+        # km-rescaled; resale_value_override replaces the estimate.
+        petrol = VehicleIdentity.objects.create(
+            make='Toyota', model='Camry', year=2015, variant='Altise',
+            body_style='sedan', fcai_category='Medium',
+            powertrain_type='petrol',
+            fuel_consumption_combined_l_100km=7.8,
+            tailpipe_co2_g_per_km=182,
+            driveaway_price_estimate=2000000)
+        med = cost_gvg_current_vehicle(petrol, 'NSW', annual_km=12100)
+        edited = cost_gvg_current_vehicle(petrol, 'NSW', annual_km=30000,
+                                          user_inputs={
+                                              'insurance_override': 1234,
+                                              'registration_override': 555,
+                                              'tyres_override': 210,
+                                              'resale_value_override': 20250,
+                                          })
+        mb = med['annual_cost_breakdown']
+        eb = edited['annual_cost_breakdown']
+        self.assertEqual(eb['insurance_annual'], 123400)
+        self.assertEqual(eb['registration_annual'], 55500)
+        self.assertEqual(eb['tyres_annual'], 21000)
+        # Overridden lines are the user's figures, never km-rescaled.
+        self.assertEqual(eb['insurance_annual'], 123400)
+        # Un-overridden servicing stays a class median and IS km-rescaled:
+        # 100,000c median x (30,000 / 15,000 benchmark) = 200,000c.
+        self.assertEqual(eb['servicing_annual'], 200000)
+        self.assertEqual(mb['servicing_annual'],
+                         round(100000 * 12100 / 15000))
+        self.assertEqual(edited['resale_value_5yr_estimate'], 2025000)
+
 
 class GarageKmApiTests(TestCase):
 

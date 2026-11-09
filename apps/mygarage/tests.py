@@ -1017,6 +1017,64 @@ class CurrentVehicleSearchAIFallbackTests(TestCase):
         self.assertLess(sources.index("carreb"), sources.index("ai"))
 
 
+class EditExistingAIGarageVehicleTests(TestCase):
+    """Editing an existing AI/GVG-sourced garage vehicle must work end to
+    end: the row lists, the edit saves, and the override moves the card
+    figures. The add-to-garage eligibility restriction must not leak into
+    editing (and vice versa)."""
+
+    def setUp(self):
+        from apps.users.models import SubscriptionTier
+        from apps.vehicles.models import AIVehicleEntry
+        from rest_framework.test import APIClient
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email="edit-ai@carreb.com.au", password="x",
+            subscription_tier=SubscriptionTier.FULL_INSIGHT_PRO)
+        self.client.force_authenticate(self.user)
+        self.ai_entry = AIVehicleEntry.objects.create(
+            make="Toyota", model="Camry", year=2015, variant="Atara S",
+            body_style="sedan", powertrain_type="petrol",
+            fuel_consumption_combined_l_100km=7.8,
+            tailpipe_co2_g_per_km=181, fcai_category="Medium")
+        self.gv = GarageVehicle.objects.create(
+            user=self.user, ai_vehicle_entry=self.ai_entry,
+            source=GarageVehicleSource.VEHICLE_LOOKUP)
+
+    def test_ai_garage_row_lists_and_edit_round_trips(self):
+        # Listed for editing.
+        resp = self.client.get(reverse("garage-vehicles"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data["vehicles"]), 1)
+        card = resp.data["vehicles"][0]
+        self.assertEqual(card["vehicle_data"]["source"], "ai")
+        before = card["engine_data"]["annual_cost_breakdown"]["insurance_annual"]
+
+        # Edit saves.
+        resp = self.client.patch(
+            reverse("garage-vehicle-details-override",
+                    kwargs={"garage_vehicle_id": self.gv.id}),
+            {"field_name": "insurance_override", "override_value": 1234},
+            format="json")
+        self.assertEqual(resp.status_code, 200)
+
+        # The saved edit moves the card figure (refresh persistence).
+        resp = self.client.get(
+            reverse("garage-vehicle-detail",
+                    kwargs={"garage_vehicle_id": self.gv.id}))
+        after = resp.data["engine_data"]["annual_cost_breakdown"]["insurance_annual"]
+        self.assertEqual(after, 123400)
+        self.assertNotEqual(after, before)
+
+    def test_add_gate_unchanged_for_ai_ids(self):
+        # The eligibility restriction still rejects NEW AI adds.
+        resp = self.client.post(
+            reverse("garage-vehicles"),
+            {"ai_vehicle_entry_id": str(self.ai_entry.id),
+             "source": "vehicle_lookup"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+
+
 class GarageAddAIEntryTests(TestCase):
     """Garage accepts AIVehicleEntry rows (cars missing from catalogue+GVG)."""
 

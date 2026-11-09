@@ -227,7 +227,8 @@ def _build_calculated_vehicle_response(user, vehicle_instance, priority_state, c
             # resolve_garage_km, which falls back to the ABS 2020 default —
             # never silently to the class benchmark.
             engine_data = cost_gvg_current_vehicle(
-                rating_vehicle, state, annual_km=garage_km)
+                rating_vehicle, state, annual_km=garage_km,
+                user_inputs=user_inputs)
             if garage_km_source != 'default':
                 engine_data['annual_km_basis'] = garage_km_source
             if current_cost is not None:

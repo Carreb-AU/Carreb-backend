@@ -230,7 +230,7 @@ GVG_FIXED_PARTS = ('ctp', 'comprehensive', 'registration', 'servicing', 'tyres',
                    'road_user_charge')
 
 
-def cost_gvg_current_vehicle(record, state, annual_km=None):
+def cost_gvg_current_vehicle(record, state, annual_km=None, user_inputs=None):
     """Pure Cost COO p.a. (integer cents) for a Green Vehicle Guide current car.
 
     Fixed costs are class medians rebuilt from the Mode B dial rows, by class
@@ -240,6 +240,12 @@ def cost_gvg_current_vehicle(record, state, annual_km=None):
     ``annual_km`` overrides the class benchmark — the current-vehicle path
     passes the user's Edit Vehicle km setting (B-21/B-38), else None so the
     class benchmark applies.
+
+    ``user_inputs`` are Edit Vehicle overrides (dollars): insurance,
+    registration, servicing and tyres replace the matching class-median
+    part after any km rescale; resale_value_override replaces the resale
+    estimate. This is what makes existing AI/GVG vehicles editable — the
+    add-to-garage eligibility restriction never applies here.
     """
     from apps.vehicles.models import (
         CategoryAnnualKMBenchmark,
@@ -337,6 +343,33 @@ def cost_gvg_current_vehicle(record, state, annual_km=None):
             factor = annual_km / benchmark_km
             for part in ('servicing', 'tyres', 'road_user_charge'):
                 parts[part] = int(round_half_up(parts[part] * factor, 0))
+
+    # Edit Vehicle overrides (dollars at the API boundary) replace the
+    # matching class-median part. Applied AFTER the km rescale and never
+    # factor-scaled — an overridden line is the user's own figure, same rule
+    # as the catalogue path. Without this, editing an existing AI/GVG
+    # vehicle stored the override but the card figures never moved.
+    if user_inputs:
+        _OVERRIDE_PART = {
+            'insurance_override': 'comprehensive',
+            'registration_override': 'registration',
+            'servicing_override': 'servicing',
+            'tyres_override': 'tyres',
+        }
+        for field, part in _OVERRIDE_PART.items():
+            raw = user_inputs.get(field)
+            if raw in (None, ''):
+                continue
+            try:
+                parts[part] = int(round_half_up(float(raw) * 100, 0))
+            except (TypeError, ValueError):
+                continue
+        raw_resale = user_inputs.get('resale_value_override')
+        if raw_resale not in (None, ''):
+            try:
+                resale = int(round_half_up(float(raw_resale) * 100, 0))
+            except (TypeError, ValueError):
+                pass
 
     return {
         'core_rating': None,
