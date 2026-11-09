@@ -179,6 +179,11 @@ Badge year and model year can differ (year 2024, MY25). Search + suggestions mat
 
 ## 14. RideReveal
 
+- **Modal photo persists (10-Nov):** when the user uploads a photo in the creation modal, it must be sent to the backend or it survives only that session (this was the "photo disappears on reopen" bug — it never left the browser).
+  1. `POST /api/my-garage/ridereveal/photo/` — multipart, field name `photo` (JPEG/PNG/WebP, 8 MB max) → `201 {"photo_url": "https://api.carreb.com.au/media/ride_reveal_photos/…"}`.
+  2. Pass that `photo_url` in the generate payload (`POST /ridereveal/generate/`) alongside `garage_vehicle_id` etc. Same-origin URLs only; anything else gets 422.
+  3. The result payload now carries `photo_url` — render it when reopening the reveal (it wins over the profile picture; `null` → fall back to the user's profile photo, then the initial avatar).
+  A photo-only change on an existing result updates + re-renders the card free (no credit, no regeneration), same as plate/colour/name edits.
 - **Share URL:** the result payload has `public_url` — a public no-auth page with `og:image` (the 1080 PNG) and `og:title` ("{First name} {Archetype}!"). Use it for copy-link and every desktop channel intent; mobile uses the Web Share API with the PNG file; Instagram = download fallback.
 - **Plate graphic:** backend renders the user's state on the plate header (the old hardcoded "WESTERN AUSTRALIA" is gone) or no state name — nothing for you to do; verify a QLD user.
 - Disclaimer line under the modal card; footer strip on the 1080 PNG; colour row with swatch when stored; plate/colour editable from the modal (PATCH re-renders, no credit). Headline "{First name} {Archetype}!" resolves from the profile ("You" only when blank). Render stored traits/facts as-is — the guard + one-retry is backend-side.
