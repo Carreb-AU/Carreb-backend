@@ -81,6 +81,19 @@ def process_vehicle_excel_upload(file_path, upload_id=None):
                     'rows': (CoreDialRow.objects.filter(batch=batch).count()
                              if batch else 0),
                 }
+                # Homepage claim follows the live count (rounded down to
+                # the nearest hundred, '+' suffix) so a monthly refresh
+                # never leaves stale marketing copy on the site.
+                try:
+                    from apps.config.models import SiteConfig
+                    live = Vehicle.objects.filter(is_suppressed=False).count()
+                    claim = f"{(live // 100) * 100:,}+"
+                    cfg = SiteConfig.get()
+                    cfg.homepage_vehicle_count_claim = claim
+                    cfg.save(update_fields=['homepage_vehicle_count_claim'])
+                    outcome['homepage_claim'] = claim
+                except Exception as exc:
+                    outcome['homepage_claim'] = f'set failed: {exc}'
                 outcome['post_import_refresh'] = 'ok'
                 logger.info(
                     f"Post-import refresh done for {file_path}: "
