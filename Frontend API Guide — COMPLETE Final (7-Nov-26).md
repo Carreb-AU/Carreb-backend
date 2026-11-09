@@ -139,6 +139,25 @@ curl -s "https://api.carreb.com.au/api/vehicles/2f6beb87-aa31-4496-bb17-39cc5883
   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['core_arcs']['modes']['B'])"
 ```
 
+## 10a. Dial km basis — rescale rows to the user's km (9-Nov blocker)
+
+Dial dataset rows are costed at **each car's category km** (`km_pa_used`, now on every row of `/api/core-dial/dataset/`); the current vehicle is costed at the user's km. Rescale rows to the user's `costed_km` **before the band medians (`iw()`)**, exactly:
+
+```js
+k = userKm / row.km_pa_used
+perKm = fuel + electricity + tyres + road_user_charge   // from row.parts_cents
+coo_pa_cents = coo_pa_cents + Math.round(perKm * (k - 1))
+annual_co2_kg = Math.round(annual_co2_kg * k)
+```
+
+Insurance, CTP, rego and servicing stay fixed. Use the rescaled COO for the sort tie-break too. **No current vehicle, or `km_pa_used` missing → no rescale.** Do not touch `price_score`, `emissions_score` or bands — ratings stay at category km (D29/D30).
+
+**Anchor test:** Polestar 5 Dual motor, NSW, 12,100 km — row `589,028` cents → `570,420` ($5,704.20); CO₂ `1,670` → `1,443` kg, matching the vehicle card.
+
+**Edit Vehicle — only send changed fields.** Saving every cost field as an override (even untouched ones) is what poisoned Jock's Polestar 5 with another car's figures. Diff against the loaded values and PATCH only fields the user actually edited. Backend now also wipes the current vehicle's overrides when the car is swapped, but don't rely on that — sending untouched values is the bug source.
+
+**Override units are DOLLARS at the API boundary** (insurance `2500` = $2,500/yr; resale `20250` = $20,250). Display `resale_value_override` as-is — the "$203" bug is a cents-format divide-by-100 applied to a dollars value.
+
 ## 11. Held (suppressed) cars — selectable as current vehicle only
 
 Type-ahead includes held cars; cards carry `is_suppressed`. `true` → amber notice *"Official data for this vehicle is incomplete. You can still add it…"*; no price/rating/stars (render "—", never "$0"/"0.0"); blank fields arrive as category defaults with `field_sources.<field> == "default"` → badge "Default". Held cars never appear in search results, bands, counts, matches or the Dial (backend-enforced).
