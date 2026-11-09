@@ -347,6 +347,23 @@ class CurrentVehicleView(views.APIView):
                 "cap_counter": cap
             }, status=status.HTTP_403_FORBIDDEN)
         
+        def _cv_sig(catalogue_id, gvg_id, ai_id, manual_data):
+            return (
+                str(catalogue_id or ''),
+                str(gvg_id or ''),
+                str(ai_id or ''),
+                str((manual_data or {}).get('make') or ''),
+            )
+
+        previous_cv = CurrentVehicle.objects.filter(user=request.user).first()
+        previous_sig = None
+        if previous_cv is not None:
+            previous_sig = _cv_sig(
+                previous_cv.vehicle_catalogue_id,
+                previous_cv.green_vehicle_guide_record_id,
+                previous_cv.ai_vehicle_entry_id,
+                previous_cv.manual_entry_data)
+
         cv, created = CurrentVehicle.objects.update_or_create(
             user=request.user,
             defaults={
@@ -360,6 +377,21 @@ class CurrentVehicleView(views.APIView):
                 'state': data.get('state'),
             }
         )
+
+        if previous_sig is not None and not created:
+            # The CV row is reused across swaps; overrides saved for the
+            # PREVIOUS car must not leak onto the new one (register: stale
+            # insurance/rego/servicing/tyres/resale/range/fuel overrides
+            # carried over between cars).
+            new_sig = _cv_sig(vehicle_catalogue_id, gvg_record_id, ai_entry_id,
+                              data.get('manual_entry_data'))
+            if new_sig != previous_sig:
+                deleted, _ = VehicleOverride.objects.filter(
+                    user=request.user, current_vehicle=cv).delete()
+                if deleted:
+                    logger.info(
+                        f"Cleared {deleted} current-vehicle override(s) on "
+                        f"vehicle swap for user {request.user.id}")
 
         if data.get('ai_vehicle_entry_id'):
             from django.db.models import F as _F

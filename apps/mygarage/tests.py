@@ -597,6 +597,39 @@ class GVGGarageVehicleTests(TestCase):
         self.assertTrue(CurrentVehicle.objects.filter(
             user=self.user, vehicle_catalogue_id=second.id).exists())
 
+    def test_swapping_current_vehicle_clears_its_overrides(self):
+        """The CV row is reused across swaps; Edit Vehicle overrides saved
+        for the previous car must not leak onto the new one."""
+        from apps.mygarage.models import VehicleOverride
+        first = make_vehicle(brand="Toyota", model="Camry")
+        second = make_vehicle(brand="Honda", model="Accord")
+        self.client.post(
+            reverse("current-vehicle"),
+            {"vehicle_catalogue_id": str(first.id), "state": "NSW"},
+            format="json")
+        for field, value in (("insurance_override", 1207.64),
+                             ("registration_override", 406)):
+            resp = self.client.patch(
+                reverse("current-vehicle-details"),
+                {"field_name": field, "override_value": value},
+                format="json")
+            self.assertEqual(resp.status_code, 200)
+        self.assertEqual(VehicleOverride.objects.filter(user=self.user).count(), 2)
+
+        # Same car re-saved: overrides survive.
+        self.client.post(
+            reverse("current-vehicle"),
+            {"vehicle_catalogue_id": str(first.id), "state": "NSW"},
+            format="json")
+        self.assertEqual(VehicleOverride.objects.filter(user=self.user).count(), 2)
+
+        # Different car: overrides are wiped.
+        self.client.post(
+            reverse("current-vehicle"),
+            {"vehicle_catalogue_id": str(second.id), "state": "NSW"},
+            format="json")
+        self.assertEqual(VehicleOverride.objects.filter(user=self.user).count(), 0)
+
     def test_cv_rejects_unknown_catalogue_id(self):
         import uuid
         resp = self.client.post(

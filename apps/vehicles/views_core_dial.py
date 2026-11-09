@@ -43,6 +43,10 @@ def _row_to_dataset_dict(r):
         'driveaway_cents': r.driveaway_cents,
         'coo_pa_cents': r.coo_pa_cents,
         'annual_co2_kg': r.annual_co2_kg,
+        # Category km the row is costed at (B-39 blocker 1): lets the FE
+        # rescale rows to the user's costed km before band medians so the
+        # Dial is like-for-like with the current vehicle.
+        'km_pa_used': r.vehicle.annual_km_default if r.vehicle else None,
         'price_score': r.price_score,
         'emissions_score': r.emissions_score,
         'co2_cap': r.co2_cap,
@@ -74,6 +78,7 @@ class CoreDialDatasetView(views.APIView):
             CoreDialRow.objects
             .filter(batch=batch, state=state)
             .filter(Q(vehicle__isnull=True) | Q(vehicle__is_suppressed=False))
+            .select_related('vehicle')
             .order_by('version_id')
         )
         payload = {

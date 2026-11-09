@@ -307,6 +307,15 @@ class CoreDialApiTests(TestCase):
         self.assertIn('v6.4-test:NSW', resp.headers['ETag'])
         self.assertEqual(resp.headers.get('Cache-Control'), 'private')
 
+    def test_dataset_rows_carry_km_pa_used(self):
+        # Blocker 1 (9-Nov): rows must say which km they are costed at so
+        # the FE can rescale to the user's costed km before band medians.
+        self._auth()
+        resp = self.client.get('/api/core-dial/dataset/', {'state': 'NSW'})
+        rows = {r['version_id']: r for r in resp.data['rows']}
+        self.assertEqual(rows[1]['km_pa_used'], 13300)   # linked vehicle (model default)
+        self.assertIsNone(rows[2]['km_pa_used'])         # unlinked row
+
     def test_dataset_etag_304(self):
         self._auth()
         resp = self.client.get('/api/core-dial/dataset/', {'state': 'NSW'})
